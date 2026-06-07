@@ -1,5 +1,5 @@
 ---
-description: Agente que orquesta OpenSpec + Superpowers como pipeline de desarrollo estructurado, sin acceso directo al sistema de archivos ni comandos
+description: Agente que orquesta OpenSpec + Superpowers (set curado bundleado) como pipeline de desarrollo estructurado, sin acceso directo al sistema de archivos ni comandos
 mode: primary
 tools:
   write: false
@@ -48,6 +48,8 @@ Si alguno falta → **implementación bloqueada**. La única acción permitida e
 - renames no funcionales
 
 Todo lo demás es Level 1+ y requiere OpenSpec sin excepciones.
+
+**Origen de las skills en runtime:** las 6 skills de Superpowers y 4 de OpenSpec que este agente referencia vienen **bundleadas dentro del paquete npm de Ostacky** (`assets/skills/`), NO del plugin `superpowers@git+...`. El bloque `plugin` en `opencode.jsonc` queda vacío o se omite. Esto es por diseño (curación) y está documentado en `assets/commands/install-stack.md`.
 
 ---
 
@@ -466,6 +468,19 @@ brainstorm → proposal (desde cero) → drift → inconsistencias
 
 ---
 
+## Fuente de skills
+
+Las 6 skills de Superpowers y 4 de OpenSpec referenciadas en este agente **NO vienen del plugin `superpowers@git+...`**. Están **bundleadas dentro del paquete npm de Ostacky** y se instalan desde `assets/skills/` a `.opencode/skills/` por el comando `install-stack`.
+
+**Consecuencias:**
+- `opencode.json` (o `.jsonc`) **no debe** contener el campo `plugin` con `superpowers@git+...`. El install-stack lo elimina explícitamente.
+- El set curado y su trazabilidad viven en `manifest.json` y `.opencode/ostacky-lock.json`.
+- Refrescar las skills requiere un nuevo release de Ostacky (ver `ostacky sync` en el README).
+
+Si necesitás una skill que no está en el set curado, agregala explícitamente al `manifest.json` antes de pedir un nuevo release.
+
+---
+
 ## Governance rules
 
 1. **OpenSpec artifacts are REQUIRED prerequisites for implementation, not optional documentation.**
@@ -510,10 +525,12 @@ Si no conoces el nombre exacto: `use skill tool to list skills`.
 |---|---|
 | `/opsx:propose <idea>` | Estado 2 — genera proposal + design + tasks |
 | `/opsx:apply` | Estado 4 — implementa tasks del change activo |
-| `/opsx:sync` | Estado 6 — sincroniza specs con implementación |
+| `/opsx:sync` | Estado 6 — sincroniza specs con implementación (**provisto por Ostacky**, no upstream) |
 | `/opsx:archive` | Estado 6 — archiva change, merge delta specs |
 | Retrieval de código relevante | CodeGraph |
 | Análisis de impacto y dependencias | CodeGraph |
+
+**Nota sobre `/opsx:sync`:** este comando no existe en OpenSpec upstream. Lo provee Ostacky como parte del bundle (`assets/commands/opsx-sync.md`) para cerrar el gap del Estado 6. Si tras instalar no aparece en `.opencode/commands/`, verificar que el bundle se copió correctamente.
 
 ---
 
@@ -623,4 +640,22 @@ Al inicio de cualquier tarea de Nivel 1+, carga la skill correspondiente:
 - `superpowers/tdd` — Fase 5
 - `superpowers/review` — Fase 6
 
+Todas estas skills vienen del bundle de Ostacky (`assets/skills/`), no del plugin upstream.
+
 Si no conoces el nombre exacto: `use skill tool to list skills`.
+
+---
+
+## Estado 6 — comandos
+
+Los comandos OpenSpec referenciados en este agente son:
+
+| Comando | Estado actual |
+|---|---|
+| `/opsx:apply` | Provisto por `openspec-apply-change` (instalado) |
+| `/opsx:archive` | Provisto por `openspec-archive-change` (instalado) |
+| `/opsx:explore` | Provisto por `openspec-explore` (instalado) |
+| `/opsx:propose` | Provisto por `openspec-propose` (instalado) |
+| `/opsx:sync` | **Provisto por `assets/commands/opsx-sync.md` (wrapper de `openspec update`)** |
+
+`/opsx:sync` no es un skill upstream de OpenSpec — es un wrapper provisto por el bundle de Ostacky para cubrir el paso de sincronización documentado en Estado 6.

@@ -1,13 +1,13 @@
 {
-  "version": "0.0.1",
+  "version": "0.0.2",
   "repo": "JaimeHoracio/Ostacky",
-  "tag": "v0.0.1",
+  "tag": "v0.0.2",
   "agents": [
     {
       "name": "ostacky",
       "file": "assets/agents/ostacky.md",
       "description": "Agente principal de desarrollo con OpenCode",
-      "version": "0.0.1",
+      "version": "0.0.2",
       "sha256": null
     }
   ],
@@ -16,8 +16,107 @@
       "name": "install-stack",
       "file": "assets/commands/install-stack.md",
       "description": "Instala el stack tecnológico del proyecto",
-      "version": "0.0.1",
+      "version": "0.0.2",
       "sha256": null
+    },
+    {
+      "name": "opsx-sync",
+      "file": "assets/commands/opsx-sync.md",
+      "description": "Sincroniza delta specs del change activo (wrapper de openspec update)",
+      "version": "0.0.2",
+      "sha256": null
+    }
+  ],
+  "skills": [
+    {
+      "name": "brainstorming",
+      "file": "assets/skills/brainstorming/SKILL.md",
+      "description": "Skill de descubrimiento y exploración (Superpowers)",
+      "version": "pending",
+      "sha256": null,
+      "source": "github.com/obra/superpowers",
+      "ref": "main"
+    },
+    {
+      "name": "writing-plans",
+      "file": "assets/skills/writing-plans/SKILL.md",
+      "description": "Skill de planificación de implementación (Superpowers)",
+      "version": "pending",
+      "sha256": null,
+      "source": "github.com/obra/superpowers",
+      "ref": "main"
+    },
+    {
+      "name": "tdd",
+      "file": "assets/skills/tdd/SKILL.md",
+      "description": "Skill de test-driven development (Superpowers)",
+      "version": "pending",
+      "sha256": null,
+      "source": "github.com/obra/superpowers",
+      "ref": "main"
+    },
+    {
+      "name": "subagent-driven-development",
+      "file": "assets/skills/subagent-driven-development/SKILL.md",
+      "description": "Skill de ejecución con subagentes (Superpowers)",
+      "version": "pending",
+      "sha256": null,
+      "source": "github.com/obra/superpowers",
+      "ref": "main"
+    },
+    {
+      "name": "dispatching-parallel-agents",
+      "file": "assets/skills/dispatching-parallel-agents/SKILL.md",
+      "description": "Skill de dispatch paralelo de agentes (Superpowers)",
+      "version": "pending",
+      "sha256": null,
+      "source": "github.com/obra/superpowers",
+      "ref": "main"
+    },
+    {
+      "name": "review",
+      "file": "assets/skills/review/SKILL.md",
+      "description": "Skill de revisión de código (Superpowers)",
+      "version": "pending",
+      "sha256": null,
+      "source": "github.com/obra/superpowers",
+      "ref": "main"
+    },
+    {
+      "name": "openspec-explore",
+      "file": "assets/skills/openspec-explore/SKILL.md",
+      "description": "Skill de exploración pre-spec (OpenSpec)",
+      "version": "pending",
+      "sha256": null,
+      "source": "github.com/Fission-AI/OpenSpec",
+      "ref": "main"
+    },
+    {
+      "name": "openspec-propose",
+      "file": "assets/skills/openspec-propose/SKILL.md",
+      "description": "Skill de generación de proposal (OpenSpec)",
+      "version": "pending",
+      "sha256": null,
+      "source": "github.com/Fission-AI/OpenSpec",
+      "ref": "main"
+    },
+    {
+      "name": "openspec-apply-change",
+      "file": "assets/skills/openspec-apply-change/SKILL.md",
+      "description": "Skill de aplicación de change (OpenSpec)",
+      "version": "pending",
+      "sha256": null,
+      "source": "github.com/Fission-AI/OpenSpec",
+      "ref": "main"
+    },
+    {
+      "name": "openspec-archive-change",
+      "file": "assets/skills/openspec-archive-change/SKILL.md",
+      "description": "Skill de archivo de change (OpenSpec)",
+      "version": "pending",
+      "sha256": null,
+      "source": "github.com/Fission-AI/OpenSpec",
+      "ref": "main"
     }
   ]
 }
