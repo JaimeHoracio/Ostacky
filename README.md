@@ -1,0 +1,258 @@
+# Ostacky
+
+Instalador CLI de agentes y commands para [OpenCode](https://opencode.ai). Descarga y gestiona los recursos del directorio `.opencode/` de tu proyecto de forma reproducible y segura.
+
+## ¿Qué es?
+
+`Ostacky` es un CLI que instala agentes (`.opencode/agents/`) y commands (`.opencode/commands/`) directamente desde GitHub Releases. Cada instalación queda registrada en un lockfile con versión y checksum, lo que permite actualizaciones controladas y reproducibles.
+
+## ¿Para qué sirve?
+
+- Instalar el agente `Ostacky` y el command `install-stack` en cualquier proyecto con un solo comando
+- Mantener un registro de qué versión está instalada (`ostacky-lock.json`)
+- Detectar y aplicar actualizaciones mostrando el diff de versiones antes de confirmar
+- Evitar descargas repetidas gracias al cache local en `~/.opencode/cache/`
+
+## Requisitos
+
+- [Node.js](https://nodejs.org/) >= 18 (para usar con `npx`)
+- o [Bun](https://bun.sh/) >= 1.x (para usar con `bunx` o desarrollo)
+- [OpenCode](https://opencode.ai) instalado en tu máquina
+
+## Uso rápido (para usuarios)
+
+No requiere instalación global ni clonar el repositorio. Se usa directamente con `npx` o `bunx`:
+
+```bash
+npx ostacky
+```
+
+```bash
+bunx ostacky
+```
+
+## Uso
+
+### Menú interactivo
+
+```bash
+npx ostacky
+```
+
+Detecta automáticamente el directorio `.opencode/` del proyecto (o lo crea) y muestra un menú para elegir qué hacer.
+
+### Instalar todo
+
+```bash
+npx ostacky install
+```
+
+Descarga todos los agentes y commands definidos en el manifest y los escribe en `.opencode/`.
+
+### Agregar agentes o commands individualmente
+
+```bash
+npx ostacky add agent
+npx ostacky add command
+```
+
+Muestra un selector múltiple con los recursos disponibles. Indica si ya están instalados y en qué versión.
+
+### Actualizar
+
+```bash
+npx ostacky update
+```
+
+Consulta la última GitHub Release, compara las versiones instaladas contra el manifest remoto y muestra el diff antes de confirmar:
+
+```
+Actualizaciones disponibles
+  agente   ostacky             0.0.1 → 0.0.2
+  command  install-stack    0.0.1 → 0.0.2
+
+¿Aplicar 2 actualización(es)? › Sí / No
+```
+
+Solo descarga los items que cambiaron de versión.
+
+### Desinstalar
+
+```bash
+npx ostacky uninstall
+```
+
+Borra todos los archivos instalados (los listados en `.opencode/ostacky-lock.json`). Antes de borrar, muestra un preview con los paths a eliminar y pide confirmación.
+
+#### Desinstalar un agente puntual
+
+```bash
+npx ostacky uninstall agent <nombre>
+```
+
+Por ejemplo:
+
+```bash
+npx ostacky uninstall agent ostacky
+```
+
+#### Desinstalar un command puntual
+
+```bash
+npx ostacky uninstall command <nombre>
+```
+
+Por ejemplo:
+
+```bash
+npx ostacky uninstall command install-stack
+```
+
+Si no especificás el nombre, el CLI te muestra un selector con los items instalados para que elijas cuáles desinstalar (puede ser uno o varios).
+
+### Otros
+
+```bash
+npx ostacky --version   # muestra la versión del CLI
+npx ostacky --help      # muestra la ayuda
+```
+
+## Estructura generada
+
+Tras instalar, el proyecto queda así:
+
+```
+.opencode/
+├── agents/
+│   └── ostacky.md
+├── commands/
+│   └── install-stack.md
+└── ostacky-lock.json          ← versiones instaladas
+```
+
+### ostacky-lock.json
+
+```json
+{
+  "version": "0.0.1",
+  "lockedAt": "2025-01-01T00:00:00.000Z",
+  "repo": "JaimeHoracio/Ostacky",
+  "tag": "v0.0.1",
+  "agents": {
+    "ostacky": {
+      "version": "0.0.1",
+      "installedAt": "2025-01-01T00:00:00.000Z",
+      "sha256": "abc123..."
+    }
+  },
+  "commands": {
+    "install-stack": {
+      "version": "0.0.1",
+      "installedAt": "2025-01-01T00:00:00.000Z",
+      "sha256": "def456..."
+    }
+  }
+}
+```
+
+Se recomienda agregar `ostacky-lock.json` al control de versiones para que el equipo instale exactamente las mismas versiones.
+
+## Después de la instalación
+
+Al terminar la instalación, el CLI imprime en la terminal un panel con los próximos pasos. Resumidos:
+
+1. **Recargar OpenCode** para que detecte los nuevos archivos en `.opencode/`.
+2. Ejecutar el command:
+   ```
+   /install-stack
+   ```
+   Si el command `/install-stack` no aparece en la terminal, recargá OpenCode (paso 1) y volvé a tipearlo. Es un command de OpenCode — el CLI lo instala pero OpenCode necesita recargarlo para registrarlo.
+3. **Recargar OpenCode nuevamente** después de que `/install-stack` haya corrido.
+4. Ya puedes usar el agente:
+   ```
+   @Ostacky
+   ```
+   o seleccionarlo desde la interfaz de OpenCode según la configuración del proyecto. `@Ostacky` invoca al agente que el CLI instaló en `.opencode/agents/ostacky.md`.
+
+## Seguridad
+
+- Las URLs de descarga usan **tags de GitHub** (ej. `v0.0.1`), nunca `main` — instalaciones reproducibles
+- Cada path de archivo descargado es validado para prevenir **path traversal**
+- Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
+- El cache local (`~/.opencode/cache/`) también valida integridad al servir archivos cacheados
+
+## Cache
+
+Los archivos descargados se guardan en:
+
+```
+~/.opencode/cache/<repo>/<tag>/<ruta-del-archivo>
+```
+
+Si ya existe un archivo en cache con el hash correcto, no se hace ninguna petición de red.
+
+## Desarrollo
+
+> Los pasos de esta sección son **solo para quienes quieran contribuir o modificar el código**. Si eres usuario final, no necesitas ejecutar nada de esto — basta con `npx ostacky`.
+
+### Requisitos adicionales para desarrollo
+
+- [Bun](https://bun.sh/) >= 1.x
+
+### 1. Clonar e instalar dependencias
+
+```bash
+git clone https://github.com/JaimeHoracio/Ostacky.git
+cd Ostacky
+bun install
+```
+
+`bun install` descarga todas las dependencias definidas en `package.json` (incluyendo TypeScript y los tipos de Bun).
+
+### 2. Ejecutar en modo desarrollo
+
+```bash
+bun run dev
+# equivalente a: bun run src/cli.ts
+```
+
+### 3. Compilar la CLI
+
+La CLI se distribuye como un ejecutable JavaScript en `dist/cli.js`. Para generarlo:
+
+```bash
+bun run build
+```
+
+Este comando ejecuta internamente:
+
+```bash
+bun build src/cli.ts --target=node --format=esm --outfile dist/cli.js && bun scripts/add-shebang.ts
+```
+
+Tras compilar deberías obtener:
+
+```
+dist/
+└── cli.js
+```
+
+### 4. Probar el binario compilado
+
+```bash
+node dist/cli.js
+# o
+bun run start
+```
+
+### Publicar en npm
+
+El script `prepublishOnly` ejecuta `bun run build` automáticamente antes de publicar, por lo que `dist/` siempre estará actualizado al publicar.
+
+```bash
+npm publish
+```
+
+## Licencia
+
+MIT

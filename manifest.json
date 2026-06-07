@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "repo": "JaimeHoracio/Ostacky",
+  "tag": "v0.0.1",
+  "agents": [
+    {
+      "name": "ostacky",
+      "file": "assets/agents/ostacky.md",
+      "description": "Agente principal de desarrollo con OpenCode",
+      "version": "0.0.1",
+      "sha256": null
+    }
+  ],
+  "commands": [
+    {
+      "name": "install-stack",
+      "file": "assets/commands/install-stack.md",
+      "description": "Instala el stack tecnológico del proyecto",
+      "version": "0.0.1",
+      "sha256": null
+    }
+  ]
+}
