@@ -134,24 +134,24 @@ Tras instalar, el proyecto queda así:
 
 ```json
 {
-  "version": "0.0.1",
-  "lockedAt": "2025-01-01T00:00:00.000Z",
-  "repo": "JaimeHoracio/Ostacky",
-  "tag": "v0.0.1",
-  "agents": {
-    "ostacky": {
-      "version": "0.0.1",
-      "installedAt": "2025-01-01T00:00:00.000Z",
-      "sha256": "abc123..."
+    "version": "0.0.2",
+    "lockedAt": "2025-01-01T00:00:00.000Z",
+    "repo": "JaimeHoracio/Ostacky",
+    "tag": "v0.0.2",
+    "agents": {
+        "ostacky": {
+            "version": "0.0.2",
+            "installedAt": "2025-01-01T00:00:00.000Z",
+            "sha256": "abc123..."
+        }
+    },
+    "commands": {
+        "install-stack": {
+            "version": "0.0.2",
+            "installedAt": "2025-01-01T00:00:00.000Z",
+            "sha256": "def456..."
+        }
     }
-  },
-  "commands": {
-    "install-stack": {
-      "version": "0.0.1",
-      "installedAt": "2025-01-01T00:00:00.000Z",
-      "sha256": "def456..."
-    }
-  }
 }
 ```
 
@@ -163,20 +163,20 @@ Al terminar la instalación, el CLI imprime en la terminal un panel con los pró
 
 1. **Recargar OpenCode** para que detecte los nuevos archivos en `.opencode/`.
 2. Ejecutar el command:
-   ```
-   /install-stack
-   ```
-   Si el command `/install-stack` no aparece en la terminal, recargá OpenCode (paso 1) y volvé a tipearlo. Es un command de OpenCode — el CLI lo instala pero OpenCode necesita recargarlo para registrarlo.
+    ```
+    /install-stack
+    ```
+    Si el command `/install-stack` no aparece en la terminal, recargá OpenCode (paso 1) y volvé a tipearlo. Es un command de OpenCode — el CLI lo instala pero OpenCode necesita recargarlo para registrarlo.
 3. **Recargar OpenCode nuevamente** después de que `/install-stack` haya corrido.
 4. Ya puedes usar el agente:
-   ```
-   @Ostacky
-   ```
-   o seleccionarlo desde la interfaz de OpenCode según la configuración del proyecto. `@Ostacky` invoca al agente que el CLI instaló en `.opencode/agents/ostacky.md`.
+    ```
+    @Ostacky
+    ```
+    o seleccionarlo desde la interfaz de OpenCode según la configuración del proyecto. `@Ostacky` invoca al agente que el CLI instaló en `.opencode/agents/ostacky.md`.
 
 ## Seguridad
 
-- Las URLs de descarga usan **tags de GitHub** (ej. `v0.0.1`), nunca `main` — instalaciones reproducibles
+- Las URLs de descarga usan **tags de GitHub** (ej. `v0.0.2`), nunca `main` — instalaciones reproducibles
 - Cada path de archivo descargado es validado para prevenir **path traversal**
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
 - El cache local (`~/.opencode/cache/`) también valida integridad al servir archivos cacheados
