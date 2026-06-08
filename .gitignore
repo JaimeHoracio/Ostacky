@@ -143,5 +143,10 @@ vite.config.ts.timestamp-*
 .vite/
 
 bun.lock
-.opencode/
+#.opencode/
+!.opencode/agents/ostacky.md
+!.opencode/commands/install-stack.md
+opencode.jsonc
 .codegraph
+openspec
+docs/

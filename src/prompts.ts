@@ -13,10 +13,13 @@ import {
   ensureOpenCodePaths,
   installAgent,
   installCommand,
+  installSkill,
   isAgentInstalled,
   isCommandInstalled,
+  isSkillInstalled,
   uninstallAgent,
   uninstallCommand,
+  uninstallSkill,
   uninstallAll,
   type OpenCodePaths,
 } from "./installer.js";
@@ -58,7 +61,7 @@ async function loadLatestManifest(): Promise<Manifest> {
 
 /**
  * Prints a panel with the next steps the user should follow after
- * installing agents/commands. Idempotent. Safe to call multiple times.
+ * installing agents/commands/skills. Idempotent. Safe to call multiple times.
  */
 export function printPostInstallSteps(): void {
   p.note(
@@ -67,6 +70,7 @@ export function printPostInstallSteps(): void {
       "Ejecutá /install-stack para instalar el stack",
       "Recargá OpenCode nuevamente",
       "Usá @Ostacky para invocar al agente",
+      "Las skills bundleadas viven en .opencode/skills/ — revisá cuáles activás",
     ].join("\n  → "),
     "Próximos pasos"
   );
@@ -106,7 +110,7 @@ async function resolveOpenCodePaths(): Promise<OpenCodePaths | null> {
 // ─── Version diff helpers ─────────────────────────────────────────────────────
 
 interface UpdateCandidate {
-  type: "agents" | "commands";
+  type: "agents" | "commands" | "skills";
   item: ManifestItem;
   installedVersion: string | null;
 }
@@ -139,11 +143,30 @@ function getUpdateCandidates(
     }
   }
 
+  for (const item of manifest.skills ?? []) {
+    if (!isSkillInstalled(item.name, paths)) continue;
+    const installed = getInstalledVersion(lockfile, "skills", item.name);
+    if (installed !== item.version) {
+      candidates.push({ type: "skills", item, installedVersion: installed });
+    }
+  }
+
   return candidates;
 }
 
 function formatVersionDiff(from: string | null, to: string): string {
   return from ? `${from} → ${to}` : `(sin versión) → ${to}`;
+}
+
+function kindLabel(type: UpdateCandidate["type"]): string {
+  switch (type) {
+    case "agents":
+      return "agente";
+    case "commands":
+      return "command";
+    case "skills":
+      return "skill";
+  }
 }
 
 // ─── Actions ─────────────────────────────────────────────────────────────────
@@ -170,6 +193,17 @@ async function doInstallAll(manifest: Manifest, paths: OpenCodePaths) {
       spin.stop(`Command instalado: ${cmd.name}  (${cmd.version})`);
     } catch (e) {
       spin.stop(`Error en ${cmd.name}: ${(e as Error).message}`);
+      errors++;
+    }
+  }
+
+  for (const skill of manifest.skills ?? []) {
+    spin.start(`Instalando skill: ${skill.name}  (${skill.version})`);
+    try {
+      await installSkill(skill, manifest, paths);
+      spin.stop(`Skill instalada: ${skill.name}  (${skill.version})`);
+    } catch (e) {
+      spin.stop(`Error en ${skill.name}: ${(e as Error).message}`);
       errors++;
     }
   }
@@ -243,6 +277,42 @@ async function doAddCommand(manifest: Manifest, paths: OpenCodePaths) {
   }
 }
 
+async function doAddSkill(manifest: Manifest, paths: OpenCodePaths) {
+  const lockfile = readLockfile(paths.root);
+
+  const options = (manifest.skills ?? []).map((s) => {
+    const installed = getInstalledVersion(lockfile, "skills", s.name);
+    const hint = installed
+      ? `v${installed} instalado — ${s.description}`
+      : s.description;
+    return { value: s.name, label: `${s.name}  (v${s.version})`, hint };
+  });
+
+  if (options.length === 0) {
+    p.log.info("No hay skills disponibles en el manifest.");
+    return;
+  }
+
+  const selected = await p.multiselect({
+    message: "¿Qué skills deseas instalar?",
+    options,
+    required: true,
+  });
+  onCancel(selected);
+
+  const spin = p.spinner();
+  for (const name of selected as string[]) {
+    const item = manifest.skills.find((s) => s.name === name)!;
+    spin.start(`Instalando skill: ${name}  (${item.version})`);
+    try {
+      await installSkill(item, manifest, paths);
+      spin.stop(`Skill instalada: ${name}  (${item.version})`);
+    } catch (e) {
+      spin.stop(`Error: ${(e as Error).message}`);
+    }
+  }
+}
+
 /**
  * Update inteligente:
  * 1. Obtiene el último manifest via GitHub Releases API.
@@ -260,8 +330,8 @@ async function doUpdate(manifest: Manifest, paths: OpenCodePaths) {
 
   // Muestra diff de versiones
   const diffLines = candidates.map(({ type, item, installedVersion }) => {
-    const kind = type === "agents" ? "agente" : "command";
-    return `  ${kind.padEnd(8)} ${item.name.padEnd(16)} ${formatVersionDiff(
+    const kind = kindLabel(type);
+    return `  ${kind.padEnd(8)} ${item.name.padEnd(24)} ${formatVersionDiff(
       installedVersion,
       item.version
     )}`;
@@ -287,8 +357,10 @@ async function doUpdate(manifest: Manifest, paths: OpenCodePaths) {
     try {
       if (type === "agents") {
         await installAgent(item, manifest, paths);
-      } else {
+      } else if (type === "commands") {
         await installCommand(item, manifest, paths);
+      } else {
+        await installSkill(item, manifest, paths);
       }
       spin.stop(`Actualizado: ${item.name}  (${item.version})`);
       updated++;
@@ -319,6 +391,7 @@ export async function runInteractiveMenu() {
       { value: "all", label: "Instalar todo" },
       { value: "agent", label: "Instalar agente" },
       { value: "command", label: "Instalar command" },
+      { value: "skill", label: "Instalar skill" },
       { value: "update", label: "Actualizar instalación" },
       { value: "uninstall", label: "Desinstalar" },
       { value: "exit", label: "Salir" },
@@ -339,6 +412,11 @@ export async function runInteractiveMenu() {
       break;
     case "command":
       await doAddCommand(manifest, paths);
+      printPostInstallSteps();
+      p.outro("Listo.");
+      break;
+    case "skill":
+      await doAddSkill(manifest, paths);
       printPostInstallSteps();
       p.outro("Listo.");
       break;
@@ -389,6 +467,16 @@ export async function runAddCommandCommand() {
   p.outro("Listo.");
 }
 
+export async function runAddSkillCommand() {
+  p.intro(" OpenCode Installer ");
+  const manifest = await loadManifest();
+  const paths = await resolveOpenCodePaths();
+  if (!paths) { p.outro("Cancelado."); return; }
+  await doAddSkill(manifest, paths);
+  printPostInstallSteps();
+  p.outro("Listo.");
+}
+
 export async function runUpdateCommand() {
   p.intro(" OpenCode Installer ");
   const manifest = await loadLatestManifest();
@@ -405,7 +493,8 @@ async function doUninstallTotal(paths: OpenCodePaths) {
   if (
     !lockfile ||
     (Object.keys(lockfile.agents).length === 0 &&
-      Object.keys(lockfile.commands).length === 0)
+      Object.keys(lockfile.commands).length === 0 &&
+      Object.keys(lockfile.skills ?? {}).length === 0)
   ) {
     p.log.info("No hay nada instalado.");
     return;
@@ -418,14 +507,17 @@ async function doUninstallTotal(paths: OpenCodePaths) {
   for (const name of Object.keys(lockfile.commands)) {
     pathsToDelete.push(join(paths.commands, `${name}.md`));
   }
+  for (const name of Object.keys(lockfile.skills ?? {})) {
+    pathsToDelete.push(join(paths.skills, name));
+  }
 
   p.note(
     pathsToDelete.join("\n"),
-    `Se eliminarán ${pathsToDelete.length} archivo(s)`
+    `Se eliminarán ${pathsToDelete.length} archivo(s) / directorio(s)`
   );
 
   const confirm = await p.confirm({
-    message: `¿Confirmar desinstalación de ${pathsToDelete.length} archivo(s)?`,
+    message: `¿Confirmar desinstalación de ${pathsToDelete.length} item(s)?`,
   });
   onCancel(confirm);
   if (!confirm) {
@@ -434,7 +526,7 @@ async function doUninstallTotal(paths: OpenCodePaths) {
   }
 
   uninstallAll(paths);
-  p.log.success(`${pathsToDelete.length} archivo(s) eliminado(s).`);
+  p.log.success(`${pathsToDelete.length} item(s) eliminado(s).`);
 }
 
 async function doUninstallAgent(paths: OpenCodePaths) {
@@ -507,13 +599,49 @@ async function doUninstallCommand(paths: OpenCodePaths) {
   }
 }
 
+async function doUninstallSkill(paths: OpenCodePaths) {
+  const lockfile = readLockfile(paths.root);
+  if (!lockfile) {
+    p.log.warn("No hay instalación registrada.");
+    return;
+  }
+  const installed = Object.keys(lockfile.skills ?? {});
+  if (installed.length === 0) {
+    p.log.info("No hay skills instaladas.");
+    return;
+  }
+
+  const options = installed.map((name) => ({
+    value: name,
+    label: name,
+    hint: `v${lockfile.skills[name].version}`,
+  }));
+
+  const selected = await p.multiselect({
+    message: "¿Qué skills querés desinstalar?",
+    options,
+    required: true,
+  });
+  onCancel(selected);
+
+  for (const name of selected as string[]) {
+    const ok = uninstallSkill(name, paths);
+    if (ok) {
+      p.log.success(`Skill eliminada: ${name}`);
+    } else {
+      p.log.warn(`No se pudo eliminar la skill: ${name}`);
+    }
+  }
+}
+
 async function doUninstall(paths: OpenCodePaths) {
   const scope = await p.select({
     message: "¿Qué querés desinstalar?",
     options: [
-      { value: "all", label: "Todo (agentes + commands)" },
+      { value: "all", label: "Todo (agentes + commands + skills)" },
       { value: "agent", label: "Solo un agente" },
       { value: "command", label: "Solo un command" },
+      { value: "skill", label: "Solo una skill" },
     ],
   });
   onCancel(scope);
@@ -527,6 +655,9 @@ async function doUninstall(paths: OpenCodePaths) {
       break;
     case "command":
       await doUninstallCommand(paths);
+      break;
+    case "skill":
+      await doUninstallSkill(paths);
       break;
   }
 }
@@ -609,6 +740,43 @@ export async function runUninstallCommandCommand(name?: string) {
     }
   } else {
     await doUninstallCommand(paths);
+  }
+  p.outro("Listo.");
+}
+
+export async function runUninstallSkillCommand(name?: string) {
+  p.intro(" OpenCode Installer ");
+  const paths = await resolveOpenCodePaths();
+  if (!paths) { p.outro("Cancelado."); return; }
+
+  if (name) {
+    try {
+      validateFilePath(name);
+    } catch (e) {
+      p.log.warn(`Nombre inválido: ${(e as Error).message}`);
+      return;
+    }
+    const lockfile = readLockfile(paths.root);
+    if (!lockfile || !lockfile.skills || !(name in lockfile.skills)) {
+      p.log.warn(`${name} no está instalado.`);
+      return;
+    }
+    const dirPath = join(paths.skills, name);
+    p.note(dirPath, `Se eliminará`);
+    const confirm = await p.confirm({ message: `¿Borrar la skill "${name}"?` });
+    onCancel(confirm);
+    if (!confirm) {
+      p.log.info("Cancelado.");
+      return;
+    }
+    const ok = uninstallSkill(name, paths);
+    if (ok) {
+      p.log.success(`Skill eliminada: ${name}`);
+    } else {
+      p.log.warn(`No se pudo eliminar la skill: ${name}`);
+    }
+  } else {
+    await doUninstallSkill(paths);
   }
   p.outro("Listo.");
 }

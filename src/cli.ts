@@ -6,24 +6,28 @@ import {
   runInstallCommand,
   runAddAgentCommand,
   runAddCommandCommand,
+  runAddSkillCommand,
   runUpdateCommand,
   runUninstallCommand,
   runUninstallAgentCommand,
   runUninstallCommandCommand,
+  runUninstallSkillCommand,
 } from "./prompts.js";
 
 const HELP = `
-ostacky — Instalador de agentes y comandos para OpenCode
+ostacky — Instalador de agentes, comandos y skills para OpenCode
 
 Uso:
   npx ostacky                    Menú interactivo
   npx ostacky install            Instalar todo
   npx ostacky add agent          Agregar agente(s)
   npx ostacky add command        Agregar command(s)
+  npx ostacky add skill          Agregar skill(s)
   npx ostacky update             Actualizar instalación
   npx ostacky uninstall          Desinstalar todo
   npx ostacky uninstall agent    Desinstalar agente(s)
   npx ostacky uninstall command  Desinstalar command(s)
+  npx ostacky uninstall skill    Desinstalar skill(s)
   npx ostacky --help             Mostrar esta ayuda
   npx ostacky --version          Mostrar versión
 `.trim();
@@ -41,8 +45,10 @@ async function main() {
         await runAddAgentCommand();
       } else if (subcmd === "command") {
         await runAddCommandCommand();
+      } else if (subcmd === "skill") {
+        await runAddSkillCommand();
       } else {
-        console.error(`Tipo desconocido: "${subcmd}". Usa 'agent' o 'command'.`);
+        console.error(`Tipo desconocido: "${subcmd}". Usa 'agent', 'command' o 'skill'.`);
         process.exit(1);
       }
       break;
@@ -58,11 +64,14 @@ async function main() {
       } else if (subcmd === "command") {
         const name = process.argv[4];
         await runUninstallCommandCommand(name);
+      } else if (subcmd === "skill") {
+        const name = process.argv[4];
+        await runUninstallSkillCommand(name);
       } else if (subcmd === undefined) {
         await runUninstallCommand();
       } else {
         console.error(
-          `Subcomando desconocido: "${subcmd}". Usa 'agent', 'command' o nada.`
+          `Subcomando desconocido: "${subcmd}". Usa 'agent', 'command', 'skill' o nada.`
         );
         process.exit(1);
       }

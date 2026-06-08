@@ -1,4 +1,6 @@
 import localManifest from "../manifest.json" assert { type: "json" };
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
 import { getCached, putCache } from "./cache.js";
 import { validateFilePath, verifyChecksum } from "./security.js";
 
@@ -17,10 +19,29 @@ export interface Manifest {
   tag: string;
   agents: ManifestItem[];
   commands: ManifestItem[];
+  skills: ManifestItem[];
 }
 
 const GITHUB_RAW = "https://raw.githubusercontent.com";
 const GITHUB_API = "https://api.github.com";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+/** Raíz del paquete: un nivel arriba de dist/ (prod) o src/ (dev). */
+export const PACKAGE_ROOT = join(__dirname, "..");
+
+/** Directorio donde viven las skills bundleadas. */
+export const BUNDLED_SKILLS_DIR = join(PACKAGE_ROOT, "assets", "skills");
+
+/**
+ * Devuelve la ruta absoluta al directorio bundleado de una skill.
+ * Lanza si el nombre contiene segmentos inseguros.
+ */
+export function getBundledSkillPath(name: string): string {
+  validateFilePath(name);
+  return join(BUNDLED_SKILLS_DIR, name);
+}
 
 export function getRawUrl(repo: string, tag: string, path: string): string {
   return `${GITHUB_RAW}/${repo}/${tag}/${path}`;
@@ -95,9 +116,8 @@ export async function downloadFile(
 ): Promise<string> {
   validateFilePath(filePath);
 
-  const item = [...manifest.agents, ...manifest.commands].find(
-    (i) => i.file === filePath
-  );
+  const item = [...manifest.agents, ...manifest.commands, ...(manifest.skills ?? [])]
+    .find((i) => i.file === filePath);
   const expectedHash = item?.sha256 ?? null;
 
   // Intenta servir desde cache

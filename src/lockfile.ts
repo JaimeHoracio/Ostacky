@@ -22,6 +22,8 @@ export interface Lockfile {
   agents: Record<string, LockfileItem>;
   /** Commands instalados: nombre → metadata */
   commands: Record<string, LockfileItem>;
+  /** Skills instaladas: nombre → metadata */
+  skills: Record<string, LockfileItem>;
 }
 
 export function getLockfilePath(opencodeRoot: string): string {
@@ -58,7 +60,7 @@ export function writeLockfile(opencodeRoot: string, lockfile: Lockfile): void {
  */
 export function getInstalledVersion(
   lockfile: Lockfile | null,
-  type: "agents" | "commands",
+  type: "agents" | "commands" | "skills",
   name: string
 ): string | null {
   return lockfile?.[type]?.[name]?.version ?? null;
@@ -70,19 +72,20 @@ export function getInstalledVersion(
  */
 export function removeFromLockfile(
   opencodeRoot: string,
-  type: "agents" | "commands",
+  type: "agents" | "commands" | "skills",
   name: string
 ): void {
   const lockfile = readLockfile(opencodeRoot);
   if (!lockfile) return;
+  if (!lockfile[type]) return;
   if (!(name in lockfile[type])) return;
   delete lockfile[type][name];
   writeLockfile(opencodeRoot, lockfile);
 }
 
 /**
- * If the lockfile exists: resets agents/commands to {} and updates lockedAt,
- * preserving the existing version/repo/tag.
+ * If the lockfile exists: resets agents/commands/skills to {} and updates
+ * lockedAt, preserving the existing version/repo/tag.
  * If it doesn't exist: writes a fresh minimal lockfile.
  */
 export function clearLockfile(opencodeRoot: string): void {
@@ -96,11 +99,13 @@ export function clearLockfile(opencodeRoot: string): void {
       tag: "",
       agents: {},
       commands: {},
+      skills: {},
     });
     return;
   }
   lockfile.agents = {};
   lockfile.commands = {};
+  lockfile.skills = {};
   lockfile.lockedAt = new Date().toISOString();
   writeLockfile(opencodeRoot, lockfile);
 }
