@@ -16,7 +16,8 @@
   "files": [
     "dist/",
     "assets/",
-    "manifest.json"
+    "manifest.json",
+    "LICENSE"
   ],
   "keywords": [
     "opencode",

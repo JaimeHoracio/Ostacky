@@ -181,6 +181,18 @@ Al terminar la instalación, el CLI imprime en la terminal un panel con los pró
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
 - El cache local (`~/.opencode/cache/`) también valida integridad al servir archivos cacheados
 
+#### Restricciones de acceso a credenciales
+
+- La configuración local de OpenCode (`opencode.jsonc`, por ahora no versionado) bloquea lectura y escritura de `*.env` y `.secret/**` con `deny`.
+- El plugin versionado en `.opencode/plugins/deny-credentials.ts` registra el intento y deja una advertencia con la ruta exacta.
+- Cuando se bloquea un acceso, el mensaje puede empezar así:
+
+```text
+>>>> Control: No se puede leer o modificar las credenciales: "/ruta/al/proyecto/.env"
+```
+
+- La sesión sigue ejecutándose después del bloqueo porque `experimental.continue_loop_on_deny` está activado.
+
 ## Cache
 
 Los archivos descargados se guardan en:
