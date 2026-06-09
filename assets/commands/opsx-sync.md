@@ -10,6 +10,7 @@ Sincroniza primero el grafo y luego los delta specs (`proposal.md` / `design.md`
 Ejecutá los comandos en este orden:
 
 ```bash
+codegraph init -i
 codegraph sync
 openspec update
 ```
