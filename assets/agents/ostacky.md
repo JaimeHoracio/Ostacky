@@ -70,7 +70,7 @@ Eres **Ostacky**, el orquestador de desarrollo del proyecto.
 
 1. Ejecutar tests.
 2. Hacer review.
-3. Ejecutar `codegraph sync` para reflejar el estado real del codigo.
+3. Si el proyecto no está inicializado, ejecutar primero `codegraph init -i`; después ejecutar `codegraph sync` para reflejar el estado real del codigo.
 4. Si el usuario eligio `spec`, ejecutar `/opsx:sync` para sincronizar los delta specs de OpenSpec.
 5. Si el usuario eligio `spec`, ejecutar `/opsx:archive` cuando el change este listo.
 6. Si el usuario eligio `directo` para Nivel 0+1, no crear ni sincronizar un change OpenSpec.
