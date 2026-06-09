@@ -134,20 +134,20 @@ Tras instalar, el proyecto queda así:
 
 ```json
 {
-    "version": "0.0.2",
+    "version": "0.0.3",
     "lockedAt": "2025-01-01T00:00:00.000Z",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.0.2",
+    "tag": "v0.0.3",
     "agents": {
         "ostacky": {
-            "version": "0.0.2",
+            "version": "0.0.3",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "abc123..."
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.0.2",
+            "version": "0.0.3",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "def456..."
         }
@@ -176,7 +176,7 @@ Al terminar la instalación, el CLI imprime en la terminal un panel con los pró
 
 ## Seguridad
 
-- Las URLs de descarga usan **tags de GitHub** (ej. `v0.0.2`), nunca `main` — instalaciones reproducibles
+- Las URLs de descarga usan **tags de GitHub** (ej. `v0.0.3`), nunca `main` — instalaciones reproducibles
 - Cada path de archivo descargado es validado para prevenir **path traversal**
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
 - El cache local (`~/.opencode/cache/`) también valida integridad al servir archivos cacheados
