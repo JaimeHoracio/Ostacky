@@ -1,14 +1,14 @@
 # Ostacky
 
-Instalador CLI de agentes y commands para [OpenCode](https://opencode.ai). Descarga y gestiona los recursos del directorio `.opencode/` de tu proyecto de forma reproducible y segura.
+Ostacky es el agente de [OpenCode](https://opencode.ai) que instalás en tu proyecto. Usa skills para ser más eficiente con tokens y evitar recorrer todo el proyecto cuando no hace falta. Los cambios se registran normalmente en specs con los skills de OpenSpec; si el cambio es de bajo impacto, podés saltearte esa generación.
 
 ## ¿Qué es?
 
-`Ostacky` es un CLI que instala agentes (`.opencode/agents/`) y commands (`.opencode/commands/`) directamente desde GitHub Releases. Cada instalación queda registrada en un lockfile con versión y checksum, lo que permite actualizaciones controladas y reproducibles.
+`Ostacky` es el agente (`.opencode/agents/`) que se instala directamente desde GitHub Releases. Cada instalación queda registrada en un lockfile con versión y checksum, lo que permite actualizaciones controladas y reproducibles.
 
 ## ¿Para qué sirve?
 
-- Instalar el agente `Ostacky` y el command `install-stack` en cualquier proyecto con un solo comando
+- Instalar el agente `Ostacky` en cualquier proyecto con un solo comando.
 - Mantener un registro de qué versión está instalada (`ostacky-lock.json`)
 - Detectar y aplicar actualizaciones mostrando el diff de versiones antes de confirmar
 - Evitar descargas repetidas gracias al cache local en `~/.opencode/cache/`
