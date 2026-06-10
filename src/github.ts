@@ -15,7 +15,6 @@ export interface ManifestItem {
 export interface Manifest {
     version: string;
     repo: string;
-    /** Tag de GitHub (e.g. "v0.0.3"). Reemplaza el uso de branch. */
     tag: string;
     agents: ManifestItem[];
     commands: ManifestItem[];

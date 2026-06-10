@@ -1,18 +1,18 @@
 {
-    "version": "0.0.3",
+    "version": "0.0.4",
     "lockedAt": "2026-06-07T00:37:14.826Z",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.0.3",
+    "tag": "v0.0.4",
     "agents": {
         "ostacky": {
-            "version": "0.0.3",
+            "version": "0.0.4",
             "installedAt": "2026-06-07T00:37:14.525Z",
             "sha256": "7658f9a23c18baa98c96b8d853a16c59c443c339cea9c691f9758fc0136b78a9"
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.0.3",
+            "version": "0.0.4",
             "installedAt": "2026-06-07T00:37:14.826Z",
             "sha256": "58e3e56f72ef3e444fa955d44025cfaea6d42bbfc26b5675cc64f521f338d832"
         }
