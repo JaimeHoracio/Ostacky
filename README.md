@@ -159,20 +159,22 @@ Se recomienda agregar `ostacky-lock.json` al control de versiones para que el eq
 
 ## Después de la instalación
 
-Al terminar la instalación, el CLI imprime en la terminal un panel con los próximos pasos. Resumidos:
+Al terminar la instalación, el flujo normal es:
 
 1. **Recargar OpenCode** para que detecte los nuevos archivos en `.opencode/`.
-2. Ejecutar el command:
-    ```
-    /install-stack
-    ```
-    Si el command `/install-stack` no aparece en la terminal, recargá OpenCode (paso 1) y volvé a tipearlo. Es un command de OpenCode — el CLI lo instala pero OpenCode necesita recargarlo para registrarlo.
-3. **Recargar OpenCode nuevamente** después de que `/install-stack` haya corrido.
-4. Ya puedes usar el agente:
+2. Ya puedes usar el agente:
     ```
     @Ostacky
     ```
     o seleccionarlo desde la interfaz de OpenCode según la configuración del proyecto. `@Ostacky` invoca al agente que el CLI instaló en `.opencode/agents/ostacky.md`.
+
+Si por alguna razon querés ejecutar el bootstrap manualmente o regenerar el stack local, también está disponible el command:
+
+```bash
+/install-stack
+```
+
+Ese paso es opcional. Si no aparece en la terminal, recargá OpenCode y volvé a tipearlo.
 
 ## Seguridad
 
@@ -184,13 +186,6 @@ Al terminar la instalación, el CLI imprime en la terminal un panel con los pró
 #### Restricciones de acceso a credenciales
 
 - La configuración local de OpenCode (`opencode.jsonc`, por ahora no versionado) bloquea lectura y escritura de `*.env` y `.secret/**` con `deny`.
-- El plugin versionado en `.opencode/plugins/deny-credentials.ts` registra el intento y deja una advertencia con la ruta exacta.
-- Cuando se bloquea un acceso, el mensaje puede empezar así:
-
-```text
->>>> Control: No se puede leer o modificar las credenciales: "/ruta/al/proyecto/.env"
-```
-
 - La sesión sigue ejecutándose después del bloqueo porque `experimental.continue_loop_on_deny` está activado.
 
 ## Cache
