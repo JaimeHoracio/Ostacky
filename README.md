@@ -1,6 +1,6 @@
 # Ostacky
 
-Ostacky es el agente de [OpenCode](https://opencode.ai) que instalás en tu proyecto. Usa skills para ser más eficiente con tokens y evitar recorrer todo el proyecto cuando no hace falta. Los cambios se registran normalmente en specs con los skills de OpenSpec; si el cambio es de bajo impacto, podés saltearte esa generación.
+Ostacky es el agente de [OpenCode](https://opencode.ai) que instalás en tu proyecto. Usa skills para ser más eficiente con tokens y evitar recorrer todo el proyecto cuando no hace falta. En cambios de bajo impacto prioriza ejecución inline; los subagentes quedan para slices realmente independientes. Los cambios se registran normalmente en specs con los skills de OpenSpec; si el cambio es de bajo impacto, podés saltearte esa generación.
 
 ## ¿Qué es?
 
@@ -12,6 +12,7 @@ Ostacky es el agente de [OpenCode](https://opencode.ai) que instalás en tu proy
 - Mantener un registro de qué versión está instalada (`ostacky-lock.json`)
 - Detectar y aplicar actualizaciones mostrando el diff de versiones antes de confirmar
 - Evitar descargas repetidas gracias al cache local en `~/.opencode/cache/`
+- Resolver tareas chicas sin overhead extra de coordinación.
 
 ## Requisitos
 
@@ -178,6 +179,7 @@ Ese paso es opcional. Si no aparece en la terminal, recargá OpenCode y volvé a
 
 ## Seguridad
 
+- `opencode.jsonc` se versiona en el repo para compartir permisos y MCP de forma reproducible.
 - Las URLs de descarga usan **tags de GitHub** (ej. `v0.0.5`), nunca `main` — instalaciones reproducibles
 - Cada path de archivo descargado es validado para prevenir **path traversal**
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
@@ -185,8 +187,9 @@ Ese paso es opcional. Si no aparece en la terminal, recargá OpenCode y volvé a
 
 #### Restricciones de acceso a credenciales
 
-- La configuración local de OpenCode (`opencode.jsonc`, por ahora no versionado) bloquea lectura y escritura de `*.env` y `.secret/**` con `deny`.
+- La configuración local de OpenCode (`opencode.jsonc`) bloquea lectura y escritura de `*.env` y `.secret/**` con `deny`.
 - La sesión sigue ejecutándose después del bloqueo porque `experimental.continue_loop_on_deny` está activado.
+- Para worktrees, el repo prefiere `.worktrees/`; `~/.config/superpowers/worktrees` solo se usa con confirmación explícita.
 
 ## Cache
 

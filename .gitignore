@@ -146,7 +146,7 @@ bun.lock
 #.opencode/
 !.opencode/agents/ostacky.md
 !.opencode/commands/install-stack.md
-opencode.jsonc
+.worktrees/
 .codegraph
-openspec
+openspec/
 docs/

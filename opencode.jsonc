@@ -1,0 +1,33 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "read": {
+      "*.env": "deny",
+      ".secret/**": "deny"
+    },
+    "write": {
+      "*.env": "deny",
+      ".secret/**": "deny"
+    },
+    "external_directory": {
+      "~/.config/superpowers/worktrees/**": "ask"
+    }
+  },
+  "skills": {
+    "paths": ["assets/skills/using-git-worktrees"]
+  },
+  "experimental": {
+    "continue_loop_on_deny": true
+  },
+  "mcp": {
+    "codegraph": {
+      "type": "local",
+      "command": [
+        "codegraph",
+        "serve",
+        "--mcp"
+      ],
+      "enabled": true
+    }
+  }
+}

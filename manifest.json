@@ -6,7 +6,7 @@
         {
             "name": "ostacky",
             "file": "assets/agents/ostacky.md",
-            "description": "Agente principal de desarrollo con OpenCode",
+            "description": "Agente principal de desarrollo con ejecución inline-first y local-first",
             "version": "0.0.5",
             "sha256": null
         }
