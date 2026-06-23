@@ -10,12 +10,12 @@ Ostacky es el agente de [OpenCode](https://opencode.ai) que instalás en tu proy
 
 Ostacky no es solo un agente — es un **orquestador** que integra cuatro herramientas especializadas para que trabajen en conjunto sin pisarse:
 
-| Herramienta | Rol | Define |
-|---|---|---|
-| **[CodeGraph](https://github.com/colbymchenry/codegraph)** | Grafo de código | DÓNDE está el código y a quién impacta un cambio |
-| **[OpenSpec](https://github.com/Fission-AI/OpenSpec/)** | Especificaciones | QUÉ hay que construir y POR QUÉ |
-| **[Superpowers](https://github.com/obra/superpowers)** | Ejecución | CÓMO se implementa, prueba y revisa |
-| **[Engram](https://github.com/Gentleman-Programming/engram)** | Memoria persistente | QUÉ aprendimos en sesiones anteriores |
+| Herramienta                                                   | Rol                 | Define                                           |
+| ------------------------------------------------------------- | ------------------- | ------------------------------------------------ |
+| **[CodeGraph](https://github.com/colbymchenry/codegraph)**    | Grafo de código     | DÓNDE está el código y a quién impacta un cambio |
+| **[OpenSpec](https://github.com/Fission-AI/OpenSpec/)**       | Especificaciones    | QUÉ hay que construir y POR QUÉ                  |
+| **[Superpowers](https://github.com/obra/superpowers)**        | Ejecución           | CÓMO se implementa, prueba y revisa              |
+| **[Engram](https://github.com/Gentleman-Programming/engram)** | Memoria persistente | QUÉ aprendimos en sesiones anteriores            |
 
 ### Cómo trabajan en sinergia
 
@@ -156,20 +156,20 @@ Tras instalar, el proyecto queda así:
 
 ```json
 {
-    "version": "0.0.6",
+    "version": "0.1.0",
     "lockedAt": "2025-01-01T00:00:00.000Z",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.0.6",
+    "tag": "v0.1.0",
     "agents": {
         "ostacky": {
-            "version": "0.0.6",
+            "version": "0.1.0",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "abc123..."
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.0.6",
+            "version": "0.1.0",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "def456..."
         }
@@ -201,7 +201,7 @@ Ese paso es opcional. Si no aparece en la terminal, recargá OpenCode y volvé a
 ## Seguridad
 
 - `opencode.jsonc` se versiona en el repo para compartir permisos y MCP de forma reproducible.
-- Las URLs de descarga usan **tags de GitHub** (ej. `v0.0.6`), nunca `main` — instalaciones reproducibles
+- Las URLs de descarga usan **tags de GitHub** (ej. `v0.1.0`), nunca `main` — instalaciones reproducibles
 - Cada path de archivo descargado es validado para prevenir **path traversal**
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
 - El cache local (`~/.opencode/cache/`) también valida integridad al servir archivos cacheados
