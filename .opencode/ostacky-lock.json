@@ -1,75 +1,75 @@
 {
-    "version": "0.1.1",
+    "version": "0.1.2",
     "lockedAt": "2026-06-12T14:12:52.674Z",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.1.1",
+    "tag": "v0.1.2",
     "agents": {
         "ostacky": {
-            "version": "0.1.1",
+            "version": "0.1.2",
             "installedAt": "2026-06-12T14:12:51.995Z",
             "sha256": "f8c90095bbc27f3486986a7d5c219d32f407c09aed54a1b7f787dd2b57f60916"
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.1.1",
+            "version": "0.1.2",
             "installedAt": "2026-06-12T14:12:52.269Z",
             "sha256": "74072c099dd58e77658e2dc452970aa8677ea7f8ed9af879e4d34ed44dcc9303"
         },
         "opsx-sync": {
-            "version": "0.1.1",
+            "version": "0.1.2",
             "installedAt": "2026-06-12T14:12:52.625Z",
             "sha256": "211d75dc175710ddfa9c42f3ea26055708ab9df1f49ff95f92f8a34d7d756174"
         }
     },
     "skills": {
         "brainstorming": {
-            "version": "0.1.1",
+            "version": "0.1.2",
             "installedAt": "2026-06-11T23:16:08.750Z",
             "sha256": "22be76380b086c4ac6d38b8b124f6f7df47c32a67237a6ceaf8c7fd19aa524b0"
         },
         "writing-plans": {
-            "version": "0.1.1",
+            "version": "0.1.2",
             "installedAt": "2026-06-12T14:12:52.641Z",
             "sha256": "4d56ce833af79c628e72cd95b06d13597131a09f9d98aae0a42c6a98a8ee1b95"
         },
         "tdd": {
-            "version": "0.1.1",
+            "version": "0.1.2",
             "installedAt": "2026-06-12T14:12:52.644Z",
             "sha256": "b5cd98b3c122162b5a5eac3c78858a64ba165bf4e8c251d8a804a593c0c72312"
         },
         "subagent-driven-development": {
-            "version": "0.1.1",
+            "version": "0.1.2",
             "installedAt": "2026-06-12T14:12:52.651Z",
             "sha256": "7534b60788e05644831347194b1f99bcb41e2eda130994cfddafee3146ba63bd"
         },
         "dispatching-parallel-agents": {
-            "version": "0.1.1",
+            "version": "0.1.2",
             "installedAt": "2026-06-12T14:12:52.659Z",
             "sha256": "b7e99d62c5d2ade21a3b6cdc94a7f90772e23fe3294ca600386f192f6181f6b2"
         },
         "review": {
-            "version": "0.1.1",
+            "version": "0.1.2",
             "installedAt": "2026-06-12T14:12:52.661Z",
             "sha256": "af8fd392835967111e865f170d90d3dd9b8266b517ffb7d551dffda704500a90"
         },
         "openspec-explore": {
-            "version": "0.1.1",
+            "version": "0.1.2",
             "installedAt": "2026-06-12T14:12:52.668Z",
             "sha256": "c3eaff7d64b7e5e757b120dd231d2e6b56e9f440055dc9ab5431b466d6244bd7"
         },
         "openspec-propose": {
-            "version": "0.1.1",
+            "version": "0.1.2",
             "installedAt": "2026-06-12T14:12:52.671Z",
             "sha256": "28c59bdce6e9af0ab07102b2e6d0b47a0f0dc2f1bfb8321576d47f6c240e778b"
         },
         "openspec-apply-change": {
-            "version": "0.1.1",
+            "version": "0.1.2",
             "installedAt": "2026-06-12T14:12:52.673Z",
             "sha256": "8fa8182e40fd92cefbbcc1e303d9aa9c02e2b7f3f2c0625cb61fb916e4fc5760"
         },
         "openspec-archive-change": {
-            "version": "0.1.1",
+            "version": "0.1.2",
             "installedAt": "2026-06-12T14:12:52.674Z",
             "sha256": "564b8dca28084c75ca192137113e9186c4fb31d2de0e26c081fd67c37f7d4a56"
         }
