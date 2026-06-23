@@ -156,20 +156,20 @@ Tras instalar, el proyecto queda así:
 
 ```json
 {
-    "version": "0.1.0",
+    "version": "0.1.1",
     "lockedAt": "2025-01-01T00:00:00.000Z",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.1.0",
+    "tag": "v0.1.1",
     "agents": {
         "ostacky": {
-            "version": "0.1.0",
+            "version": "0.1.1",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "abc123..."
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.1.0",
+            "version": "0.1.1",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "def456..."
         }
@@ -201,7 +201,7 @@ Ese paso es opcional. Si no aparece en la terminal, recargá OpenCode y volvé a
 ## Seguridad
 
 - `opencode.jsonc` se versiona en el repo para compartir permisos y MCP de forma reproducible.
-- Las URLs de descarga usan **tags de GitHub** (ej. `v0.1.0`), nunca `main` — instalaciones reproducibles
+- Las URLs de descarga usan **tags de GitHub** (ej. `v0.1.1`), nunca `main` — instalaciones reproducibles
 - Cada path de archivo descargado es validado para prevenir **path traversal**
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
 - El cache local (`~/.opencode/cache/`) también valida integridad al servir archivos cacheados

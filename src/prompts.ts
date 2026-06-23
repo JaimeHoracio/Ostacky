@@ -21,6 +21,7 @@ import {
   uninstallCommand,
   uninstallSkill,
   uninstallAll,
+  isCommandAvailable,
   installCodeGraph,
   setupOpenSpec,
   installEngram,
@@ -249,6 +250,18 @@ async function doInstallAll(manifest: Manifest, paths: OpenCodePaths) {
   if (errors === 0) {
     p.log.info("Instalando stack de herramientas...");
     await doInstallStack();
+  }
+
+  // Verificar que las herramientas del stack estén realmente disponibles
+  const missingTools: string[] = [];
+  if (!isCommandAvailable("codegraph")) missingTools.push("CodeGraph");
+  if (!isCommandAvailable("engram")) missingTools.push("Engram");
+
+  if (missingTools.length > 0) {
+    p.log.warn(
+      `Faltan herramientas del stack: ${missingTools.join(", ")}.\n` +
+      "Ejecutá `/install-stack` desde el agente para instalarlas manualmente."
+    );
   }
 
   if (errors === 0) {
