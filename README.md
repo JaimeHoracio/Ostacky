@@ -1,10 +1,30 @@
 # Ostacky
 
-Ostacky es el agente de [OpenCode](https://opencode.ai) que instalás en tu proyecto. Usa skills para ser más eficiente con tokens y evitar recorrer todo el proyecto cuando no hace falta. En cambios de bajo impacto prioriza ejecución inline; los subagentes quedan para slices realmente independientes. Los cambios se registran normalmente en specs con los skills de OpenSpec; si el cambio es de bajo impacto, podés saltearte esa generación.
+Ostacky es el agente de [OpenCode](https://opencode.ai) que instalás en tu proyecto. Orquesta **4 herramientas** para que trabajen en sinergia: [CodeGraph](https://github.com/colbymchenry/codegraph) entiende el código existente, [OpenSpec](https://github.com/Fission-AI/OpenSpec/) define requisitos y contratos, [Superpowers](https://github.com/obra/superpowers) ejecuta con TDD y review, y [Engram](https://github.com/Gentleman-Programming/engram) da memoria persistente entre sesiones. Ostacky las rutea según el nivel de impacto del cambio para ser eficiente con tokens y evitar recorrer todo el proyecto cuando no hace falta.
 
 ## ¿Qué es?
 
 `Ostacky` es el agente (`.opencode/agents/`) que se instala directamente desde GitHub Releases. Cada instalación queda registrada en un lockfile con versión y checksum, lo que permite actualizaciones controladas y reproducibles.
+
+## Stack
+
+Ostacky no es solo un agente — es un **orquestador** que integra cuatro herramientas especializadas para que trabajen en conjunto sin pisarse:
+
+| Herramienta | Rol | Define |
+|---|---|---|
+| **[CodeGraph](https://github.com/colbymchenry/codegraph)** | Grafo de código | DÓNDE está el código y a quién impacta un cambio |
+| **[OpenSpec](https://github.com/Fission-AI/OpenSpec/)** | Especificaciones | QUÉ hay que construir y POR QUÉ |
+| **[Superpowers](https://github.com/obra/superpowers)** | Ejecución | CÓMO se implementa, prueba y revisa |
+| **[Engram](https://github.com/Gentleman-Programming/engram)** | Memoria persistente | QUÉ aprendimos en sesiones anteriores |
+
+### Cómo trabajan en sinergia
+
+1. **CodeGraph** descubre el alcance del cambio sin escanear el repo entero (consulta `codegraph_context`, `codegraph_impact`).
+2. **OpenSpec** documenta requisitos, contratos y escenarios de aceptación (proposal → design → spec → tasks).
+3. **Superpowers** ejecuta con TDD, testing automatizado y review (brainstorming → plans → tdd → review).
+4. **Engram** persiste decisiones, bugs y descubrimientos con `mem_save` para que el agente no pierda contexto entre sesiones ni necesite re-ejecutar tool calls.
+
+Ostacky decide **cuándo y cómo** usar cada herramienta según el nivel de impacto del cambio (Nivel 0, Nivel 0+1, Nivel 1+), priorizando siempre eficiencia de tokens.
 
 ## ¿Para qué sirve?
 
@@ -19,6 +39,7 @@ Ostacky es el agente de [OpenCode](https://opencode.ai) que instalás en tu proy
 - [Node.js](https://nodejs.org/) >= 18 (para usar con `npx`)
 - o [Bun](https://bun.sh/) >= 1.x (para usar con `bunx` o desarrollo)
 - [OpenCode](https://opencode.ai) instalado en tu máquina
+- **WSL:** Si usás Windows con WSL, seguí las instrucciones para **Linux** — WSL corre un kernel Linux real. No uses los comandos de PowerShell aunque estés en Windows.
 
 ## Uso rápido (para usuarios)
 

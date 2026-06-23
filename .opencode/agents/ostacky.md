@@ -103,6 +103,7 @@ Eres **Ostacky**, el orquestador de desarrollo del proyecto.
 - El set curado de skills vive en `assets/skills/` y `.opencode/skills/`. No depender del plugin upstream `superpowers@git+...` en runtime.
 - `opsx-sync` sincroniza OpenSpec. `codegraph sync` sincroniza el grafo. Son complementarios, no redundantes.
 - Este proyecto NO usa CLAUDE.md. Si un skill referencia CLAUDE.md, usar el override local en `assets/skills/<skill>/` que reemplaza esas referencias por AGENTS.md y `.opencode/`.
+- Browser/local URL use is never suggested proactively; it is only allowed when the user explicitly asks for browser/visual help, and the default is text-only to conserve tokens.
 
 ## Skills y comandos de referencia
 

@@ -108,14 +108,107 @@ openspec update
 
 ---
 
+## Paso 5 — Engram
+
+[Engram](https://github.com/Gentleman-Programming/engram) es el sistema de memoria persistente para agentes de IA. Se instala como un único binario Go con SQLite + FTS5, sin Node.js, Python ni Docker.
+
+**RESTRICCIÓN:** configurar ÚNICAMENTE para OpenCode. No crear archivos en `.claude/`, `.cursor/` ni otros directorios de otras plataformas.
+
+### Verificar instalación actual
+
+Chequeá si Engram ya está disponible:
+
+```bash
+engram --version 2>/dev/null || echo "no-instalado"
+```
+
+#### Si ya está instalado
+
+Si el comando devuelve una versión, Engram ya está en el sistema. Verificá si es la más reciente comparando con la [última release en GitHub](https://github.com/Gentleman-Programming/engram/releases).
+
+Si está desactualizado, actualizá según cómo lo instalaste originalmente:
+
+- **go install:** `go install github.com/Gentleman-Programming/engram/cmd/engram@latest`
+- **Homebrew:** `brew update && brew upgrade engram`
+- **Binario propio:** descargá la nueva versión desde [releases](https://github.com/Gentleman-Programming/engram/releases) y reemplazá el binario
+
+Luego de actualizar, saltá directo a [Configurar para OpenCode](#configurar-para-opencode) — no necesitás reinstalar.
+
+#### Si no está instalado
+
+Preferí métodos de instalación local antes que global:
+
+**Opción recomendada — `go install` (local por usuario, sin sudo):**
+
+```bash
+go install github.com/Gentleman-Programming/engram/cmd/engram@latest
+```
+
+El binario se instala en `$GOPATH/bin/engram` (usualmente `~/go/bin/engram`).
+
+**Alternativa — Homebrew (macOS/Linux):**
+
+```bash
+brew install gentleman-programming/tap/engram
+```
+
+**Alternativa — binario en el proyecto (máxima localidad):**
+
+```bash
+mkdir -p .opencode/bin
+# Descargar el binario desde https://github.com/Gentleman-Programming/engram/releases
+# y colocarlo en .opencode/bin/engram, luego:
+chmod +x .opencode/bin/engram
+```
+
+### Configurar para OpenCode
+
+Una vez que Engram está instalado (ya sea porque ya lo tenías, lo actualizaste o lo instalaste ahora), ejecutá el setup que lo registra exclusivamente para OpenCode:
+
+```bash
+engram setup opencode
+```
+
+Este comando:
+- Agrega el MCP server de Engram en `opencode.json` (tipo `local`, comando `engram mcp`)
+- Instala el plugin de Engram para OpenCode
+- **NO** toca `.claude/`, `.cursor/`, `.gemini/` ni ninguna otra plataforma
+
+Verificá que `opencode.json` contenga la entrada MCP de Engram:
+
+```json
+{
+  "mcp": {
+    "engram": {
+      "type": "local",
+      "command": ["engram", "mcp"],
+      "enabled": true
+    }
+  }
+}
+```
+
+### Session tracking
+
+El plugin de Engram para OpenCode usa `engram serve` para session tracking y recuperación ante compaction. El plugin intenta auto-iniciar el servidor, pero si tu entorno bloquea procesos en background, iniciálo manualmente:
+
+```bash
+engram serve
+```
+
+Corre en el puerto 7437 por defecto. Los datos se almacenan en `~/.engram/engram.db` (SQLite local).
+
+---
+
 ## Verificación final
 
 Confirmá que:
 
 1. `.opencode/skills/` contiene las 10 skills curadas (cada una con su `SKILL.md`; algunas traen `scripts/` y `references/`)
 2. `.opencode/commands/` contiene los 5 opsx-* commands (`opsx-apply`, `opsx-archive`, `opsx-explore`, `opsx-propose`, `opsx-sync`)
-3. `opencode.json` (o `.jsonc`) tiene **solamente** el bloque `mcp.codegraph` — sin campo `plugin`
+3. `opencode.json` (o `.jsonc`) tiene los bloques `mcp.codegraph` y `mcp.engram` — sin campo `plugin`
 4. `.codegraph/` existe en la raíz del proyecto (índice local de CodeGraph)
-5. **NO existen** archivos generados en `.claude/`, `.kiro/`, `.cursor/`, `.gemini/`, `.codex/` ni ningún directorio de otra plataforma
+5. `engram --version` funciona y `engram setup opencode` ya fue ejecutado
+6. **NO existen** archivos generados en `.claude/`, `.kiro/`, `.cursor/`, `.gemini/`, `.codex/` ni ningún directorio de otra plataforma
 
 Reportá el estado de cada componente con ✓ o ✗.
