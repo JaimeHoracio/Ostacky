@@ -222,68 +222,6 @@ Los archivos descargados se guardan en:
 
 Si ya existe un archivo en cache con el hash correcto, no se hace ninguna petición de red.
 
-## Desarrollo
-
-> Los pasos de esta sección son **solo para quienes quieran contribuir o modificar el código**. Si eres usuario final, no necesitas ejecutar nada de esto — basta con `npx ostacky`.
-
-### Requisitos adicionales para desarrollo
-
-- [Bun](https://bun.sh/) >= 1.x
-
-### 1. Clonar e instalar dependencias
-
-```bash
-git clone https://github.com/JaimeHoracio/Ostacky.git
-cd Ostacky
-bun install
-```
-
-`bun install` descarga todas las dependencias definidas en `package.json` (incluyendo TypeScript y los tipos de Bun).
-
-### 2. Ejecutar en modo desarrollo
-
-```bash
-bun run dev
-# equivalente a: bun run src/cli.ts
-```
-
-### 3. Compilar la CLI
-
-La CLI se distribuye como un ejecutable JavaScript en `dist/cli.js`. Para generarlo:
-
-```bash
-bun run build
-```
-
-Este comando ejecuta internamente:
-
-```bash
-bun build src/cli.ts --target=node --format=esm --outfile dist/cli.js && bun scripts/add-shebang.ts
-```
-
-Tras compilar deberías obtener:
-
-```
-dist/
-└── cli.js
-```
-
-### 4. Probar el binario compilado
-
-```bash
-node dist/cli.js
-# o
-bun run start
-```
-
-### Publicar en npm
-
-El script `prepublishOnly` ejecuta `bun run build` automáticamente antes de publicar, por lo que `dist/` siempre estará actualizado al publicar.
-
-```bash
-npm publish
-```
-
 ## Licencia
 
 MIT

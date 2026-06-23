@@ -293,3 +293,265 @@ export function uninstallAll(paths: OpenCodePaths): void {
   }
   clearLockfile(paths.root);
 }
+
+// ─── Stack installation (tools: CodeGraph, OpenSpec, Engram) ─────────────────
+
+import { execSync } from "child_process";
+
+export interface StackResult {
+  codegraph: { success: boolean; message: string };
+  openspec: { success: boolean; message: string };
+  engram: { success: boolean; message: string };
+  config: { success: boolean; message: string };
+}
+
+export function isCommandAvailable(cmd: string): boolean {
+  try {
+    if (process.platform === "win32") {
+      execSync(`where ${cmd} >nul 2>&1`);
+    } else {
+      execSync(`which ${cmd} >/dev/null 2>&1`);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Instala CodeGraph (binary) y lo configura para OpenCode.
+ * Si ya está instalado, solo ejecuta la configuración.
+ */
+export function installCodeGraph(): { success: boolean; message: string } {
+  if (!isCommandAvailable("codegraph")) {
+    try {
+      if (process.platform === "win32") {
+        execSync(
+          'powershell -c "irm https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.ps1 | iex"',
+          { stdio: "inherit", timeout: 120_000 }
+        );
+      } else {
+        execSync(
+          "curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | sh",
+          { stdio: "inherit", timeout: 120_000 }
+        );
+      }
+      if (!isCommandAvailable("codegraph")) {
+        return {
+          success: false,
+          message:
+            "CodeGraph instalado pero no está en PATH. ¿Necesitás reiniciar la terminal?",
+        };
+      }
+    } catch (e) {
+      return {
+        success: false,
+        message: `Error instalando CodeGraph: ${(e as Error).message}`,
+      };
+    }
+  }
+
+  // Configurar para OpenCode (corre siempre, incluso si ya estaba instalado)
+  try {
+    execSync("codegraph install --target=opencode --location=local --yes", {
+      stdio: "pipe",
+      timeout: 60_000,
+    });
+    execSync("codegraph init -i", { stdio: "pipe", timeout: 120_000 });
+    return { success: true, message: "CodeGraph instalado y configurado para OpenCode" };
+  } catch (e) {
+    return {
+      success: false,
+      message: `Error configurando CodeGraph: ${(e as Error).message}`,
+    };
+  }
+}
+
+/**
+ * Configura OpenSpec para el proyecto via npx (sin requerir instalación global).
+ */
+export function setupOpenSpec(): { success: boolean; message: string } {
+  try {
+    execSync("npx --yes openspec init --tools opencode --force", {
+      stdio: "pipe",
+      timeout: 120_000,
+    });
+    return { success: true, message: "OpenSpec configurado para OpenCode" };
+  } catch (e) {
+    return {
+      success: false,
+      message: `Error configurando OpenSpec: ${(e as Error).message}`,
+    };
+  }
+}
+
+/**
+ * Instala Engram (binary) y lo configura para OpenCode.
+ * Prueba go install primero (user-local), después Homebrew, después da una pista.
+ */
+export function installEngram(): { success: boolean; message: string } {
+  if (isCommandAvailable("engram")) {
+    // Ya instalado, solo configurar
+    try {
+      execSync("engram setup opencode", { stdio: "pipe", timeout: 30_000 });
+      return { success: true, message: "Engram ya instalado y configurado para OpenCode" };
+    } catch (e) {
+      return {
+        success: false,
+        message: `Error configurando Engram: ${(e as Error).message}`,
+      };
+    }
+  }
+
+  // Intentar go install (user-local)
+  if (isCommandAvailable("go")) {
+    try {
+      execSync(
+        "go install github.com/Gentleman-Programming/engram/cmd/engram@latest",
+        { stdio: "pipe", timeout: 120_000 }
+      );
+      if (isCommandAvailable("engram")) {
+        execSync("engram setup opencode", { stdio: "pipe", timeout: 30_000 });
+        return { success: true, message: "Engram instalado via go install y configurado" };
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  // Intentar Homebrew (macOS/Linux)
+  if (
+    isCommandAvailable("brew") &&
+    (process.platform === "darwin" || process.platform === "linux")
+  ) {
+    try {
+      execSync("brew install gentleman-programming/tap/engram", {
+        stdio: "pipe",
+        timeout: 120_000,
+      });
+      if (isCommandAvailable("engram")) {
+        execSync("engram setup opencode", { stdio: "pipe", timeout: 30_000 });
+        return { success: true, message: "Engram instalado via Homebrew y configurado" };
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  return {
+    success: false,
+    message:
+      "No se pudo instalar Engram automáticamente.\n" +
+      "  - Tenés Go? Ejecutá: go install github.com/Gentleman-Programming/engram/cmd/engram@latest\n" +
+      "  - O descargá el binario: https://github.com/Gentleman-Programming/engram/releases\n" +
+      "  - Después ejecutá: engram setup opencode",
+  };
+}
+
+/**
+ * Parchea opencode.json para eliminar el campo `plugin` (legacy de Superpowers).
+ */
+export function patchOpenCodeConfig(): { success: boolean; message: string } {
+  const projectRoot = findProjectRoot();
+  const candidates = ["opencode.json", "opencode.jsonc"];
+
+  let configPath: string | null = null;
+  for (const name of candidates) {
+    const full = join(projectRoot, name);
+    if (existsSync(full)) {
+      configPath = full;
+      break;
+    }
+  }
+
+  if (!configPath) {
+    return {
+      success: false,
+      message: "No se encontró opencode.json ni opencode.jsonc",
+    };
+  }
+
+  try {
+    const raw = readFileSync(configPath, "utf-8");
+    const config = JSON.parse(raw);
+    let changed = false;
+
+    if ("plugin" in config) {
+      delete config.plugin;
+      changed = true;
+    }
+
+    if (changed) {
+      writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+      return { success: true, message: "Config actualizada (plugin legacy eliminado)" };
+    }
+
+    return { success: true, message: "Config de OpenCode ya está limpia" };
+  } catch (e) {
+    return {
+      success: false,
+      message: `Error parcheando config: ${(e as Error).message}`,
+    };
+  }
+}
+
+/**
+ * Orquestador: instala y configura todo el stack (CodeGraph + OpenSpec + Engram + Config).
+ */
+export function installStack(): StackResult {
+  return {
+    codegraph: installCodeGraph(),
+    openspec: setupOpenSpec(),
+    engram: installEngram(),
+    config: patchOpenCodeConfig(),
+  };
+}
+
+/**
+ * Remueve la configuración de Engram del proyecto (entrada mcp.engram en opencode.json).
+ * No desinstala el binario de Engram ni borra datos, solo limpia la config del proyecto.
+ */
+export function uninstallEngramConfig(): { success: boolean; message: string } {
+  const projectRoot = findProjectRoot();
+  const candidates = ["opencode.json", "opencode.jsonc"];
+
+  let configPath: string | null = null;
+  for (const name of candidates) {
+    const full = join(projectRoot, name);
+    if (existsSync(full)) {
+      configPath = full;
+      break;
+    }
+  }
+
+  if (!configPath) {
+    return { success: false, message: "No se encontró opencode.json ni opencode.jsonc" };
+  }
+
+  try {
+    const raw = readFileSync(configPath, "utf-8");
+    const config = JSON.parse(raw);
+    let changed = false;
+
+    if (config.mcp && "engram" in config.mcp) {
+      delete config.mcp.engram;
+      // Si mcp quedó vacío, eliminarlo también
+      if (Object.keys(config.mcp).length === 0) {
+        delete config.mcp;
+      }
+      changed = true;
+    }
+
+    if (!changed) {
+      return { success: true, message: "Engram no estaba configurado en este proyecto" };
+    }
+
+    writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+    return { success: true, message: "Config de Engram eliminada de opencode.json" };
+  } catch (e) {
+    return {
+      success: false,
+      message: `Error limpiando config de Engram: ${(e as Error).message}`,
+    };
+  }
+}

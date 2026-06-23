@@ -3,7 +3,7 @@ description: Instala CodeGraph, skills curadas y OpenSpec localmente para OpenCo
 agent: build
 ---
 
-Instala el stack tecnológico de desarrollo para este proyecto, basado en el set curado de 10 skills bundleado dentro del paquete Ostacky.
+Instala el stack tecnológico de desarrollo. NOTA: `npx ostacky install` ahora instala automáticamente CodeGraph, OpenSpec y Engram. Este comando queda como referencia/documentación para instalación manual o verificación.
 
 **RESTRICCIÓN ABSOLUTA:** instalar ÚNICAMENTE para OpenCode. Está terminantemente prohibido crear o modificar archivos en `.claude/`, `.kiro/`, `.cursor/`, `.gemini/`, `.codex/`, `.antigravity/`, `.windsurf/` o cualquier otro directorio de plataformas externas.
 

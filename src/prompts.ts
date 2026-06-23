@@ -21,6 +21,11 @@ import {
   uninstallCommand,
   uninstallSkill,
   uninstallAll,
+  installCodeGraph,
+  setupOpenSpec,
+  installEngram,
+  patchOpenCodeConfig,
+  uninstallEngramConfig,
   type OpenCodePaths,
 } from "./installer.js";
 import { readLockfile, getInstalledVersion, clearLockfile } from "./lockfile.js";
@@ -67,13 +72,45 @@ export function printPostInstallSteps(): void {
   p.note(
     [
       "Recargá OpenCode",
-      "Ejecutá /install-stack para instalar el stack",
-      "Recargá OpenCode nuevamente",
       "Usá @Ostacky para invocar al agente",
       "Las skills bundleadas viven en .opencode/skills/ — revisá cuáles activás",
+      "Si ves errores en la instalación del stack, ejecutá /install-stack desde OpenCode como referencia",
     ].join("\n  → "),
     "Próximos pasos"
   );
+}
+
+async function doInstallStack() {
+  const spin = p.spinner();
+  let allOk = true;
+
+  // 1. CodeGraph
+  spin.start("Instalando CodeGraph...");
+  const cg = installCodeGraph();
+  spin.stop(cg.success ? `✓ ${cg.message}` : `✗ ${cg.message}`);
+  if (!cg.success) allOk = false;
+
+  // 2. OpenSpec
+  spin.start("Configurando OpenSpec...");
+  const os = setupOpenSpec();
+  spin.stop(os.success ? `✓ ${os.message}` : `✗ ${os.message}`);
+  if (!os.success) allOk = false;
+
+  // 3. Engram
+  spin.start("Instalando Engram...");
+  const eng = installEngram();
+  spin.stop(eng.success ? `✓ ${eng.message}` : `✗ ${eng.message}`);
+  if (!eng.success) allOk = false;
+
+  // 4. Config
+  spin.start("Verificando configuración...");
+  const cfg = patchOpenCodeConfig();
+  spin.stop(cfg.success ? `✓ ${cfg.message}` : `✗ ${cfg.message}`);
+  if (!cfg.success) allOk = false;
+
+  if (!allOk) {
+    p.log.warn("Algunos componentes requieren atención. Revisá los mensajes de error arriba.");
+  }
 }
 
 /**
@@ -206,6 +243,12 @@ async function doInstallAll(manifest: Manifest, paths: OpenCodePaths) {
       spin.stop(`Error en ${skill.name}: ${(e as Error).message}`);
       errors++;
     }
+  }
+
+  // Instalar stack de herramientas (CodeGraph, OpenSpec, Engram)
+  if (errors === 0) {
+    p.log.info("Instalando stack de herramientas...");
+    await doInstallStack();
   }
 
   if (errors === 0) {
@@ -527,6 +570,20 @@ async function doUninstallTotal(paths: OpenCodePaths) {
 
   uninstallAll(paths);
   p.log.success(`${pathsToDelete.length} item(s) eliminado(s).`);
+
+  // Preguntar si también limpiar config de Engram
+  const cleanEngram = await p.confirm({
+    message: "¿Deseas remover la configuración de Engram del proyecto (mcp.engram)?",
+  });
+  onCancel(cleanEngram);
+  if (cleanEngram) {
+    const result = uninstallEngramConfig();
+    if (result.success) {
+      p.log.success(result.message);
+    } else {
+      p.log.warn(result.message);
+    }
+  }
 }
 
 async function doUninstallAgent(paths: OpenCodePaths) {

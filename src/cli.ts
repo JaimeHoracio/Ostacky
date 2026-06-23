@@ -18,8 +18,8 @@ const HELP = `
 ostacky — Instalador de agentes, comandos y skills para OpenCode
 
 Uso:
-  npx ostacky                    Menú interactivo
-  npx ostacky install            Instalar todo
+  npx ostacky                    Menú interactivo (instalación completa)
+  npx ostacky install            Instalar TODO (agente + skills + CodeGraph + OpenSpec + Engram)
   npx ostacky add agent          Agregar agente(s)
   npx ostacky add command        Agregar command(s)
   npx ostacky add skill          Agregar skill(s)
