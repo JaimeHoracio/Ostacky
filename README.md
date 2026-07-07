@@ -2,13 +2,13 @@
 
 Ostacky es un **agent harness** para [OpenCode](https://opencode.ai). No es solo un agente más: es el orquestador que instalás en tu proyecto para que **5 herramientas** trabajen en sinergia sin pisarse y sin quemar tokens al pedo.
 
-| Herramienta | Rol | Define |
-|---|---|---|
-| [CodeGraph](https://github.com/colbymchenry/codegraph) | Grafo de código | DÓNDE está el código y a quién impacta |
-| [OpenSpec](https://github.com/Fission-AI/OpenSpec/) | Especificaciones | QUÉ hay que construir y POR QUÉ |
-| [Superpowers](https://github.com/obra/superpowers) | Ejecución | CÓMO se implementa, prueba y revisa |
-| [Engram](https://github.com/Gentleman-Programming/engram) | Memoria persistente | QUÉ aprendimos en sesiones anteriores |
-| [Context7](https://context7.com) | Documentación viva | Documentación actualizada de librerías y APIs |
+| Herramienta                                               | Rol                 | Define                                        |
+| --------------------------------------------------------- | ------------------- | --------------------------------------------- |
+| [CodeGraph](https://github.com/colbymchenry/codegraph)    | Grafo de código     | DÓNDE está el código y a quién impacta        |
+| [OpenSpec](https://github.com/Fission-AI/OpenSpec/)       | Especificaciones    | QUÉ hay que construir y POR QUÉ               |
+| [Superpowers](https://github.com/obra/superpowers)        | Ejecución           | CÓMO se implementa, prueba y revisa           |
+| [Engram](https://github.com/Gentleman-Programming/engram) | Memoria persistente | QUÉ aprendimos en sesiones anteriores         |
+| [Context7](https://context7.com)                          | Documentación viva  | Documentación actualizada de librerías y APIs |
 
 Ostacky las rutea según el **nivel de impacto del cambio** (Nivel 0, Nivel 0+1, Nivel 1+), priorizando siempre eficiencia de tokens y preguntándote antes de actuar.
 
@@ -34,14 +34,14 @@ Abre OpenCode en el navegador en `http://localhost:4096`. Útil para sesiones la
 
 Opciones útiles:
 
-| Comando | Qué hace |
-|---|---|
-| `opencode web` | Puerto aleatorio, abre el navegador automáticamente |
-| `opencode web --port 4096` | Puerto fijo |
-| `opencode web --hostname 0.0.0.0` | Accesible desde la red local |
-| `opencode web --mdns` | Descubrible como `opencode.local` |
-| `OPENCODE_SERVER_PASSWORD=secreta opencode web` | Con autenticación HTTP Basic |
-| `opencode attach http://localhost:4096` | Conectar una terminal TUI a un servidor web activo |
+| Comando                                         | Qué hace                                            |
+| ----------------------------------------------- | --------------------------------------------------- |
+| `opencode web`                                  | Puerto aleatorio, abre el navegador automáticamente |
+| `opencode web --port 4096`                      | Puerto fijo                                         |
+| `opencode web --hostname 0.0.0.0`               | Accesible desde la red local                        |
+| `opencode web --mdns`                           | Descubrible como `opencode.local`                   |
+| `OPENCODE_SERVER_PASSWORD=secreta opencode web` | Con autenticación HTTP Basic                        |
+| `opencode attach http://localhost:4096`         | Conectar una terminal TUI a un servidor web activo  |
 
 > 💡 Si no tenés OpenCode instalado aún: `curl -fsSL https://opencode.ai/install | bash`
 
@@ -193,20 +193,20 @@ Tras instalar, el proyecto queda así:
 
 ```json
 {
-    "version": "0.1.4",
+    "version": "0.2.0",
     "lockedAt": "2025-01-01T00:00:00.000Z",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.1.4",
+    "tag": "v0.2.0",
     "agents": {
         "ostacky": {
-            "version": "0.1.4",
+            "version": "0.2.0",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "abc123..."
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.1.4",
+            "version": "0.2.0",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "def456..."
         }
@@ -238,7 +238,7 @@ Ese paso es opcional. Si no aparece en la terminal, recargá OpenCode y volvé a
 ## Seguridad
 
 - `opencode.jsonc` se versiona en el repo para compartir permisos y MCP de forma reproducible.
-- Las URLs de descarga usan **tags de GitHub** (ej. `v0.1.4`), nunca `main` — instalaciones reproducibles
+- Las URLs de descarga usan **tags de GitHub** (ej. `v0.2.0`), nunca `main` — instalaciones reproducibles
 - Cada path de archivo descargado es validado para prevenir **path traversal**
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
 - El cache local (`~/.opencode/cache/`) también valida integridad al servir archivos cacheados
