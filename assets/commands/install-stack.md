@@ -1,13 +1,13 @@
 ---
-description: Instala CodeGraph, skills curadas y OpenSpec localmente para OpenCode únicamente
+description: Instala CodeGraph, skills curadas, OpenSpec, Engram y Context7 localmente para OpenCode únicamente
 agent: build
 ---
 
-Instala el stack tecnológico de desarrollo. NOTA: `npx ostacky install` ahora instala automáticamente CodeGraph, OpenSpec y Engram. Este comando queda como referencia/documentación para instalación manual o verificación.
+Instala el stack tecnológico de desarrollo. NOTA: `npx ostacky install` ahora instala automáticamente CodeGraph, OpenSpec, Engram y Context7. Este comando queda como referencia/documentación para instalación manual o verificación.
 
 **RESTRICCIÓN ABSOLUTA:** instalar ÚNICAMENTE para OpenCode. Está terminantemente prohibido crear o modificar archivos en `.claude/`, `.kiro/`, `.cursor/`, `.gemini/`, `.codex/`, `.antigravity/`, `.windsurf/` o cualquier otro directorio de plataformas externas.
 
-**Origen del set curado:** el set de 10 skills (6 Superpowers + 4 OpenSpec) referenciado en `assets/agents/ostacky.md` está bundleado en `assets/skills/` dentro del paquete npm. La definición del set y su trazabilidad viven en `manifest.json` y `.opencode/ostacky-lock.json`.
+**Origen del set curado:** el set de skills (6 Superpowers + 4 OpenSpec) referenciado en `assets/agents/ostacky.md` está bundleado en `assets/skills/` dentro del paquete npm. Context7 agrega su propio skill vía `npx ctx7 setup --opencode`. La definición del set y su trazabilidad viven en `manifest.json` y `.opencode/ostacky-lock.json`.
 
 ---
 
@@ -200,15 +200,108 @@ Corre en el puerto 7437 por defecto. Los datos se almacenan en `~/.engram/engram
 
 ---
 
+## Paso 6 — Context7
+
+[Context7](https://context7.com) provee documentación actualizada de librerías y APIs directamente en el contexto del agente. Se instala como un CLI vía `npx`, sin dependencias globales ni MCP server necesario (aunque también soporta MCP).
+
+**RESTRICCIÓN:** configurar ÚNICAMENTE para OpenCode. No crear archivos en `.claude/`, `.cursor/` ni otros directorios de otras plataformas.
+
+### Verificar instalación actual
+
+Chequeá si Context7 ya está configurado para OpenCode:
+
+```bash
+ls -la .opencode/skills/context7/ 2>/dev/null || echo "no-instalado"
+```
+
+También podés verificar si el MCP server de Context7 está en `opencode.json`:
+
+```bash
+grep -c "context7" opencode.json 2>/dev/null || echo "no-configurado"
+```
+
+### Instalar
+
+**Opción recomendada — setup automático (CLI + skills):**
+
+```bash
+npx ctx7 setup --opencode
+```
+
+Este comando:
+- Autentica vía OAuth y genera una API key
+- Instala un skill en `.opencode/skills/context7/` que el agente Ostacky usa automáticamente
+- Pregunta si preferís modo CLI + Skills o MCP
+- **NO** toca `.claude/`, `.cursor/`, `.gemini/` ni ninguna otra plataforma
+
+**Alternativa — solo MCP (si preferís el server remoto):**
+
+Agregá manualmente la entrada MCP en `opencode.json`:
+
+```json
+{
+  "mcp": {
+    "context7": {
+      "type": "remote",
+      "url": "https://mcp.context7.com/mcp"
+    }
+  }
+}
+```
+
+Si tenés una API key de Context7 (recomendado para mejores rate limits):
+
+```json
+{
+  "mcp": {
+    "context7": {
+      "type": "remote",
+      "url": "https://mcp.context7.com/mcp",
+      "headers": {
+        "CONTEXT7_API_KEY": "{env:CONTEXT7_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+### Desinstalar
+
+Para remover la configuración generada por `npx ctx7 setup`:
+
+```bash
+npx ctx7 remove
+```
+
+Esto elimina el skill y la configuración de Context7. Si instalaste el CLI globalmente con `npm install -g ctx7`, también necesitás:
+
+```bash
+npm uninstall -g ctx7
+```
+
+Para remover la entrada MCP manual, editá `opencode.json` y eliminá el bloque `mcp.context7`.
+
+### Cómo lo usa Ostacky
+
+El skill de Context7 instalado le indica al agente Ostacky que use Context7 automáticamente cuando necesite documentación de librerías, APIs o frameworks. También se puede invocar explícitamente:
+
+```
+usá context7 para mostrarme la API de autenticación de Supabase
+use context7 to find Next.js 15 app router examples
+```
+
+---
+
 ## Verificación final
 
 Confirmá que:
 
-1. `.opencode/skills/` contiene las 10 skills curadas (cada una con su `SKILL.md`; algunas traen `scripts/` y `references/`)
+1. `.opencode/skills/` contiene las skills curadas (6 Superpowers + 4 OpenSpec) y opcionalmente `context7/` si se instaló con `npx ctx7 setup --opencode`
 2. `.opencode/commands/` contiene los 5 opsx-* commands (`opsx-apply`, `opsx-archive`, `opsx-explore`, `opsx-propose`, `opsx-sync`)
 3. `opencode.json` (o `.jsonc`) tiene los bloques `mcp.codegraph` y `mcp.engram` — sin campo `plugin`
 4. `.codegraph/` existe en la raíz del proyecto (índice local de CodeGraph)
 5. `engram --version` funciona y `engram setup opencode` ya fue ejecutado
-6. **NO existen** archivos generados en `.claude/`, `.kiro/`, `.cursor/`, `.gemini/`, `.codex/` ni ningún directorio de otra plataforma
+6. Context7 configurado: `ctx7 --version` disponible y/o `.opencode/skills/context7/SKILL.md` existe
+7. **NO existen** archivos generados en `.claude/`, `.kiro/`, `.cursor/`, `.gemini/`, `.codex/` ni ningún directorio de otra plataforma
 
 Reportá el estado de cada componente con ✓ o ✗.

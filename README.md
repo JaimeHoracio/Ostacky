@@ -1,6 +1,49 @@
 # Ostacky
 
-Ostacky es el agente de [OpenCode](https://opencode.ai) que instalás en tu proyecto. Orquesta **4 herramientas** para que trabajen en sinergia: [CodeGraph](https://github.com/colbymchenry/codegraph) entiende el código existente, [OpenSpec](https://github.com/Fission-AI/OpenSpec/) define requisitos y contratos, [Superpowers](https://github.com/obra/superpowers) ejecuta con TDD y review, y [Engram](https://github.com/Gentleman-Programming/engram) da memoria persistente entre sesiones. Ostacky las rutea según el nivel de impacto del cambio para ser eficiente con tokens y evitar recorrer todo el proyecto cuando no hace falta.
+Ostacky es un **agent harness** para [OpenCode](https://opencode.ai). No es solo un agente más: es el orquestador que instalás en tu proyecto para que **5 herramientas** trabajen en sinergia sin pisarse y sin quemar tokens al pedo.
+
+| Herramienta | Rol | Define |
+|---|---|---|
+| [CodeGraph](https://github.com/colbymchenry/codegraph) | Grafo de código | DÓNDE está el código y a quién impacta |
+| [OpenSpec](https://github.com/Fission-AI/OpenSpec/) | Especificaciones | QUÉ hay que construir y POR QUÉ |
+| [Superpowers](https://github.com/obra/superpowers) | Ejecución | CÓMO se implementa, prueba y revisa |
+| [Engram](https://github.com/Gentleman-Programming/engram) | Memoria persistente | QUÉ aprendimos en sesiones anteriores |
+| [Context7](https://context7.com) | Documentación viva | Documentación actualizada de librerías y APIs |
+
+Ostacky las rutea según el **nivel de impacto del cambio** (Nivel 0, Nivel 0+1, Nivel 1+), priorizando siempre eficiencia de tokens y preguntándote antes de actuar.
+
+## Cómo empezar
+
+Después de instalar Ostacky (con `npx ostacky install`), necesitás iniciar OpenCode para usarlo. Tenés dos formas:
+
+### Terminal UI (TUI) — recomendado para daily driving
+
+```bash
+opencode
+```
+
+Abre la interfaz de terminal interactiva. Seleccioná el agente `@Ostacky` desde el panel de agentes o escribí `/agent Ostacky`.
+
+### Web UI — para usar desde el navegador
+
+```bash
+opencode web --port 4096
+```
+
+Abre OpenCode en el navegador en `http://localhost:4096`. Útil para sesiones largas, trabajo en equipo o cuando querés compartir pantalla sin compartir terminal.
+
+Opciones útiles:
+
+| Comando | Qué hace |
+|---|---|
+| `opencode web` | Puerto aleatorio, abre el navegador automáticamente |
+| `opencode web --port 4096` | Puerto fijo |
+| `opencode web --hostname 0.0.0.0` | Accesible desde la red local |
+| `opencode web --mdns` | Descubrible como `opencode.local` |
+| `OPENCODE_SERVER_PASSWORD=secreta opencode web` | Con autenticación HTTP Basic |
+| `opencode attach http://localhost:4096` | Conectar una terminal TUI a un servidor web activo |
+
+> 💡 Si no tenés OpenCode instalado aún: `curl -fsSL https://opencode.ai/install | bash`
 
 ## ¿Qué es?
 
@@ -8,14 +51,7 @@ Ostacky es el agente de [OpenCode](https://opencode.ai) que instalás en tu proy
 
 ## Stack
 
-Ostacky no es solo un agente — es un **orquestador** que integra cuatro herramientas especializadas para que trabajen en conjunto sin pisarse:
-
-| Herramienta                                                   | Rol                 | Define                                           |
-| ------------------------------------------------------------- | ------------------- | ------------------------------------------------ |
-| **[CodeGraph](https://github.com/colbymchenry/codegraph)**    | Grafo de código     | DÓNDE está el código y a quién impacta un cambio |
-| **[OpenSpec](https://github.com/Fission-AI/OpenSpec/)**       | Especificaciones    | QUÉ hay que construir y POR QUÉ                  |
-| **[Superpowers](https://github.com/obra/superpowers)**        | Ejecución           | CÓMO se implementa, prueba y revisa              |
-| **[Engram](https://github.com/Gentleman-Programming/engram)** | Memoria persistente | QUÉ aprendimos en sesiones anteriores            |
+Ostacky integra **5 herramientas** especializadas para que trabajen en conjunto sin pisarse:
 
 ### Cómo trabajan en sinergia
 
@@ -23,6 +59,7 @@ Ostacky no es solo un agente — es un **orquestador** que integra cuatro herram
 2. **OpenSpec** documenta requisitos, contratos y escenarios de aceptación (proposal → design → spec → tasks).
 3. **Superpowers** ejecuta con TDD, testing automatizado y review (brainstorming → plans → tdd → review).
 4. **Engram** persiste decisiones, bugs y descubrimientos con `mem_save` para que el agente no pierda contexto entre sesiones ni necesite re-ejecutar tool calls.
+5. **Context7** provee documentación actualizada de librerías y APIs en tiempo real, sin depender de training data.
 
 Ostacky decide **cuándo y cómo** usar cada herramienta según el nivel de impacto del cambio (Nivel 0, Nivel 0+1, Nivel 1+), priorizando siempre eficiencia de tokens.
 
