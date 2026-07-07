@@ -72,11 +72,13 @@ async function loadLatestManifest(): Promise<Manifest> {
 export function printPostInstallSteps(): void {
   p.note(
     [
-      "Recargá OpenCode",
-      "Usá @Ostacky para invocar al agente",
-      "Las skills bundleadas viven en .opencode/skills/ — revisá cuáles activás",
-      "Si ves errores en la instalación del stack, ejecutá /install-stack desde OpenCode como referencia",
-    ].join("\n  → "),
+      "Iniciá OpenCode (si no está corriendo):",
+      "  TUI → opencode",
+      "  Web → opencode web --port 4096",
+      "Escribí @Ostacky en el chat (TUI o web) para invocar al agente",
+      "Skills bundleadas en .opencode/skills/ — revisá cuáles activás",
+      "¿Errores en el stack? Ejecutá /install-stack desde el chat de OpenCode",
+    ].join("\n"),
     "Próximos pasos"
   );
 }

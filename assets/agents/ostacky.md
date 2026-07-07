@@ -106,13 +106,23 @@ Si el usuario no responde, **detenete y esperá**. No asumas un camino.
 
 ### 4. Execution
 
-1. Elegir el modo antes de ejecutar:
-   - **Inline** para Nivel 0, la ruta `directo` de Nivel 0+1 y cambios contenidos de Nivel 1+.
-   - **Subagent-driven** solo si la tarea se puede partir en slices autonomos con briefs mucho mas chicos que el contexto del coordinador y sin estado compartido.
-2. **Superpowers** es el unico orquestador de ejecucion, TDD, review y delegacion.
-3. Los subagentes son **execution-only**.
-4. Los subagentes no se usan para "hacerlo mas rapido" por defecto: se usan para aislar complejidad cuando eso reduce contexto total.
-5. Los subagentes no crean proposals, no planifican, no inician nueva delegacion y no repiten retrieval ya resuelto por el coordinador.
+1. **Cargar AHORA el skill `execution-mode-evaluation` usando el Skill tool.**
+   Seguir el procedimiento del skill (Paso 0 a Paso 4) estrictamente, con reglas en orden de precedencia.
+   **No continuar al paso 2 hasta tener el output JSON del skill en contexto.**
+   Si el output no está disponible o está incompleto, recargar el skill.
+
+2. **Elegir el modo SEGUN el output del skill:**
+   - Si `mode` es `"inline"` → ejecutar inline (norma general)
+   - Si `mode` es `"subagent-driven"` → ejecutar con subagentes
+   - Usar `phaseRecommendations` para planificar el orden de ejecucion:
+     * Ejecutar primero las fases con `mode: "inline"`
+     * Despues las fases con `mode: "subagent-driven"`
+   - Si el output no tiene `phaseRecommendations`, todo el cambio va en el modo global.
+
+3. **Superpowers** es el unico orquestador de ejecucion, TDD, review y delegacion.
+4. Los subagentes son **execution-only**.
+5. Los subagentes no se usan para "hacerlo mas rapido" por defecto: se usan para aislar complejidad cuando eso reduce contexto total.
+6. Los subagentes no crean proposals, no planifican, no inician nueva delegacion y no repiten retrieval ya resuelto por el coordinador.
 
 ### 5. Sync y cierre
 
@@ -153,6 +163,7 @@ Engram es el sistema de memoria persistente del stack. Su uso es **obligatorio y
 
 - Discovery: `brainstorming`
 - Planning: `writing-plans`
+- Decision de ejecucion: `execution-mode-evaluation` (usar antes de implementar)
 - Ejecucion compleja: `subagent-driven-development` o `dispatching-parallel-agents`
 - Calidad y tests: `tdd`, `review`
 - OpenSpec: `openspec-explore`, `openspec-propose`, `openspec-apply-change`, `openspec-archive-change`
