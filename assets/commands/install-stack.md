@@ -3,7 +3,7 @@ description: Instala CodeGraph, skills curadas, OpenSpec, Engram y Context7 loca
 agent: build
 ---
 
-Instala el stack tecnológico de desarrollo. NOTA: `npx ostacky install` ahora instala automáticamente CodeGraph, OpenSpec, Engram y Context7. Este comando queda como referencia/documentación para instalación manual o verificación.
+Instala el stack tecnológico de desarrollo para OpenCode. **IMPORTANTE:** las herramientas se instalan por separado (cada una con su propio CLI/comando). `npx ostacky install` solo instala el agente y commands de Ostacky en `.opencode/`. Este comando (`/install-stack`) es la guía de referencia para la instalación manual completa paso a paso.
 
 **RESTRICCIÓN ABSOLUTA:** instalar ÚNICAMENTE para OpenCode. Está terminantemente prohibido crear o modificar archivos en `.claude/`, `.kiro/`, `.cursor/`, `.gemini/`, `.codex/`, `.antigravity/`, `.windsurf/` o cualquier otro directorio de plataformas externas.
 
@@ -41,7 +41,7 @@ Verifica que el MCP server esté configurado en `opencode.json` (campo `mcpServe
 
 ## Paso 2 — Skills curadas (bundleadas)
 
-Las 10 skills curadas están bundleadas dentro del paquete Ostacky en `assets/skills/`. No se descargan ni clonan en tiempo de install; ya vienen en el paquete npm.
+Las **10 skills curadas del set base** (6 Superpowers + 4 OpenSpec) están bundleadas dentro del paquete Ostacky en `assets/skills/`. No se descargan ni clonan; ya vienen en el paquete npm. Context7 agrega su propia skill aparte (Paso 6).
 
 Copiá cada skill bundleada a `.opencode/skills/<nombre>/` preservando la estructura interna (incluyendo `SKILL.md` y cualquier subdirectorio como `scripts/` o `references/`):
 
@@ -112,7 +112,7 @@ openspec update
 
 [Engram](https://github.com/Gentleman-Programming/engram) es el sistema de memoria persistente para agentes de IA. Se instala como un único binario Go con SQLite + FTS5, sin Node.js, Python ni Docker.
 
-**RESTRICCIÓN:** configurar ÚNICAMENTE para OpenCode. No crear archivos en `.claude/`, `.cursor/` ni otros directorios de otras plataformas.
+**RESTRICCIÓN:** configurar ÚNICAMENTE para OpenCode. Está terminantemente prohibido crear archivos en `.claude/`, `.kiro/`, `.cursor/`, `.gemini/`, `.codex/`, `.antigravity/`, `.windsurf/` o cualquier otro directorio de plataformas externas.
 
 ### Verificar instalación actual
 
@@ -204,7 +204,7 @@ Corre en el puerto 7437 por defecto. Los datos se almacenan en `~/.engram/engram
 
 [Context7](https://context7.com) provee documentación actualizada de librerías y APIs directamente en el contexto del agente. Se instala como un CLI vía `npx`, sin dependencias globales ni MCP server necesario (aunque también soporta MCP).
 
-**RESTRICCIÓN:** configurar ÚNICAMENTE para OpenCode. No crear archivos en `.claude/`, `.cursor/` ni otros directorios de otras plataformas.
+**RESTRICCIÓN:** configurar ÚNICAMENTE para OpenCode. Está terminantemente prohibido crear archivos en `.claude/`, `.kiro/`, `.cursor/`, `.gemini/`, `.codex/`, `.antigravity/`, `.windsurf/` o cualquier otro directorio de plataformas externas.
 
 ### Verificar instalación actual
 

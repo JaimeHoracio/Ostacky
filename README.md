@@ -193,20 +193,20 @@ Tras instalar, el proyecto queda así:
 
 ```json
 {
-    "version": "0.2.0",
+    "version": "0.2.1",
     "lockedAt": "2025-01-01T00:00:00.000Z",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.2.0",
+    "tag": "v0.2.1",
     "agents": {
         "ostacky": {
-            "version": "0.2.0",
+            "version": "0.2.1",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "abc123..."
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.2.0",
+            "version": "0.2.1",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "def456..."
         }
@@ -220,25 +220,26 @@ Se recomienda agregar `ostacky-lock.json` al control de versiones para que el eq
 
 Al terminar la instalación, el flujo normal es:
 
-1. **Recargar OpenCode** para que detecte los nuevos archivos en `.opencode/`.
-2. Ya puedes usar el agente:
-    ```
-    @Ostacky
-    ```
-    o seleccionarlo desde la interfaz de OpenCode según la configuración del proyecto. `@Ostacky` invoca al agente que el CLI instaló en `.opencode/agents/ostacky.md`.
+1. **Iniciar OpenCode** (si no está corriendo):
+    - **TUI:** `opencode` en tu terminal
+    - **Web:** `opencode web --port 4096` y abrí `http://localhost:4096`
+2. OpenCode detecta automáticamente los archivos nuevos en `.opencode/` al iniciar, no necesita recarga manual.
+3. Para usar el agente **escribí `@Ostacky`** en el chat de OpenCode (TUI o web) y enviá tu mensaje. También podés seleccionarlo desde el selector de agentes si tu versión de OpenCode lo soporta.
 
-Si por alguna razon querés ejecutar el bootstrap manualmente o regenerar el stack local, también está disponible el command:
+### Regenerar el stack manualmente
 
-```bash
-/install-stack
+El comando `/install-stack` también está disponible **dentro del chat de OpenCode** (TUI o web) por si querés regenerar el stack local sin salir de la sesión:
+
+```text
+@Ostacky /install-stack
 ```
 
-Ese paso es opcional. Si no aparece en la terminal, recargá OpenCode y volvé a tipearlo.
+Es opcional y solo necesario si algo falló durante la instalación o si querés verificar que todo esté en orden.
 
 ## Seguridad
 
 - `opencode.jsonc` se versiona en el repo para compartir permisos y MCP de forma reproducible.
-- Las URLs de descarga usan **tags de GitHub** (ej. `v0.2.0`), nunca `main` — instalaciones reproducibles
+- Las URLs de descarga usan **tags de GitHub** (ej. `v0.2.1`), nunca `main` — instalaciones reproducibles
 - Cada path de archivo descargado es validado para prevenir **path traversal**
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
 - El cache local (`~/.opencode/cache/`) también valida integridad al servir archivos cacheados
