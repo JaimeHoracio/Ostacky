@@ -104,6 +104,8 @@ Los pasos que ejecuta el skill una vez cargado:
 │  ┌─────────────────────────────────────────────────────┐     │
 │  │ taskCount:     cantidad total de tasks               │     │
 │  │ sharedFiles:   { archivo → [tasks que lo modifican] }│     │
+│  │ fileClusters:  [ [taskA,taskB], [taskC], ... ]       │     │
+│  │ clusterCount:  cantidad de clusters                  │     │
 │  │ sequentialDeps: [taskA → taskB]                      │     │
 │  │ filesPerTask:  { task → [archivos] }                 │     │
 │  │ estLines:      líneas estimadas de cambio            │     │
@@ -114,13 +116,25 @@ Los pasos que ejecuta el skill una vez cargado:
 ┌──────────────────────────────────────────────────────────────┐
 │                   5. PASO 3a — MODO GLOBAL                   │
 │                                                              │
-│  5 reglas en orden. La PRIMERA que se cumple decide.        │
+│  PRIMERO: CONSTRUIR CLUSTERS (componentes conectados)        │
+│  - sharedFiles agrupa tareas que modifican los mismos archs  │
+│  - Cierre transitivo: A comparte archivo con B, B con C     │
+│    → A, B, C están en el mismo cluster                      │
+│  - clusterCount: cantidad total de clusters                 │
 │                                                              │
-│  1. ¿sharedFiles > 0?                              → INLINE  │
-│  2. ¿sequentialDeps sin contrato?                  → INLINE  │
-│  3. ¿taskCount < 4?                                → INLINE  │
-│  4. ¿estLines < 30?                                → INLINE  │
-│  5. Ninguna de las anteriores             → SUBAGENT-DRIVEN  │
+│  LUEGO: evaluar en orden:                                    │
+│                                                              │
+│  1. clusterCount==1 y tamaño>1?                    → INLINE  │
+│     (todo comparte archivos, no se puede paralelizar)        │
+│                                                              │
+│  2. clusterCount>=2, clusters con tamaño>1?                  │
+│     a. ¿deps ENTRE clusters sin contrato?         → INLINE   │
+│     b. ¿NO? → SUBAGENT-DRIVEN (cada cluster=1 subagente)     │
+│                                                              │
+│  3. Sin archivos compartidos (clusterCount==taskCount):      │
+│     a. ¿taskCount < 3?                            → INLINE   │
+│     b. ¿estLines < 30?                            → INLINE   │
+│     c. ¿ninguna? → SUBAGENT-DRIVEN (cada task=1 subagente)   │
 │                                                              │
 │  Si el usuario dio instrucciones explícitas:                 │
 │  → anulan todas las reglas, todas las fases heredan el modo  │
@@ -130,7 +144,8 @@ Los pasos que ejecuta el skill una vez cargado:
 │            6. PASO 3b — EVALUACIÓN POR FASES                 │
 │            (solo si el modo global es INLINE)                │
 │                                                              │
-│  Si el modo global es SUBAGENT-DRIVEN → saltar este paso     │
+│  Si el modo global es SUBAGENT-DRIVEN (Rule 2b o 3c)        │
+│  → saltar este paso (ya hay granularidad por cluster/task)  │
 │                                                              │
 │  Por cada fase en tasks.md:                                  │
 │                                                              │
@@ -153,12 +168,18 @@ Los pasos que ejecuta el skill una vez cargado:
 │    "mode": "inline" | "subagent-driven",                     │
 │    "confidence": 0.95,                                       │
 │    "reasons": ["..."],                                       │
-│    "globalRuleTriggered": 1,                                 │
-│    "taskAnalysis": { ... },                                  │
-│    "phaseRecommendations": [                                 │
-│      { "phase": "2. Core", "mode": "inline", ... },          │
-│      { "phase": "4. Tests", "mode": "subagent-driven", ... } │
-│    ]                                                         │
+│    "codegraphUsed": ["codegraph_context"],                    │
+│    "globalRuleTriggered": "2b",                              │
+│    "taskAnalysis": {                                         │
+│      "taskCount": 5,                                         │
+│      "sharedFiles": {...},                                   │
+│      "fileClusters": [["t1","t2"], ["t3","t4"], ["t5"]],     │
+│      "clusterCount": 3,                                      │
+│      "sequentialDeps": [],                                   │
+│      "estLines": 85,                                         │
+│      "hasExplicitContract": false                            │
+│    },                                                        │
+│    "phaseRecommendations": [...]                              │
 │  }                                                           │
 └──────────────────────────┬───────────────────────────────────┘
                            ▼
@@ -168,12 +189,15 @@ Los pasos que ejecuta el skill una vez cargado:
 │  Agent definition usa el output:                             │
 │                                                              │
 │  - mode "inline" → el agente ejecuta todo en su sesión       │
-│  - mode "subagent-driven" → carga subagent-driven-development│
+│  - mode "subagent-driven" (Rule 3c) → subagent-driven-dev   │
+│  - mode "subagent-driven" (Rule 2b) → cluster dispatch:      │
+│    cada cluster se asigna a un subagente                     │
 │  - phaseRecommendations: inline PRIMERO, subagent DESPUÉS    │
 │                                                              │
 │  Orden de fases:                                             │
 │    1º Fases inline (establecen contratos)                    │
 │    2º Fases subagent-driven (consumen contratos)             │
+│    3º Cluster dispatch → subagentes en paralelo              │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -181,15 +205,16 @@ Los pasos que ejecuta el skill una vez cargado:
 
 ## Reglas que gobiernan la decisión
 
-### Modo global (Paso 3a)
+### Modo global (Paso 3a) — basado en clusters
 
-| Regla | Condición | Decisión |
-|-------|-----------|----------|
-| 1 | Archivos compartidos entre tasks | INLINE |
-| 2 | Dependencias secuenciales sin contrato explícito | INLINE |
-| 3 | Menos de 4 tasks | INLINE |
-| 4 | Menos de 30 líneas estimadas | INLINE |
-| 5 | Ninguna condición anterior | SUBAGENT-DRIVEN |
+| Regla | Condición | Decisión | Detalle |
+|-------|-----------|----------|---------|
+| 1 | clusterCount == 1 Y tamaño > 1 | **INLINE** | Todo conectado por archivos compartidos. Imposible paralelizar. |
+| 2a | clusterCount >= 2, hay clusters con tamaño > 1, deps ENTRE clusters SIN contrato | **INLINE** | Clusters independientes pero relacionados sin contrato explícito. |
+| 2b | clusterCount >= 2, hay clusters con tamaño > 1, SIN deps entre clusters (O contrato existe) | **SUBAGENT-DRIVEN** | Clusters independientes. Cada cluster = 1 subagente. Tasks intra-cluster secuenciales. |
+| 3a | Sin archivos compartidos (clusterCount == taskCount), taskCount < 3 | **INLINE** | Muy pocas tasks para amortizar subagentes. |
+| 3b | Sin archivos compartidos, estLines < 30 | **INLINE** | Cambio pequeño, inline más eficiente. |
+| 3c | Sin archivos compartidos, ninguna condición anterior | **SUBAGENT-DRIVEN** | Tasks independientes. Cada task = 1 subagente. |
 
 ### Modo por fase (Paso 3b)
 
@@ -211,9 +236,16 @@ Los pasos que ejecuta el skill una vez cargado:
 
 ## Orden de ejecución recomendado
 
+### Si el modo global es "inline" (con phaseRecommendations):
 1. **Primero** fases con `mode: "inline"` — establecen interfaces, tipos y módulos
 2. **Después** fases con `mode: "subagent-driven"` — consumen lo establecido
 3. Si hay dependencias entre fases subagent-driven, respetar el orden de `tasks.md`
+
+### Si el modo global es "subagent-driven" por clusters (Rule 2b):
+1. Cada cluster del `fileClusters` se asigna a un subagente
+2. Los subagentes se ejecutan en **paralelo** (los clusters no comparten archivos)
+3. Tasks dentro del mismo cluster se ejecutan **secuencialmente** dentro del subagente
+4. Si hay dependencias ENTRE clusters, deben ejecutarse en orden respetando la dependencia
 
 ---
 
@@ -221,4 +253,5 @@ Los pasos que ejecuta el skill una vez cargado:
 
 - El skill depende de CodeGraph para los datos. Si CodeGraph no está disponible, decide inline por defecto.
 - Si `tasks.md` no está organizado en fases, `phaseRecommendations` será un array vacío.
+- El clustering asume que dos tasks que modifican el mismo archivo SIEMPRE van a conflictuar si se ejecutan en paralelo. Esto es conservador pero correcto para subagentes independientes.
 - La decisión es point-in-time: si se agregan tasks a mitad de cambio, re-ejecutar el skill.
