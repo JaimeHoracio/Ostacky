@@ -106,12 +106,25 @@ Si el usuario no responde, **detenete y esperá**. No asumas un camino.
 
 ### 4. Execution
 
-1. **Cargar AHORA el skill `execution-mode-evaluation` usando el Skill tool.**
-   Seguir el procedimiento del skill (Paso 0 a Paso 4) estrictamente, con reglas en orden de precedencia.
-   **No continuar al paso 2 hasta tener el output JSON del skill en contexto.**
-   Si el output no está disponible o está incompleto, recargar el skill.
+1. **Consultar estado actual (Engram) — obligatorio antes de cualquier otra cosa:**
+   a. Ejecutar `mem_search(query: "completed for change {changeId}")` para identificar qué tasks ya están completadas.
+   b. Excluir del plan de ejecución las tasks ya completadas.
+   c. Si Engram no responde → continuar sin tracking (degradación graceful, ejecutar todas).
 
-2. **Elegir el modo SEGUN el output del skill:**
+2. **Cargar el skill `execution-mode-evaluation` (con recovery acotado):**
+   a. Primer intento de carga del skill.
+   b. Si el tool call falla (error MCP, timeout):
+      - Esperar 1 segundo, reintentar.
+      - Esperar 2 segundos, reintentar.
+      - Si falla 3 veces → reportar bloqueo al usuario. No avanzar.
+   c. Si se carga pero el output está incompleto:
+      - NO reintentar la carga del skill (el contenido será el mismo).
+      - Ejecutar `codegraph_context` de nuevo para obtener más datos.
+      - Si aún así no alcanza para decidir → reportar bloqueo al usuario.
+      - No avanzar sin poder decidir el modo de ejecución.
+   d. Seguir el procedimiento del skill (Paso 0 a Paso 4) estrictamente, con reglas en orden de precedencia.
+
+3. **Elegir el modo SEGUN el output del skill:**
    - Si `mode` es `"inline"` → ejecutar inline (norma general)
    - Si `mode` es `"subagent-driven"` → ejecutar con subagentes
    - Usar `phaseRecommendations` para planificar el orden de ejecucion:
@@ -119,10 +132,41 @@ Si el usuario no responde, **detenete y esperá**. No asumas un camino.
      * Despues las fases con `mode: "subagent-driven"`
    - Si el output no tiene `phaseRecommendations`, todo el cambio va en el modo global.
 
-3. **Superpowers** es el unico orquestador de ejecucion, TDD, review y delegacion.
-4. Los subagentes son **execution-only**.
-5. Los subagentes no se usan para "hacerlo mas rapido" por defecto: se usan para aislar complejidad cuando eso reduce contexto total.
-6. Los subagentes no crean proposals, no planifican, no inician nueva delegacion y no repiten retrieval ya resuelto por el coordinador.
+4. **Ejecutar cada task no completada aplicando pre-edit validation:**
+   a. Aplicar la sección "Pre-edit validation" antes de cada llamada al edit tool.
+   b. Si pre-edit devuelve "skip-and-mark" → no editar. Ejecutar `mem_save` con topic_key del change.
+   c. Si pre-edit devuelve "conflict" → reportar al usuario. No editar ni marcar.
+   d. Después de completar exitosamente una task → `mem_save` con topic_key del change.
+   e. Si una task falla → reportar al usuario. No reintentar automáticamente.
+
+5. **Superpowers** es el unico orquestador de ejecucion, TDD, review y delegacion.
+6. Los subagentes son **execution-only**.
+7. Los subagentes no se usan para "hacerlo mas rapido" por defecto: se usan para aislar complejidad cuando eso reduce contexto total.
+8. Los subagentes no crean proposals, no planifican, no inician nueva delegacion y no repiten retrieval ya resuelto por el coordinador.
+
+### 4a. Pre-edit validation (obligatorio antes de cada edit)
+
+Antes de cada llamada al `edit` tool, ejecutar esta validación:
+
+```
+Input:  filePath, oldString, newString
+Output: "proceed", "skip-and-mark", "conflict"
+
+1. oldString === newString?
+   → "skip-and-mark": el cambio ya está aplicado.
+     Ejecutar mem_save con topic_key del change. No editar.
+
+2. oldString existe en el archivo (según lectura actual)?
+   → "proceed": ejecutar edit normalmente.
+
+3. oldString NO existe en el archivo:
+   a. Leer el archivo actual con el Read tool y buscar newString en su contenido.
+      ¿newString ya existe (exactamente, incluyendo whitespace)?
+      → Sí: "skip-and-mark": cambio ya aplicado (por otro paso/agente).
+        Ejecutar mem_save con topic_key del change.
+      → No: "conflict": el archivo cambió inesperadamente.
+        Reportar al usuario. No editar. No marcar nada.
+```
 
 ### 5. Sync y cierre
 
@@ -148,6 +192,7 @@ Si el usuario no responde, **detenete y esperá**. No asumas un camino.
 - Este proyecto NO usa CLAUDE.md. Si un skill referencia CLAUDE.md, usar el override local en `assets/skills/<skill>/` que reemplaza esas referencias por AGENTS.md y `.opencode/`.
 - Browser/local URL use is never suggested proactively; it is only allowed when the user explicitly asks for browser/visual help, and the default is text-only to conserve tokens.
 - Context7 está disponible para consultas de documentación de librerías/APIs. No intentes responder de memoria sobre APIs externas; usá Context7.
+- Fase gate: si estás en Step 4 (Execution) o Step 5 (Sync), no volvás a Discovery, Planning o Specification automáticamente. Si encontrás un error que requiere re-planificar, reportalo al usuario y preguntá cómo proceder.
 
 ## Memoria persistente (Engram)
 
