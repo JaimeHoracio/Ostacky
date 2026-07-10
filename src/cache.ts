@@ -8,7 +8,7 @@ const CACHE_ROOT = join(homedir(), '.opencode', 'cache');
 
 /**
  * Genera la ruta absoluta del archivo en cache.
- * Ejemplo: ~/.opencode/cache/JaimeHoracio__ostacky/v0.3.2/assets/agents/ostacky.md
+ * Ejemplo: ~/.opencode/cache/JaimeHoracio__ostacky/v0.3.3/assets/agents/ostacky.md
  */
 function cacheKey(repo: string, tag: string, filePath: string): string {
     const repoSlug = repo.replace('/', '__');
