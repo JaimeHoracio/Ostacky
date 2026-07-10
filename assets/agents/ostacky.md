@@ -141,27 +141,30 @@ Si el usuario no responde, **detenete y esperá**. No asumas un camino.
 
 5. **Superpowers** es el unico orquestador de ejecucion, TDD, review y delegacion.
 6. Los subagentes son **execution-only**.
-7. Los subagentes no se usan para "hacerlo mas rapido" por defecto: se usan para aislar complejidad cuando eso reduce contexto total.
-8. Los subagentes no crean proposals, no planifican, no inician nueva delegacion y no repiten retrieval ya resuelto por el coordinador.
+7. Los subagentes heredan la sección "Pre-edit validation" (4a). Incluir esta sección en el brief de cada subagente para que aplique la misma validación antes de editar.
+8. Los subagentes no se usan para "hacerlo mas rapido" por defecto: se usan para aislar complejidad cuando eso reduce contexto total.
+9. Los subagentes no crean proposals, no planifican, no inician nueva delegacion y no repiten retrieval ya resuelto por el coordinador.
 
 ### 4a. Pre-edit validation (obligatorio antes de cada edit)
 
-Antes de cada llamada al `edit` tool, ejecutar esta validación:
+Antes de cada llamada al `edit` tool, ejecutar esta validación **sobre el archivo fresco**:
 
 ```
-Input:  filePath, oldString, newString
+Paso 0: Leer el archivo actual con el Read tool. No confiar en lecturas previas
+        del contexto (pueden estar stale por edits anteriores o subagentes).
+
+Input:  filePath, oldString, newString + contenido fresco del archivo
 Output: "proceed", "skip-and-mark", "conflict"
 
 1. oldString === newString?
    → "skip-and-mark": el cambio ya está aplicado.
      Ejecutar mem_save con topic_key del change. No editar.
 
-2. oldString existe en el archivo (según lectura actual)?
+2. oldString existe en el contenido fresco del archivo?
    → "proceed": ejecutar edit normalmente.
 
-3. oldString NO existe en el archivo:
-   a. Leer el archivo actual con el Read tool y buscar newString en su contenido.
-      ¿newString ya existe (exactamente, incluyendo whitespace)?
+3. oldString NO existe en el contenido fresco del archivo:
+   a. ¿newString ya existe en el contenido fresco (exactamente, incluyendo whitespace)?
       → Sí: "skip-and-mark": cambio ya aplicado (por otro paso/agente).
         Ejecutar mem_save con topic_key del change.
       → No: "conflict": el archivo cambió inesperadamente.
