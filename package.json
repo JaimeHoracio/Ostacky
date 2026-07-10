@@ -1,6 +1,6 @@
 {
     "name": "ostacky",
-    "version": "0.3.3",
+    "version": "0.3.4",
     "description": "Instalador interactivo de agentes y comandos para OpenCode",
     "type": "module",
     "bin": {

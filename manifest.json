@@ -1,13 +1,13 @@
 {
-    "version": "0.3.3",
+    "version": "0.3.4",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.3.3",
+    "tag": "v0.3.4",
     "agents": [
         {
             "name": "ostacky",
             "file": "assets/agents/ostacky.md",
             "description": "Agente principal de desarrollo con ejecución inline-first y local-first",
-            "version": "0.3.3",
+            "version": "0.3.4",
             "sha256": null
         }
     ],
@@ -16,14 +16,14 @@
             "name": "install-stack",
             "file": "assets/commands/install-stack.md",
             "description": "Instala el stack tecnológico del proyecto",
-            "version": "0.3.3",
+            "version": "0.3.4",
             "sha256": null
         },
         {
             "name": "opsx-sync",
             "file": "assets/commands/opsx-sync.md",
             "description": "Sincroniza delta specs del change activo (wrapper de openspec update)",
-            "version": "0.3.3",
+            "version": "0.3.4",
             "sha256": null
         }
     ],
@@ -32,77 +32,77 @@
             "name": "execution-mode-evaluation",
             "file": "assets/skills/execution-mode-evaluation/SKILL.md",
             "description": "Skill de decision de modo de ejecucion inline vs subagent-driven con CodeGraph",
-            "version": "0.3.3",
+            "version": "0.3.4",
             "sha256": "eaa7cd3205b22c6db79a5d5f542ea554d5f1ca2d57127490011ba3abe4cb912b"
         },
         {
             "name": "brainstorming",
             "file": "assets/skills/brainstorming/SKILL.md",
             "description": "Skill de descubrimiento y exploración (Superpowers)",
-            "version": "0.3.3",
+            "version": "0.3.4",
             "sha256": "ad15458c54912007ae3f708c698a11f0a4a58e2a7c7860a1ae8874db573c9e98"
         },
         {
             "name": "writing-plans",
             "file": "assets/skills/writing-plans/SKILL.md",
             "description": "Skill de planificación de implementación (Superpowers)",
-            "version": "0.3.3",
+            "version": "0.3.4",
             "sha256": "4d675df944b9c846e9066ff971861ad1c9673cd2c88375081b00a75872ad621a"
         },
         {
             "name": "tdd",
             "file": "assets/skills/tdd/SKILL.md",
             "description": "Skill de test-driven development (Superpowers)",
-            "version": "0.3.3",
+            "version": "0.3.4",
             "sha256": "7eacd8ee81dc5c0b85065c0392e37ee10314661f7edb59dd8e70a9e0dae8f371"
         },
         {
             "name": "subagent-driven-development",
             "file": "assets/skills/subagent-driven-development/SKILL.md",
             "description": "Skill de ejecución con subagentes (Superpowers)",
-            "version": "0.3.3",
+            "version": "0.3.4",
             "sha256": "14e0f685b1dc1d7e02b7226d18f037fe4b6cba49b512a1fadf67cfad2a9dcc96"
         },
         {
             "name": "dispatching-parallel-agents",
             "file": "assets/skills/dispatching-parallel-agents/SKILL.md",
             "description": "Skill de dispatch paralelo de agentes (Superpowers)",
-            "version": "0.3.3",
+            "version": "0.3.4",
             "sha256": "281edf0c38f358497c7e2066fa8217a2ba3e2a39b4205c4af0c41d328fc035a1"
         },
         {
             "name": "review",
             "file": "assets/skills/review/SKILL.md",
             "description": "Skill de revisión de código (Superpowers)",
-            "version": "0.3.3",
+            "version": "0.3.4",
             "sha256": "c78d3beff45e9bb6b5e9e1d7155910f379e082d7aaf3c61b90d651d09e0d2e2a"
         },
         {
             "name": "openspec-explore",
             "file": "assets/skills/openspec-explore/SKILL.md",
             "description": "Skill de exploración pre-spec (OpenSpec)",
-            "version": "0.3.3",
+            "version": "0.3.4",
             "sha256": "1c75cab8672c2eb8b12f27a0b31f0b7fdb73c21c72583c1e8a566e09fe4108a6"
         },
         {
             "name": "openspec-propose",
             "file": "assets/skills/openspec-propose/SKILL.md",
             "description": "Skill de generación de proposal (OpenSpec)",
-            "version": "0.3.3",
+            "version": "0.3.4",
             "sha256": "ab88e9aa22db09559ccf7987d08adc0469b7c6fbe46498e63a3b64926f19e66b"
         },
         {
             "name": "openspec-apply-change",
             "file": "assets/skills/openspec-apply-change/SKILL.md",
             "description": "Skill de aplicación de change (OpenSpec)",
-            "version": "0.3.3",
+            "version": "0.3.4",
             "sha256": "847c2f88a66e8d5946c1fec422a5367c89eca5340839b659bbaaeb6f0bdac487"
         },
         {
             "name": "openspec-archive-change",
             "file": "assets/skills/openspec-archive-change/SKILL.md",
             "description": "Skill de archivo de change (OpenSpec)",
-            "version": "0.3.3",
+            "version": "0.3.4",
             "sha256": "3d35905ec40a081b8fd77b144426e540c67b1f50cc5801b655313a4fdfaa087a"
         }
     ]

@@ -132,44 +132,31 @@ Si el usuario no responde, **detenete y esperá**. No asumas un camino.
      * Despues las fases con `mode: "subagent-driven"`
    - Si el output no tiene `phaseRecommendations`, todo el cambio va en el modo global.
 
-4. **Ejecutar cada task no completada aplicando pre-edit validation:**
-   a. Aplicar la sección "Pre-edit validation" antes de cada llamada al edit tool.
-   b. Si pre-edit devuelve "skip-and-mark" → no editar. Ejecutar `mem_save` con topic_key del change.
-   c. Si pre-edit devuelve "conflict" → reportar al usuario. No editar ni marcar.
-   d. Después de completar exitosamente una task → `mem_save` con topic_key del change.
-   e. Si una task falla → reportar al usuario. No reintentar automáticamente.
+4. **Ejecutar cada task no completada — siguiendo este procedimiento exacto para CADA archivo que la task modifica:**
+
+   ⚠️ **ATENCIÓN: Nunca uses `edit` sin antes ejecutar los pasos 4a→4f en orden. No saltees pasos.**
+
+   a. **Leer el archivo actual con el Read tool.** Obligatorio aunque ya lo hayas leído antes. No confiar en lecturas previas del contexto (pueden estar stale).
+
+   b. **Preparar oldString y newString.** IMPORTANTE: el Read tool devuelve el contenido CON prefijos de línea ("1: const foo"). El `edit` tool espera el contenido SIN esos prefijos ("const foo"). Asegurate de extraer el texto raw del archivo, sin incluir los números de línea ni el ": " que los sigue.
+
+   c. **Verificar que oldString !== newString.** Si son idénticos → skip. No editar. Ejecutar `mem_save` con topic_key del change. Ir al paso 4f.
+
+   d. **Verificar que oldString existe en el contenido fresco del paso 4a.** Buscá coincidencia exacta (whitespace, indentación, saltos de línea). IMPORTANTE: buscá en el contenido sin prefijos de línea.
+      - ✅ Si existe → ejecutar `edit` con confianza. Ir al paso 4e.
+      - ❌ Si NO existe → verificar si newString ya existe en el contenido fresco:
+        - Si newString existe → skip: cambio ya aplicado. Ejecutar `mem_save`. Ir al paso 4f.
+        - Si newString no existe → CONFLICTO: el archivo cambió inesperadamente. Reportar al usuario. No editar. No marcar nada.
+
+   e. **Después de cada `edit` exitoso** → ejecutar `mem_save` con topic_key del change.
+
+   f. **Si una task falla** → reportar al usuario. No reintentar automáticamente.
 
 5. **Superpowers** es el unico orquestador de ejecucion, TDD, review y delegacion.
 6. Los subagentes son **execution-only**.
-7. Los subagentes heredan la sección "Pre-edit validation" (4a). Incluir esta sección en el brief de cada subagente para que aplique la misma validación antes de editar.
+7. **Subagentes heredan el mismo procedimiento.** Incluir los pasos 4a→4f completos en el brief de cada subagente para que aplique la misma validación antes de editar.
 8. Los subagentes no se usan para "hacerlo mas rapido" por defecto: se usan para aislar complejidad cuando eso reduce contexto total.
 9. Los subagentes no crean proposals, no planifican, no inician nueva delegacion y no repiten retrieval ya resuelto por el coordinador.
-
-### 4a. Pre-edit validation (obligatorio antes de cada edit)
-
-Antes de cada llamada al `edit` tool, ejecutar esta validación **sobre el archivo fresco**:
-
-```
-Paso 0: Leer el archivo actual con el Read tool. No confiar en lecturas previas
-        del contexto (pueden estar stale por edits anteriores o subagentes).
-
-Input:  filePath, oldString, newString + contenido fresco del archivo
-Output: "proceed", "skip-and-mark", "conflict"
-
-1. oldString === newString?
-   → "skip-and-mark": el cambio ya está aplicado.
-     Ejecutar mem_save con topic_key del change. No editar.
-
-2. oldString existe en el contenido fresco del archivo?
-   → "proceed": ejecutar edit normalmente.
-
-3. oldString NO existe en el contenido fresco del archivo:
-   a. ¿newString ya existe en el contenido fresco (exactamente, incluyendo whitespace)?
-      → Sí: "skip-and-mark": cambio ya aplicado (por otro paso/agente).
-        Ejecutar mem_save con topic_key del change.
-      → No: "conflict": el archivo cambió inesperadamente.
-        Reportar al usuario. No editar. No marcar nada.
-```
 
 ### 5. Sync y cierre
 
