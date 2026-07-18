@@ -1,77 +1,77 @@
 {
-    "version": "0.2.0",
-    "lockedAt": "2026-06-12T14:12:52.674Z",
-    "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.3.1",
-    "agents": {
-        "ostacky": {
-            "version": "0.2.0",
-            "installedAt": "2026-06-12T14:12:51.995Z",
-            "sha256": "f8c90095bbc27f3486986a7d5c219d32f407c09aed54a1b7f787dd2b57f60916"
-        }
-    },
-    "commands": {
-        "install-stack": {
-            "version": "0.2.0",
-            "installedAt": "2026-06-12T14:12:52.269Z",
-            "sha256": "74072c099dd58e77658e2dc452970aa8677ea7f8ed9af879e4d34ed44dcc9303"
-        },
-        "opsx-sync": {
-            "version": "0.2.0",
-            "installedAt": "2026-06-12T14:12:52.625Z",
-            "sha256": "211d75dc175710ddfa9c42f3ea26055708ab9df1f49ff95f92f8a34d7d756174"
-        }
-    },
-    "skills": {
-        "brainstorming": {
-            "version": "0.2.0",
-            "installedAt": "2026-06-11T23:16:08.750Z",
-            "sha256": "22be76380b086c4ac6d38b8b124f6f7df47c32a67237a6ceaf8c7fd19aa524b0"
-        },
-        "writing-plans": {
-            "version": "0.2.0",
-            "installedAt": "2026-06-12T14:12:52.641Z",
-            "sha256": "4d56ce833af79c628e72cd95b06d13597131a09f9d98aae0a42c6a98a8ee1b95"
-        },
-        "tdd": {
-            "version": "0.2.0",
-            "installedAt": "2026-06-12T14:12:52.644Z",
-            "sha256": "b5cd98b3c122162b5a5eac3c78858a64ba165bf4e8c251d8a804a593c0c72312"
-        },
-        "subagent-driven-development": {
-            "version": "0.2.0",
-            "installedAt": "2026-06-12T14:12:52.651Z",
-            "sha256": "7534b60788e05644831347194b1f99bcb41e2eda130994cfddafee3146ba63bd"
-        },
-        "dispatching-parallel-agents": {
-            "version": "0.2.0",
-            "installedAt": "2026-06-12T14:12:52.659Z",
-            "sha256": "b7e99d62c5d2ade21a3b6cdc94a7f90772e23fe3294ca600386f192f6181f6b2"
-        },
-        "review": {
-            "version": "0.2.0",
-            "installedAt": "2026-06-12T14:12:52.661Z",
-            "sha256": "af8fd392835967111e865f170d90d3dd9b8266b517ffb7d551dffda704500a90"
-        },
-        "openspec-explore": {
-            "version": "0.2.0",
-            "installedAt": "2026-06-12T14:12:52.668Z",
-            "sha256": "c3eaff7d64b7e5e757b120dd231d2e6b56e9f440055dc9ab5431b466d6244bd7"
-        },
-        "openspec-propose": {
-            "version": "0.2.0",
-            "installedAt": "2026-06-12T14:12:52.671Z",
-            "sha256": "28c59bdce6e9af0ab07102b2e6d0b47a0f0dc2f1bfb8321576d47f6c240e778b"
-        },
-        "openspec-apply-change": {
-            "version": "0.2.0",
-            "installedAt": "2026-06-12T14:12:52.673Z",
-            "sha256": "8fa8182e40fd92cefbbcc1e303d9aa9c02e2b7f3f2c0625cb61fb916e4fc5760"
-        },
-        "openspec-archive-change": {
-            "version": "0.2.0",
-            "installedAt": "2026-06-12T14:12:52.674Z",
-            "sha256": "564b8dca28084c75ca192137113e9186c4fb31d2de0e26c081fd67c37f7d4a56"
-        }
+  "version": "0.3.5",
+  "lockedAt": "2026-07-18T14:06:21.844Z",
+  "repo": "JaimeHoracio/Ostacky",
+  "tag": "v0.3.5",
+  "agents": {
+    "ostacky": {
+      "version": "0.3.5",
+      "installedAt": "2026-07-18T14:06:21.791Z",
+      "sha256": "b024519a0d8a1d06f796a0936c5e2424e07242ee8316b36ddb18e560f4c39124"
     }
+  },
+  "commands": {
+    "install-stack": {
+      "version": "0.3.5",
+      "installedAt": "2026-07-18T14:06:21.798Z",
+      "sha256": "7d403145d0b93639c5f3565cc928f0b52c3c87e194977b01b9c77755c59b1a81"
+    },
+    "opsx-sync": {
+      "version": "0.3.5",
+      "installedAt": "2026-07-18T14:06:21.800Z",
+      "sha256": "211d75dc175710ddfa9c42f3ea26055708ab9df1f49ff95f92f8a34d7d756174"
+    }
+  },
+  "skills": {
+    "brainstorming": {
+      "version": "0.3.5",
+      "installedAt": "2026-07-18T14:06:21.813Z",
+      "sha256": "ad15458c54912007ae3f708c698a11f0a4a58e2a7c7860a1ae8874db573c9e98"
+    },
+    "writing-plans": {
+      "version": "0.3.5",
+      "installedAt": "2026-07-18T14:06:21.815Z",
+      "sha256": "4d675df944b9c846e9066ff971861ad1c9673cd2c88375081b00a75872ad621a"
+    },
+    "tdd": {
+      "version": "0.3.5",
+      "installedAt": "2026-07-18T14:06:21.820Z",
+      "sha256": "7eacd8ee81dc5c0b85065c0392e37ee10314661f7edb59dd8e70a9e0dae8f371"
+    },
+    "subagent-driven-development": {
+      "version": "0.3.5",
+      "installedAt": "2026-07-18T14:06:21.823Z",
+      "sha256": "14e0f685b1dc1d7e02b7226d18f037fe4b6cba49b512a1fadf67cfad2a9dcc96"
+    },
+    "dispatching-parallel-agents": {
+      "version": "0.3.5",
+      "installedAt": "2026-07-18T14:06:21.828Z",
+      "sha256": "281edf0c38f358497c7e2066fa8217a2ba3e2a39b4205c4af0c41d328fc035a1"
+    },
+    "review": {
+      "version": "0.3.5",
+      "installedAt": "2026-07-18T14:06:21.830Z",
+      "sha256": "c78d3beff45e9bb6b5e9e1d7155910f379e082d7aaf3c61b90d651d09e0d2e2a"
+    },
+    "openspec-explore": {
+      "version": "0.3.5",
+      "installedAt": "2026-07-18T14:06:21.835Z",
+      "sha256": "1c75cab8672c2eb8b12f27a0b31f0b7fdb73c21c72583c1e8a566e09fe4108a6"
+    },
+    "openspec-propose": {
+      "version": "0.3.5",
+      "installedAt": "2026-07-18T14:06:21.839Z",
+      "sha256": "ab88e9aa22db09559ccf7987d08adc0469b7c6fbe46498e63a3b64926f19e66b"
+    },
+    "openspec-apply-change": {
+      "version": "0.3.5",
+      "installedAt": "2026-07-18T14:06:21.841Z",
+      "sha256": "847c2f88a66e8d5946c1fec422a5367c89eca5340839b659bbaaeb6f0bdac487"
+    },
+    "openspec-archive-change": {
+      "version": "0.3.5",
+      "installedAt": "2026-07-18T14:06:21.844Z",
+      "sha256": "3d35905ec40a081b8fd77b144426e540c67b1f50cc5801b655313a4fdfaa087a"
+    }
+  }
 }

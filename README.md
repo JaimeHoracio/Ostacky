@@ -1,6 +1,6 @@
 # Ostacky
 
-Ostacky es un **agent harness** para [OpenCode](https://opencode.ai). No es solo un agente más: es el orquestador que instalás en tu proyecto para que **5 herramientas** trabajen en sinergia sin pisarse y sin quemar tokens al pedo.
+Ostacky es un **agent harness** para [OpenCode](https://opencode.ai). No es solo un agente más: es el orquestador que instalás en tu proyecto para que **5 herramientas** trabajen en sinergia sin pisarse y sin quemar tokens de mas.
 
 | Herramienta                                               | Rol                 | Define                                        |
 | --------------------------------------------------------- | ------------------- | --------------------------------------------- |
@@ -10,7 +10,7 @@ Ostacky es un **agent harness** para [OpenCode](https://opencode.ai). No es solo
 | [Engram](https://github.com/Gentleman-Programming/engram) | Memoria persistente | QUÉ aprendimos en sesiones anteriores         |
 | [Context7](https://context7.com)                          | Documentación viva  | Documentación actualizada de librerías y APIs |
 
-Ostacky las rutea según el **nivel de impacto del cambio** (Nivel 0, Nivel 0+1, Nivel 1+), priorizando siempre eficiencia de tokens y preguntándote antes de actuar.
+Ostacky las rutea según el **nivel de impacto del cambio** (Nivel 0, Nivel 0+1, Nivel 1+), priorizando siempre eficiencia de tokens y preguntándote antes de actuar. Para cambios grandes usa OpenSpec (spec-driven development); para cambios chicos ejecuta directo con Superpowers skills.
 
 ## Cómo empezar
 
@@ -61,7 +61,15 @@ Ostacky integra **5 herramientas** especializadas para que trabajen en conjunto 
 4. **Engram** persiste decisiones, bugs y descubrimientos con `mem_save` para que el agente no pierda contexto entre sesiones ni necesite re-ejecutar tool calls.
 5. **Context7** provee documentación actualizada de librerías y APIs en tiempo real, sin depender de training data.
 
-Ostacky decide **cuándo y cómo** usar cada herramienta según el nivel de impacto del cambio (Nivel 0, Nivel 0+1, Nivel 1+), priorizando siempre eficiencia de tokens.
+Ostacky decide **cuándo y cómo** usar cada herramienta según el **nivel de impacto** del cambio:
+
+| Nivel | Cuándo aplica | Flujo |
+|-------|--------------|-------|
+| **0** | <5 líneas, 1 archivo, trivial | CodeGraph → directo a inline |
+| **0+1** | 5-10 líneas, 1-2 archivos, sin API nueva | CodeGraph → usuario elige: spec o directo |
+| **1+** | >10 líneas, API pública, refactors | CodeGraph → OpenSpec → execution-mode-evaluation → subagentes o inline |
+
+Antes de ejecutar, Ostacky **muestra el análisis de archivos compartidos** (qué tasks tocan los mismos archivos) para que el usuario decida el modo de ejecución informado. Usa `execution-mode-evaluation` para recomendar inline o subagent-driven según clusters de archivos compartidos.
 
 ## ¿Para qué sirve?
 
@@ -70,6 +78,7 @@ Ostacky decide **cuándo y cómo** usar cada herramienta según el nivel de impa
 - Detectar y aplicar actualizaciones mostrando el diff de versiones antes de confirmar
 - Evitar descargas repetidas gracias al cache local en `~/.opencode/cache/`
 - Resolver tareas chicas sin overhead extra de coordinación.
+- Ejecutar tareas independientes en paralelo con **subagentes** cuando no comparten archivos, o inline secuencial cuando se pisan.
 
 ## Requisitos
 
@@ -185,8 +194,21 @@ Tras instalar, el proyecto queda así:
 ├── agents/
 │   └── ostacky.md
 ├── commands/
-│   └── install-stack.md
-└── ostacky-lock.json          ← versiones instaladas
+│   ├── install-stack.md
+│   └── opsx-sync.md
+├── skills/
+│   ├── brainstorming/
+│   ├── writing-plans/
+│   ├── tdd/
+│   ├── review/
+│   ├── execution-mode-evaluation/
+│   ├── subagent-driven-development/
+│   ├── dispatching-parallel-agents/
+│   ├── openspec-explore/
+│   ├── openspec-propose/
+│   ├── openspec-apply-change/
+│   └── openspec-archive-change/
+└── ostacky-lock.json          ← versiones instaladas (agentes, commands y skills)
 ```
 
 ### ostacky-lock.json
@@ -209,7 +231,17 @@ Tras instalar, el proyecto queda así:
             "version": "0.3.5",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "def456..."
+        },
+        "opsx-sync": {
+            "version": "0.3.5",
+            "installedAt": "2025-01-01T00:00:00.000Z",
+            "sha256": "ghi789..."
         }
+    },
+    "skills": {
+        "brainstorming": { "version": "0.3.5", ... },
+        "execution-mode-evaluation": { "version": "0.3.5", ... },
+        "openspec-propose": { "version": "0.3.5", ... }
     }
 }
 ```

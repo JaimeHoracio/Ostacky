@@ -49,6 +49,42 @@ Revisá el contexto actual de la sesión.
 
 ---
 
+### Paso 0.5: Early exit para cambios pequeños
+
+Si el cambio tiene **≤2 tasks de implementación** Y **no comparten archivos entre sí** (según `tasks.md` o el contexto disponible):
+
+→ Devolver directamente este JSON sin ejecutar Pasos 1, 2, 3a, 3b:
+
+```json
+{
+  "mode": "inline",
+  "confidence": 1.0,
+  "reasons": ["Cambio pequeño (≤2 tasks independientes sin archivos compartidos). Inline directo."],
+  "codegraphUsed": [],
+  "globalRuleTriggered": "early-exit",
+  "taskAnalysis": {
+    "taskCount": <N>,
+    "sharedFiles": {},
+    "fileClusters": [<cada task como cluster propio>],
+    "clusterCount": <taskCount>,
+    "sequentialDeps": [],
+    "estLines": <estimación>,
+    "hasExplicitContract": false
+  },
+  "phaseRecommendations": []
+}
+```
+
+**Qué considerar "archivos compartidos":** si dos tasks mencionan modificar el mismo archivo, NO aplicar early exit. El early exit solo es seguro cuando cada task toca archivos distintos.
+
+**Si el cambio tiene 1 sola task:** early exit aplica siempre (no hay con quién compartir archivos).
+
+**Si el cambio tiene 2 tasks:** verificar que no compartan archivos según tasks.md. Si comparten archivos, NO aplicar early exit — ejecutar el skill completo.
+
+**Output esperado:** `globalRuleTriggered: "early-exit"` para trazabilidad de que la decisión vino de este atajo, no de las reglas principales.
+
+---
+
 ### Paso 1: Obtener datos de CodeGraph
 
 Ejecutá esta consulta:
