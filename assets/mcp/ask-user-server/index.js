@@ -167,7 +167,7 @@ async function handleRequest(msg) {
                     },
                     serverInfo: {
                         name: 'ask-user-server',
-                        version: '0.5.1',
+                        version: '0.5.2',
                     },
                 });
                 break;
