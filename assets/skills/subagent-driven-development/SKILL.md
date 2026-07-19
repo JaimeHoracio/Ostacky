@@ -1,9 +1,17 @@
 ---
 name: subagent-driven-development
-description: Use when executing implementation plans with independent tasks in the current session
+description: Use when Ostacky has confirmed subagent-driven execution mode and dispatches you with clusters of independent tasks
 ---
 
 # Subagent-Driven Development
+
+**Prerequisite:** This skill runs AFTER the coordinator (Ostacky) has:
+1. Performed execution analysis (via `execution-mode-evaluation` skill)
+2. Presented evidence and recommendation to the user
+3. Received explicit user confirmation for subagent-driven mode
+4. Called `controller.consumeExecutionDecision({ mode: "SUBAGENT_DRIVEN" })`
+
+Subagents are execution-only. They never create routing decisions, re-analyze execution mode, or duplicate discovery that the coordinator already resolved.
 
 Execute plan by dispatching fresh subagent per task, with two-stage review after each: spec compliance review first, then code quality review.
 

@@ -1,39 +1,55 @@
 {
-    "version": "0.4.1",
+    "version": "0.5.0",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.4.1",
+    "tag": "v0.5.0",
     "agents": [
         {
             "name": "ostacky",
             "file": "assets/agents/ostacky.md",
-            "description": "Agente principal de desarrollo con ejecución inline-first, análisis transparente de archivos compartidos y pre-edit guard simplificado",
-            "version": "0.4.1",
-            "sha256": "1287c743d073b85513ca05c7222ade892aef73a2f4ac7e59ac6d828d0d265b22"
+            "description": "Orquestador principal con ruteo por nivel de impacto, máquina de estados persistida (controller MCP), edición segura con 3 outcomes, y delegación en OpenSpec + Superpowers",
+            "version": "0.5.0",
+            "sha256": "355c729ee13f0cd99b9a16e0c203dd83808ec9fb5a764012521794011a91a9f1"
         }
     ],
     "commands": [
         {
             "name": "install-stack",
             "file": "assets/commands/install-stack.md",
-            "description": "Instala el stack tecnológico del proyecto",
-            "version": "0.4.1",
-            "sha256": null
+            "description": "Instala el stack tecnológico del proyecto (CodeGraph, skills, OpenSpec, Engram, Context7, controller MCP)",
+            "version": "0.5.0",
+            "sha256": "e8b75efe505766d47dd4d38cfb055b6801552cd457d99bce018c196a346e4560"
         },
         {
             "name": "opsx-sync",
             "file": "assets/commands/opsx-sync.md",
-            "description": "Sincroniza delta specs del change activo (wrapper de openspec update)",
+            "description": "Sincroniza delta specs del change activo sin inicializar CodeGraph si ya existe índice",
+            "version": "0.5.0",
+            "sha256": "ed9948f1910743b672e1dfad496bc96972a224a98b063232be39290d43068c50"
+        }
+    ],
+    "mcpServers": [
+        {
+            "name": "ask-user",
+            "file": "assets/mcp/ask-user-server/",
+            "description": "MCP server con tool ask_user para consultar al usuario con bloqueo de ejecución",
             "version": "0.4.1",
-            "sha256": null
+            "sha256": "74deeadfde30dfd9e3fe5e6fb75ab9e024aa7150a40518b2f40354c392e8fb5d"
+        },
+        {
+            "name": "ostacky-controller",
+            "file": "assets/mcp/ostacky-controller/",
+            "description": "Máquina de estados persistida para Ostacky: validación de transiciones, consumo de decisiones, autorización de side effects, edición segura y snapshots reutilizables",
+            "version": "0.5.0",
+            "sha256": "7652bb70376a71157c35dda5a5c24f3671b0cf5922b2fef1065a40e7600d694e"
         }
     ],
     "skills": [
         {
             "name": "execution-mode-evaluation",
             "file": "assets/skills/execution-mode-evaluation/SKILL.md",
-            "description": "Skill de decision de modo de ejecucion inline vs subagent-driven con CodeGraph y early exit para cambios pequeños",
-            "version": "0.4.1",
-            "sha256": "cd7404518893742ede707ea7b8393cd5d28d0602f0900c2f16f8470756869b7d"
+            "description": "Skill de análisis de modo de ejecución — output reconciliado con controller snapshot contract (recommendation field)",
+            "version": "0.5.0",
+            "sha256": "0bf115b939c906e276040a9bd741c1b84d658da29e3c3fa2cb5e74e4c72792a1"
         },
         {
             "name": "brainstorming",
@@ -45,9 +61,9 @@
         {
             "name": "writing-plans",
             "file": "assets/skills/writing-plans/SKILL.md",
-            "description": "Skill de planificación de implementación (Superpowers)",
-            "version": "0.4.1",
-            "sha256": "4d675df944b9c846e9066ff971861ad1c9673cd2c88375081b00a75872ad621a"
+            "description": "Skill de planificación de implementación (Superpowers) — execution handoff removido, Ostacky decide modo de ejecución",
+            "version": "0.5.0",
+            "sha256": "408bca4652677d59bb35cdbe7459b01555b4ca11bf44217d95f98f3641af88b2"
         },
         {
             "name": "tdd",
@@ -59,9 +75,9 @@
         {
             "name": "subagent-driven-development",
             "file": "assets/skills/subagent-driven-development/SKILL.md",
-            "description": "Skill de ejecución con subagentes (Superpowers)",
-            "version": "0.4.1",
-            "sha256": "14e0f685b1dc1d7e02b7226d18f037fe4b6cba49b512a1fadf67cfad2a9dcc96"
+            "description": "Skill de ejecución con subagentes (Superpowers) — ejecuta solo después de confirmación del coordinador Ostacky",
+            "version": "0.5.0",
+            "sha256": "2d0c880deae34ab6882c93f6c8de666013498f0e84d7741116dd0835e2780a1b"
         },
         {
             "name": "dispatching-parallel-agents",

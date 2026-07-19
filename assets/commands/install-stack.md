@@ -39,6 +39,31 @@ Verifica que el MCP server esté configurado en `opencode.json` (campo `mcpServe
 
 ---
 
+## Paso 1.5 — Ostacky Controller MCP (opcional)
+
+El Ostacky Controller es una máquina de estados persistida que Ostacky usa para validar transiciones, consumir decisiones, autorizar side effects y persistir snapshots.
+
+El controller MCP se configura como server local en `opencode.json`. Si el controller no está disponible, Ostacky cae a inline con confianza reducida pero preserva las compuertas de confirmación en lenguaje natural.
+
+```json
+{
+  "mcp": {
+    "ostacky-controller": {
+      "type": "local",
+      "command": ["node", "assets/mcp/ostacky-controller/index.js"],
+      "enabled": true
+    }
+  }
+}
+```
+
+**Notas:**
+- El controller no es obligatorio para operar Ostacky — es un refuerzo de disciplina.
+- Sin controller, Ostacky usa las mismas reglas en lenguaje natural pero sin validación de transiciones ni persistencia de estado.
+- El controller nunca autoriza subagentes sin confirmación explícita del usuario.
+
+---
+
 ## Paso 2 — Skills curadas (bundleadas)
 
 Las **10 skills curadas del set base** (6 Superpowers + 4 OpenSpec) están bundleadas dentro del paquete Ostacky en `assets/skills/`. No se descargan ni clonan; ya vienen en el paquete npm. Context7 agrega su propia skill aparte (Paso 6).

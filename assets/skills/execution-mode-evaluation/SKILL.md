@@ -57,21 +57,17 @@ Si el cambio tiene **≤2 tasks de implementación** Y **no comparten archivos e
 
 ```json
 {
-  "mode": "inline",
-  "confidence": 1.0,
+  "recommendation": "INLINE",
   "reasons": ["Cambio pequeño (≤2 tasks independientes sin archivos compartidos). Inline directo."],
   "codegraphUsed": [],
-  "globalRuleTriggered": "early-exit",
-  "taskAnalysis": {
-    "taskCount": <N>,
-    "sharedFiles": {},
-    "fileClusters": [<cada task como cluster propio>],
-    "clusterCount": <taskCount>,
-    "sequentialDeps": [],
-    "estLines": <estimación>,
-    "hasExplicitContract": false
-  },
-  "phaseRecommendations": []
+  "taskCount": <N>,
+  "sharedFiles": {},
+  "fileClusters": [<cada task como cluster propio>],
+  "clusterCount": <taskCount>,
+  "sequentialDeps": [],
+  "estLines": <estimación>,
+  "hasExplicitContract": false,
+  "filesPerTask": {}
 }
 ```
 
@@ -296,61 +292,55 @@ f. SI NINGUNA condición anterior se cumplió
 
 ---
 
-### Paso 4: Devolver decisión
+### Paso 4: Devolver decisión al controller
 
-El output DEBE ser un JSON válido en este formato:
+El output DEBE ser un JSON válido en este formato, que se pasa a `controller.recordExecutionAnalysis()`:
 
 ```json
 {
-  "mode": "inline" | "subagent-driven",
-  "confidence": 0.0 - 1.0,
+  "recommendation": "INLINE" | "SUBAGENT_DRIVEN",
   "reasons": ["razón principal", "razón secundaria"],
   "codegraphUsed": ["codegraph_context"],
-  "globalRuleTriggered": "1",
-  "taskAnalysis": {
-    "taskCount": 13,
-    "sharedFiles": {
-      "src/logging.ts": ["2.2", "2.4", "2.5"]
-    },
-    "fileClusters": [
-      ["2.2", "2.4", "2.5"],
-      ["2.1"],
-      ["2.3"],
-      ["3.1"]
-    ],
-    "clusterCount": 4,
-    "sequentialDeps": [],
-    "estLines": 45,
-    "hasExplicitContract": false
+  "taskCount": 13,
+  "sharedFiles": {
+    "src/logging.ts": ["2.2", "2.4", "2.5"]
   },
-  "phaseRecommendations": [
-    {
-      "phase": "2. Core Implementation",
-      "mode": "inline",
-      "reason": "Archivos compartidos dentro de la fase: src/logging.ts"
-    },
-    {
-      "phase": "4. Testing",
-      "mode": "subagent-driven",
-      "reason": "4 tests independientes sin archivos compartidos"
-    }
-  ]
+  "fileClusters": [
+    ["2.2", "2.4", "2.5"],
+    ["2.1"],
+    ["2.3"],
+    ["3.1"]
+  ],
+  "clusterCount": 4,
+  "sequentialDeps": [],
+  "estLines": 45,
+  "hasExplicitContract": false,
+  "filesPerTask": {
+    "2.1": ["src/init.ts"],
+    "2.2": ["src/logging.ts"]
+  }
 }
 ```
 
-**Campos:**
+**Campos del snapshot (contrato con controller.buildExecutionSnapshot):**
 
 | Campo | Descripción |
 |-------|-------------|
-| `mode` | Modo global: `inline` o `subagent-driven` |
-| `confidence` | Qué tan seguro estás de la decisión (0.0 = nada, 1.0 = totalmente). Bajar si CodeGraph no se pudo usar. |
-| `reasons` | Array de strings. La primera razón es la principal (por qué se gatilló la regla global). |
-| `codegraphUsed` | Lista de tool calls de CodeGraph que se ejecutaron. Vacío si el Paso 0 encontró datos suficientes. |
-| `globalRuleTriggered` | Código de la regla que decidió el modo global ("1", "2a", "2b", "3a", "3b", "3c"). Para trazabilidad. |
-| `taskAnalysis` | Mapa global construido en el Paso 2. Incluir siempre para trazabilidad. |
-| `taskAnalysis.fileClusters` | Array de arrays: cada sub-array es un cluster de tareas que comparten archivos. Fundamental para la decisión. |
-| `taskAnalysis.clusterCount` | Número total de clusters. `clusterCount == 1` → todo conectado. `clusterCount == taskCount` → todo independiente. |
-| `phaseRecommendations` | Array con el modo recomendado por fase. Cada entrada tiene `phase`, `mode` y `reason`. Vacío si el modo global es subagent-driven o si tasks.md no tiene fases separadas. |
+| `recommendation` | `INLINE` o `SUBAGENT_DRIVEN`. Basado en las reglas de precedencia. |
+| `reasons` | Array de strings. La primera razón es la principal. |
+| `codegraphUsed` | Lista de tool calls de CodeGraph ejecutados. |
+| `filesPerTask` | Mapa: taskId → [archivos que modifica] |
+| `sharedFiles` | Mapa: archivo → [tasks que lo tocan] |
+| `fileClusters` | Componentes conectados por archivos compartidos. |
+| `taskCount` | Total de tasks de implementación. |
+| `clusterCount` | `clusterCount == 1` → todo conectado. `== taskCount` → todo independiente. |
+| `sequentialDeps` | Dependencias secuenciales entre tasks. |
+| `estLines` | Estimación conservadora de líneas totales. |
+| `hasExplicitContract` | `true` si design.md tiene contratos explícitos entre tasks. |
+
+**⚠️ Este skill provee ANÁLISIS y RECOMENDACIÓN, no autorización.** No preguntes al usuario el modo de ejecución — eso lo hace Ostacky (el coordinador) después de recibir este snapshot y mostrarlo al usuario con `ask_user`.
+
+**Consistencia de campos:** `recommendation` es el campo canónico para el modo. Si generaste `mode` en versiones anteriores, migrá a `recommendation` para compatibilidad con el controller.
 
 ---
 
