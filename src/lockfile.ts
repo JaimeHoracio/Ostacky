@@ -68,7 +68,11 @@ export function getInstalledVersion(
  * Removes a single entry from the lockfile. If the entry does not exist,
  * this is a no-op. The lockfile is written back to disk.
  */
-export function removeFromLockfile(opencodeRoot: string, type: 'agents' | 'commands' | 'skills' | 'mcpServers', name: string): void {
+export function removeFromLockfile(
+    opencodeRoot: string,
+    type: 'agents' | 'commands' | 'skills' | 'mcpServers',
+    name: string
+): void {
     const lockfile = readLockfile(opencodeRoot);
     if (!lockfile) return;
     if (!lockfile[type]) return;
@@ -87,7 +91,7 @@ export function clearLockfile(opencodeRoot: string): void {
     if (!lockfile) {
         // Nothing to clear; write a fresh minimal lockfile.
         writeLockfile(opencodeRoot, {
-            version: '0.4.1',
+            version: '0.5.0',
             lockedAt: new Date().toISOString(),
             repo: '',
             tag: '',
