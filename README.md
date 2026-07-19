@@ -215,33 +215,33 @@ Tras instalar, el proyecto queda así:
 
 ```json
 {
-    "version": "0.5.2",
+    "version": "0.5.3",
     "lockedAt": "2025-01-01T00:00:00.000Z",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.5.2",
+    "tag": "v0.5.3",
     "agents": {
         "ostacky": {
-            "version": "0.5.2",
+            "version": "0.5.3",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "abc123..."
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.5.2",
+            "version": "0.5.3",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "def456..."
         },
         "opsx-sync": {
-            "version": "0.5.2",
+            "version": "0.5.3",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "ghi789..."
         }
     },
     "skills": {
-        "brainstorming": { "version": "0.5.2", ... },
-        "execution-mode-evaluation": { "version": "0.5.2", ... },
-        "openspec-propose": { "version": "0.5.2", ... }
+        "brainstorming": { "version": "0.5.3", ... },
+        "execution-mode-evaluation": { "version": "0.5.3", ... },
+        "openspec-propose": { "version": "0.5.3", ... }
     }
 }
 ```
@@ -271,7 +271,7 @@ Es opcional y solo necesario si algo falló durante la instalación o si querés
 ## Seguridad
 
 - `opencode.jsonc` se versiona en el repo para compartir permisos y MCP de forma reproducible.
-- Las URLs de descarga usan **tags de GitHub** (ej. `v0.5.2`), nunca `main` — instalaciones reproducibles
+- Las URLs de descarga usan **tags de GitHub** (ej. `v0.5.3`), nunca `main` — instalaciones reproducibles
 - Cada path de archivo descargado es validado para prevenir **path traversal**
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
 - El cache local (`~/.opencode/cache/`) también valida integridad al servir archivos cacheados
