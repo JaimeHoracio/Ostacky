@@ -24,6 +24,8 @@ export interface Lockfile {
     commands: Record<string, LockfileItem>;
     /** Skills instaladas: nombre → metadata */
     skills: Record<string, LockfileItem>;
+    /** MCP servers instalados: nombre → metadata */
+    mcpServers?: Record<string, LockfileItem>;
 }
 
 export function getLockfilePath(opencodeRoot: string): string {
@@ -56,7 +58,7 @@ export function writeLockfile(opencodeRoot: string, lockfile: Lockfile): void {
  */
 export function getInstalledVersion(
     lockfile: Lockfile | null,
-    type: 'agents' | 'commands' | 'skills',
+    type: 'agents' | 'commands' | 'skills' | 'mcpServers',
     name: string
 ): string | null {
     return lockfile?.[type]?.[name]?.version ?? null;
@@ -66,7 +68,7 @@ export function getInstalledVersion(
  * Removes a single entry from the lockfile. If the entry does not exist,
  * this is a no-op. The lockfile is written back to disk.
  */
-export function removeFromLockfile(opencodeRoot: string, type: 'agents' | 'commands' | 'skills', name: string): void {
+export function removeFromLockfile(opencodeRoot: string, type: 'agents' | 'commands' | 'skills' | 'mcpServers', name: string): void {
     const lockfile = readLockfile(opencodeRoot);
     if (!lockfile) return;
     if (!lockfile[type]) return;
@@ -85,19 +87,21 @@ export function clearLockfile(opencodeRoot: string): void {
     if (!lockfile) {
         // Nothing to clear; write a fresh minimal lockfile.
         writeLockfile(opencodeRoot, {
-            version: '0.4.0',
+            version: '0.4.1',
             lockedAt: new Date().toISOString(),
             repo: '',
             tag: '',
             agents: {},
             commands: {},
             skills: {},
+            mcpServers: {},
         });
         return;
     }
     lockfile.agents = {};
     lockfile.commands = {};
     lockfile.skills = {};
+    lockfile.mcpServers = {};
     lockfile.lockedAt = new Date().toISOString();
     writeLockfile(opencodeRoot, lockfile);
 }

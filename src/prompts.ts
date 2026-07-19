@@ -14,12 +14,15 @@ import {
   installAgent,
   installCommand,
   installSkill,
+  installMcpServer,
   isAgentInstalled,
   isCommandInstalled,
   isSkillInstalled,
+  isMcpServerInstalled,
   uninstallAgent,
   uninstallCommand,
   uninstallSkill,
+  uninstallMcpServer,
   uninstallAll,
   isCommandAvailable,
   installCodeGraph,
@@ -150,7 +153,7 @@ async function resolveOpenCodePaths(): Promise<OpenCodePaths | null> {
 // ─── Version diff helpers ─────────────────────────────────────────────────────
 
 interface UpdateCandidate {
-  type: "agents" | "commands" | "skills";
+  type: "agents" | "commands" | "skills" | "mcpServers";
   item: ManifestItem;
   installedVersion: string | null;
 }
@@ -191,6 +194,14 @@ function getUpdateCandidates(
     }
   }
 
+  for (const item of manifest.mcpServers ?? []) {
+    if (!isMcpServerInstalled(item.name, paths)) continue;
+    const installed = getInstalledVersion(lockfile, "mcpServers", item.name);
+    if (installed !== item.version) {
+      candidates.push({ type: "mcpServers", item, installedVersion: installed });
+    }
+  }
+
   return candidates;
 }
 
@@ -206,6 +217,8 @@ function kindLabel(type: UpdateCandidate["type"]): string {
       return "command";
     case "skills":
       return "skill";
+    case "mcpServers":
+      return "MCP";
   }
 }
 
@@ -244,6 +257,17 @@ async function doInstallAll(manifest: Manifest, paths: OpenCodePaths) {
       spin.stop(`Skill instalada: ${skill.name}  (${skill.version})`);
     } catch (e) {
       spin.stop(`Error en ${skill.name}: ${(e as Error).message}`);
+      errors++;
+    }
+  }
+
+  for (const mcp of manifest.mcpServers ?? []) {
+    spin.start(`Instalando MCP server: ${mcp.name}  (${mcp.version})`);
+    try {
+      await installMcpServer(mcp, manifest, paths);
+      spin.stop(`MCP server instalado: ${mcp.name}  (${mcp.version})`);
+    } catch (e) {
+      spin.stop(`Error en ${mcp.name}: ${(e as Error).message}`);
       errors++;
     }
   }
@@ -417,8 +441,10 @@ async function doUpdate(manifest: Manifest, paths: OpenCodePaths) {
         await installAgent(item, manifest, paths);
       } else if (type === "commands") {
         await installCommand(item, manifest, paths);
-      } else {
+      } else if (type === "skills") {
         await installSkill(item, manifest, paths);
+      } else {
+        await installMcpServer(item, manifest, paths);
       }
       spin.stop(`Actualizado: ${item.name}  (${item.version})`);
       updated++;
@@ -552,7 +578,8 @@ async function doUninstallTotal(paths: OpenCodePaths) {
     !lockfile ||
     (Object.keys(lockfile.agents).length === 0 &&
       Object.keys(lockfile.commands).length === 0 &&
-      Object.keys(lockfile.skills ?? {}).length === 0)
+      Object.keys(lockfile.skills ?? {}).length === 0 &&
+      Object.keys(lockfile.mcpServers ?? {}).length === 0)
   ) {
     p.log.info("No hay nada instalado.");
     return;
@@ -567,6 +594,9 @@ async function doUninstallTotal(paths: OpenCodePaths) {
   }
   for (const name of Object.keys(lockfile.skills ?? {})) {
     pathsToDelete.push(join(paths.skills, name));
+  }
+  for (const name of Object.keys(lockfile.mcpServers ?? {})) {
+    pathsToDelete.push(join(paths.root, 'mcp', name));
   }
 
   p.note(

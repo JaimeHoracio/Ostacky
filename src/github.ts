@@ -18,6 +18,7 @@ export interface Manifest {
     tag: string;
     agents: ManifestItem[];
     commands: ManifestItem[];
+    mcpServers?: ManifestItem[];
     skills: ManifestItem[];
 }
 
@@ -40,6 +41,18 @@ export const BUNDLED_SKILLS_DIR = join(PACKAGE_ROOT, 'assets', 'skills');
 export function getBundledSkillPath(name: string): string {
     validateFilePath(name);
     return join(BUNDLED_SKILLS_DIR, name);
+}
+
+/** Directorio donde viven los MCP servers bundleados. */
+export const BUNDLED_MCP_DIR = join(PACKAGE_ROOT, 'assets', 'mcp');
+
+/**
+ * Devuelve la ruta absoluta al directorio bundleado de un MCP server.
+ * Lanza si el nombre contiene segmentos inseguros.
+ */
+export function getBundledMcpPath(name: string): string {
+    validateFilePath(name);
+    return join(BUNDLED_MCP_DIR, name);
 }
 
 export function getRawUrl(repo: string, tag: string, path: string): string {
@@ -112,7 +125,7 @@ export async function fetchLatestManifest(): Promise<{
 export async function downloadFile(manifest: Manifest, filePath: string): Promise<string> {
     validateFilePath(filePath);
 
-    const item = [...manifest.agents, ...manifest.commands, ...(manifest.skills ?? [])].find(
+    const item = [...manifest.agents, ...manifest.commands, ...(manifest.skills ?? []), ...(manifest.mcpServers ?? [])].find(
         (i) => i.file === filePath
     );
     const expectedHash = item?.sha256 ?? null;

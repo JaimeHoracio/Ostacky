@@ -12,7 +12,7 @@ import {
 import { createHash } from "crypto";
 import { join, resolve, dirname, relative } from "path";
 import type { Manifest, ManifestItem } from "./github.js";
-import { downloadFile, getBundledSkillPath } from "./github.js";
+import { downloadFile, getBundledSkillPath, getBundledMcpPath } from "./github.js";
 import {
   readLockfile,
   writeLockfile,
@@ -136,7 +136,7 @@ function walkForHash(root: string, current: string, lines: string[]): void {
 
 function upsertLockfile(
   paths: OpenCodePaths,
-  type: "agents" | "commands" | "skills",
+  type: "agents" | "commands" | "skills" | "mcpServers",
   item: ManifestItem,
   manifest: Manifest,
   contentHash: string
@@ -153,6 +153,7 @@ function upsertLockfile(
 
   // Lockfiles escritos antes de soportar skills no tendrán la clave.
   if (!existing.skills) existing.skills = {};
+  if (!existing.mcpServers) existing.mcpServers = {};
 
   existing[type][item.name] = {
     version: item.version,
@@ -226,6 +227,74 @@ export async function installSkill(
   upsertLockfile(paths, "skills", item, manifest, treeHash);
 }
 
+/**
+ * Copia el MCP server bundleado al directorio destino, registra en
+ * opencode.jsonc y actualiza el lockfile.
+ * Sigue el mismo patrón que installSkill: origen local, tree hash.
+ */
+export async function installMcpServer(
+  item: ManifestItem,
+  manifest: Manifest,
+  paths: OpenCodePaths
+): Promise<void> {
+  const src = getBundledMcpPath(item.name);
+  if (!existsSync(src)) {
+    throw new Error(
+      `MCP server bundleado no encontrado: ${src}. ` +
+      `¿Falta el directorio assets/mcp/${item.name}/?`
+    );
+  }
+
+  const treeHash = computeTreeHash(src);
+
+  if (item.sha256 && treeHash !== item.sha256) {
+    throw new Error(
+      `Tree hash inválido para MCP server "${item.name}"\n` +
+        `  esperado: ${item.sha256}\n` +
+        `  recibido: ${treeHash}`
+    );
+  }
+
+  const dest = join(paths.root, 'mcp', item.name);
+  if (existsSync(dest)) {
+    rmSync(dest, { recursive: true, force: true });
+  }
+  copyDirRecursive(src, dest);
+
+  upsertLockfile(paths, "mcpServers", item, manifest, treeHash);
+
+  // Registrar en opencode.jsonc
+  const projectRoot = findProjectRoot();
+  const configPath = findOpenCodeConfig(projectRoot);
+  if (configPath) {
+    const raw = readFileSync(configPath, "utf-8");
+    const config = JSON.parse(raw);
+    if (!config.mcp) config.mcp = {};
+    config.mcp[item.name] = {
+      type: "local",
+      command: ["node", `.opencode/mcp/${item.name}/index.js`],
+      enabled: true,
+    };
+    writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  }
+}
+
+/**
+ * Busca el archivo de configuración de OpenCode en el proyecto.
+ */
+export function findOpenCodeConfig(projectRoot: string): string | null {
+  const candidates = ["opencode.json", "opencode.jsonc"];
+  for (const name of candidates) {
+    const full = join(projectRoot, name);
+    if (existsSync(full)) return full;
+  }
+  return null;
+}
+
+export function isMcpServerInstalled(name: string, paths: OpenCodePaths): boolean {
+  return existsSync(join(paths.root, 'mcp', name, 'index.js'));
+}
+
 export function isAgentInstalled(name: string, paths: OpenCodePaths): boolean {
   return existsSync(join(paths.agents, `${name}.md`));
 }
@@ -279,6 +348,39 @@ export function uninstallSkill(name: string, paths: OpenCodePaths): boolean {
   return true;
 }
 
+export function uninstallMcpServer(name: string, paths: OpenCodePaths): boolean {
+  const dirPath = join(paths.root, 'mcp', name);
+  try {
+    if (existsSync(dirPath)) {
+      rmSync(dirPath, { recursive: true, force: true });
+    }
+  } catch {
+    return false;
+  }
+
+  // Remover de opencode.jsonc
+  const projectRoot = findProjectRoot();
+  const configPath = findOpenCodeConfig(projectRoot);
+  if (configPath) {
+    try {
+      const raw = readFileSync(configPath, "utf-8");
+      const config = JSON.parse(raw);
+      if (config.mcp && config.mcp[name]) {
+        delete config.mcp[name];
+        if (Object.keys(config.mcp).length === 0) {
+          delete config.mcp;
+        }
+        writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+      }
+    } catch {
+      // Si falla, solo continuamos
+    }
+  }
+
+  removeFromLockfile(paths.root, "mcpServers", name);
+  return true;
+}
+
 export function uninstallAll(paths: OpenCodePaths): void {
   const lockfile = readLockfile(paths.root);
   if (!lockfile) return;
@@ -290,6 +392,9 @@ export function uninstallAll(paths: OpenCodePaths): void {
   }
   for (const name of Object.keys(lockfile.skills ?? {})) {
     uninstallSkill(name, paths);
+  }
+  for (const name of Object.keys(lockfile.mcpServers ?? {})) {
+    uninstallMcpServer(name, paths);
   }
   clearLockfile(paths.root);
 }
