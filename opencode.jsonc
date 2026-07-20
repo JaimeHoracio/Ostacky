@@ -14,7 +14,9 @@
     }
   },
   "skills": {
-    "paths": ["assets/skills/using-git-worktrees"]
+    "paths": [
+      "assets/skills/using-git-worktrees"
+    ]
   },
   "experimental": {
     "continue_loop_on_deny": true
@@ -27,6 +29,26 @@
         "serve",
         "--mcp"
       ],
+      "enabled": true
+    },
+    "ask-user-server": {
+      "type": "local",
+      "command": [
+        "node",
+        ".opencode/mcp/ask-user-server/index.js"
+      ],
+      "cwd": ".",
+      "timeout": 10000,
+      "enabled": true
+    },
+    "ostacky-controller": {
+      "type": "local",
+      "command": [
+        "node",
+        ".opencode/mcp/ostacky-controller/index.js"
+      ],
+      "cwd": ".",
+      "timeout": 10000,
       "enabled": true
     }
   }

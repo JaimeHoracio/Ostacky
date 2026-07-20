@@ -1,0 +1,6 @@
+{
+    "name": "ostacky-controller",
+    "version": "0.5.3",
+    "private": true,
+    "type": "module"
+}

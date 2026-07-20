@@ -19,9 +19,7 @@
  *   }
  */
 
-import { createInterface } from 'readline';
-import { createReadStream, writeFileSync } from 'fs';
-import { open } from 'fs/promises';
+import { openSync, readSync, writeSync, closeSync, readFileSync, readlinkSync } from 'fs';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -50,37 +48,69 @@ function log(msg) {
     process.stderr.write(msg + '\n');
 }
 
-/** Reads a line of user input from /dev/tty (with fallback to process.stdin). */
+/**
+ * Finds the controlling PTY by walking up the parent process chain.
+ * MCP child processes do NOT inherit /dev/tty (ENXIO), so we find
+ * the terminal device that OpenCode (the parent) is connected to
+ * and open it directly.
+ */
+function findParentTTY() {
+    // Try own tty_nr from /proc/self/stat first
+    try {
+        const stat = readFileSync('/proc/self/stat', 'utf-8');
+        const parts = stat.split(' ');
+        const ttyNr = parseInt(parts[6], 10); // tty_nr field (7th field, 0-indexed 6)
+        if (ttyNr !== 0) {
+            const major = (ttyNr >> 8) & 0xfff;
+            const minor = (ttyNr & 0xff) | ((ttyNr >> 12) & 0xfff00);
+            if (major === 136) return `/dev/pts/${minor}`;       // /dev/pts/N
+            if (major === 4) return `/dev/tty${minor}`;          // /dev/ttyN
+            if (major === 3) return `/dev/tty`;                  // controlling tty
+        }
+    } catch { /* fall through */ }
+
+    // Walk up parent chain looking for a process with a readable PTY on fd/0
+    let pid = process.ppid;
+    for (let i = 0; i < 10; i++) {
+        try {
+            const fd0 = readlinkSync(`/proc/${pid}/fd/0`);
+            if (fd0.startsWith('/dev/pts/') || fd0.startsWith('/dev/tty')) {
+                // Verify it's actually openable for r/w
+                try {
+                    const testFd = openSync(fd0, 'r+');
+                    closeSync(testFd);
+                    return fd0;
+                } catch { /* try next */ }
+            }
+        } catch { /* try next */ }
+
+        // Move to parent's parent
+        try {
+            const stat = readFileSync(`/proc/${pid}/stat`, 'utf-8');
+            pid = parseInt(stat.split(' ')[3], 10); // ppid field
+            if (pid <= 1) break;
+        } catch { break; }
+    }
+
+    return null;
+}
+
+/** Reads a line of user input from the parent's PTY (synchronous, raw-mode safe). */
 async function readLineFromTTY(prompt) {
-    // Try /dev/tty first
     if (process.platform !== 'win32') {
         try {
-            const tty = createReadStream('/dev/tty');
-            return await new Promise((resolve, reject) => {
-                // If /dev/tty fails asynchronously, fall back immediately
-                tty.on('error', () => {
-                    tty.destroy();
-                    resolve(null); // signal fallback
-                });
-                tty.on('open', () => {
-                    const rl = createInterface({ input: tty, output: process.stderr });
-                    rl.question(prompt || '> ', (answer) => {
-                        rl.close();
-                        tty.destroy();
-                        resolve(answer);
-                    });
-                });
-            });
-        } catch {
-            // Synchronous error (unlikely) → fallback
+            return readLineFromTTYSync(prompt || '> ');
+        } catch (err) {
+            log(`[ask-user] PTY read failed: ${err.message}`);
         }
     }
 
-    // Fallback: if /dev/tty failed or Windows
+    // Fallback: read from stdin (Windows / no TTY available)
     log(
-        '[ask-user] /dev/tty not available, reading from stdin. ' +
+        '[ask-user] No terminal available, reading from stdin. ' +
             "If the prompt doesn't appear, check terminal settings."
     );
+    const { createInterface } = await import('readline');
     const rl = createInterface({ input: process.stdin, output: process.stderr });
     return await new Promise((resolve) => {
         rl.question(prompt || '> ', (answer) => {
@@ -88,6 +118,79 @@ async function readLineFromTTY(prompt) {
             resolve(answer);
         });
     });
+}
+
+/**
+ * Synchronous line read from the parent process PTY.
+ * Handles raw mode (no line buffering, no echo, no cooked processing)
+ * by reading byte-by-byte with manual echo and editing support.
+ */
+function readLineFromTTYSync(prompt) {
+    const ttyPath = findParentTTY();
+    if (!ttyPath) throw new Error('No TTY found for parent process');
+    const fd = openSync(ttyPath, 'r+');
+    try {
+        // Write prompt
+        writeSync(fd, Buffer.from(prompt, 'utf-8'), 0, Buffer.byteLength(prompt, 'utf-8'), null);
+
+        const buf = Buffer.alloc(1);
+        let line = '';
+        while (true) {
+            const bytesRead = readSync(fd, buf, 0, 1, null);
+            if (bytesRead === 0) break; // EOF (Ctrl+D)
+            const byte = buf[0];
+
+            // Ctrl+C → abort
+            if (byte === 0x03) {
+                writeSync(fd, Buffer.from('^C\n'));
+                throw new Error('User interrupted (Ctrl+C)');
+            }
+
+            // Ctrl+D → EOF
+            if (byte === 0x04) break;
+
+            // Newline (LF or CR) → done
+            if (byte === 0x0a) {
+                writeSync(fd, Buffer.from('\n'));
+                break;
+            }
+            if (byte === 0x0d) {
+                // CR — could be CRLF; break and discard any trailing LF
+                // (fd will be closed so orphaned LF is harmless)
+                writeSync(fd, Buffer.from('\n'));
+                break;
+            }
+
+            // Backspace (BS 0x08 or DEL 0x7f)
+            if (byte === 0x08 || byte === 0x7f) {
+                if (line.length > 0) {
+                    line = line.slice(0, -1);
+                    writeSync(fd, Buffer.from('\b \b')); // erase on screen
+                }
+                continue;
+            }
+
+            // Ctrl+U → kill line
+            if (byte === 0x15) {
+                for (let i = 0; i < line.length; i++) {
+                    writeSync(fd, Buffer.from('\b \b'));
+                }
+                line = '';
+                continue;
+            }
+
+            // Printable ASCII → accept and echo
+            if (byte >= 0x20 && byte <= 0x7e) {
+                line += String.fromCharCode(byte);
+                writeSync(fd, buf, 0, 1, null); // echo to terminal
+            }
+            // Ignore other control characters
+        }
+
+        return line;
+    } finally {
+        closeSync(fd);
+    }
 }
 
 // ─── Tool handler ─────────────────────────────────────────────────────────────

@@ -33,14 +33,14 @@
             "file": "assets/mcp/ask-user-server/",
             "description": "MCP server con tool ask_user para consultar al usuario con bloqueo de ejecución",
             "version": "0.5.3",
-            "sha256": "b1614dda3a7a8f27367a2da48d80145a43bba6b88f7719fc5a8e041dfb905435"
+            "sha256": "222e835a78d5f4b7ff4f16826a856407574b532db6dc02d0ba5ab9ff6d1e67b7"
         },
         {
             "name": "ostacky-controller",
             "file": "assets/mcp/ostacky-controller/",
             "description": "Máquina de estados persistida para Ostacky: validación de transiciones, consumo de decisiones, autorización de side effects, edición segura y snapshots reutilizables",
             "version": "0.5.3",
-            "sha256": "c66291cf170a7579e611580e8ac6f4bb15857d7e71b43fb793d92ea3a0013951"
+            "sha256": "9ee1fa4f74cbfa362c7f2e5018c4c2b58a645932c8e820ab9a2b59d80c8bbd0d"
         }
     ],
     "skills": [
