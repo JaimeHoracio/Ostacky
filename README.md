@@ -215,33 +215,33 @@ Tras instalar, el proyecto queda así:
 
 ```json
 {
-    "version": "0.5.3",
+    "version": "0.5.4",
     "lockedAt": "2025-01-01T00:00:00.000Z",
     "repo": "JaimeHoracio/Ostacky",
     "tag": "v0.5.3",
     "agents": {
         "ostacky": {
-            "version": "0.5.3",
+            "version": "0.5.4",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "abc123..."
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.5.3",
+            "version": "0.5.4",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "def456..."
         },
         "opsx-sync": {
-            "version": "0.5.3",
+            "version": "0.5.4",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "ghi789..."
         }
     },
     "skills": {
-        "brainstorming": { "version": "0.5.3", ... },
-        "execution-mode-evaluation": { "version": "0.5.3", ... },
-        "openspec-propose": { "version": "0.5.3", ... }
+        "brainstorming": { "version": "0.5.4", ... },
+        "execution-mode-evaluation": { "version": "0.5.4", ... },
+        "openspec-propose": { "version": "0.5.4", ... }
     }
 }
 ```

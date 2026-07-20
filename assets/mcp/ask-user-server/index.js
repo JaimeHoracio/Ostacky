@@ -63,11 +63,13 @@ function findParentTTY() {
         if (ttyNr !== 0) {
             const major = (ttyNr >> 8) & 0xfff;
             const minor = (ttyNr & 0xff) | ((ttyNr >> 12) & 0xfff00);
-            if (major === 136) return `/dev/pts/${minor}`;       // /dev/pts/N
-            if (major === 4) return `/dev/tty${minor}`;          // /dev/ttyN
-            if (major === 3) return `/dev/tty`;                  // controlling tty
+            if (major === 136) return `/dev/pts/${minor}`; // /dev/pts/N
+            if (major === 4) return `/dev/tty${minor}`; // /dev/ttyN
+            if (major === 3) return `/dev/tty`; // controlling tty
         }
-    } catch { /* fall through */ }
+    } catch {
+        /* fall through */
+    }
 
     // Walk up parent chain looking for a process with a readable PTY on fd/0
     let pid = process.ppid;
@@ -80,16 +82,22 @@ function findParentTTY() {
                     const testFd = openSync(fd0, 'r+');
                     closeSync(testFd);
                     return fd0;
-                } catch { /* try next */ }
+                } catch {
+                    /* try next */
+                }
             }
-        } catch { /* try next */ }
+        } catch {
+            /* try next */
+        }
 
         // Move to parent's parent
         try {
             const stat = readFileSync(`/proc/${pid}/stat`, 'utf-8');
             pid = parseInt(stat.split(' ')[3], 10); // ppid field
             if (pid <= 1) break;
-        } catch { break; }
+        } catch {
+            break;
+        }
     }
 
     return null;
@@ -270,7 +278,7 @@ async function handleRequest(msg) {
                     },
                     serverInfo: {
                         name: 'ask-user-server',
-                        version: '0.5.3',
+                        version: '0.5.4',
                     },
                 });
                 break;
