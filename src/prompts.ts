@@ -1,5 +1,6 @@
 import * as p from "@clack/prompts";
 import { join } from "path";
+import { existsSync } from "fs";
 import {
   fetchManifest,
   fetchLatestManifest,
@@ -28,8 +29,11 @@ import {
   installCodeGraph,
   setupOpenSpec,
   installEngram,
+  setupContext7,
   patchOpenCodeConfig,
   uninstallEngramConfig,
+  uninstallStackConfig,
+  ensureToolDirs,
   type OpenCodePaths,
 } from "./installer.js";
 import { readLockfile, getInstalledVersion, clearLockfile } from "./lockfile.js";
@@ -86,13 +90,13 @@ export function printPostInstallSteps(): void {
   );
 }
 
-async function doInstallStack() {
+async function doInstallStack(toolsDir?: string) {
   const spin = p.spinner();
   let allOk = true;
 
   // 1. CodeGraph
   spin.start("Instalando CodeGraph...");
-  const cg = installCodeGraph();
+  const cg = await installCodeGraph(toolsDir);
   spin.stop(cg.success ? `✓ ${cg.message}` : `✗ ${cg.message}`);
   if (!cg.success) allOk = false;
 
@@ -104,11 +108,17 @@ async function doInstallStack() {
 
   // 3. Engram
   spin.start("Instalando Engram...");
-  const eng = installEngram();
+  const eng = await installEngram(toolsDir);
   spin.stop(eng.success ? `✓ ${eng.message}` : `✗ ${eng.message}`);
   if (!eng.success) allOk = false;
 
-  // 4. Config
+  // 4. Context7
+  spin.start("Configurando Context7...");
+  const ctx = setupContext7(toolsDir);
+  spin.stop(ctx.success ? `✓ ${ctx.message}` : `✗ ${ctx.message}`);
+  if (!ctx.success) allOk = false;
+
+  // 5. Config
   spin.start("Verificando configuración...");
   const cfg = patchOpenCodeConfig();
   spin.stop(cfg.success ? `✓ ${cfg.message}` : `✗ ${cfg.message}`);
@@ -228,6 +238,10 @@ async function doInstallAll(manifest: Manifest, paths: OpenCodePaths) {
   const spin = p.spinner();
   let errors = 0;
 
+  // Crear estructura de directorios para herramientas externas desde el inicio
+  // — así existen incluso si algo falla antes de llegar al stack install
+  ensureToolDirs(paths.tools, ["codegraph", "engram", "context7"]);
+
   for (const agent of manifest.agents) {
     spin.start(`Descargando agente: ${agent.name}  (${agent.version})`);
     try {
@@ -272,16 +286,18 @@ async function doInstallAll(manifest: Manifest, paths: OpenCodePaths) {
     }
   }
 
-  // Instalar stack de herramientas (CodeGraph, OpenSpec, Engram)
-  if (errors === 0) {
-    p.log.info("Instalando stack de herramientas...");
-    await doInstallStack();
-  }
+  // Instalar stack de herramientas (CodeGraph, OpenSpec, Engram, Context7)
+  // Siempre se ejecuta — los errores de agents/skills/MCPs no deben bloquear el stack
+  // Los dirs de tools ya fueron creados al inicio de doInstallAll
+  p.log.info("Instalando stack de herramientas...");
+  await doInstallStack(paths.tools);
 
-  // Verificar que las herramientas del stack estén realmente disponibles
+  // Verificar que los binarios locales del stack existan
   const missingTools: string[] = [];
-  if (!isCommandAvailable("codegraph")) missingTools.push("CodeGraph");
-  if (!isCommandAvailable("engram")) missingTools.push("Engram");
+  const codegraphBin = join(paths.tools, "codegraph", "bin", "codegraph");
+  const engramBin = join(paths.tools, "engram", "bin", "engram");
+  if (!existsSync(codegraphBin)) missingTools.push("CodeGraph");
+  if (!existsSync(engramBin)) missingTools.push("Engram");
 
   if (missingTools.length > 0) {
     p.log.warn(
@@ -395,6 +411,42 @@ async function doAddSkill(manifest: Manifest, paths: OpenCodePaths) {
   }
 }
 
+async function doAddMcp(manifest: Manifest, paths: OpenCodePaths) {
+  const lockfile = readLockfile(paths.root);
+
+  const options = (manifest.mcpServers ?? []).map((m) => {
+    const installed = getInstalledVersion(lockfile, "mcpServers", m.name);
+    const hint = installed
+      ? `v${installed} instalado — ${m.description}`
+      : m.description;
+    return { value: m.name, label: `${m.name}  (v${m.version})`, hint };
+  });
+
+  if (options.length === 0) {
+    p.log.info("No hay MCP servers disponibles en el manifest.");
+    return;
+  }
+
+  const selected = await p.multiselect({
+    message: "¿Qué MCP servers deseas instalar?",
+    options,
+    required: true,
+  });
+  onCancel(selected);
+
+  const spin = p.spinner();
+  for (const name of selected as string[]) {
+    const item = manifest.mcpServers.find((m) => m.name === name)!;
+    spin.start(`Instalando MCP server: ${name}  (${item.version})`);
+    try {
+      await installMcpServer(item, manifest, paths);
+      spin.stop(`MCP server instalado: ${name}  (${item.version})`);
+    } catch (e) {
+      spin.stop(`Error: ${(e as Error).message}`);
+    }
+  }
+}
+
 /**
  * Update inteligente:
  * 1. Obtiene el último manifest via GitHub Releases API.
@@ -476,6 +528,8 @@ export async function runInteractiveMenu() {
       { value: "agent", label: "Instalar agente" },
       { value: "command", label: "Instalar command" },
       { value: "skill", label: "Instalar skill" },
+      { value: "mcp", label: "Instalar MCP server" },
+      { value: "stack", label: "Instalar stack de herramientas (CodeGraph, Engram, Context7)" },
       { value: "update", label: "Actualizar instalación" },
       { value: "uninstall", label: "Desinstalar" },
       { value: "exit", label: "Salir" },
@@ -504,6 +558,17 @@ export async function runInteractiveMenu() {
       printPostInstallSteps();
       p.outro("Listo.");
       break;
+    case "mcp":
+      await doAddMcp(manifest, paths);
+      printPostInstallSteps();
+      p.outro("Listo.");
+      break;
+    case "stack": {
+      ensureToolDirs(paths.tools, ["codegraph", "engram", "context7"]);
+      await doInstallStack(paths.tools);
+      p.outro("Listo.");
+      break;
+    }
     case "update": {
       // Para update siempre buscamos el manifest más reciente
       const latestManifest = await loadLatestManifest();
@@ -561,6 +626,49 @@ export async function runAddSkillCommand() {
   p.outro("Listo.");
 }
 
+export async function runAddMcpCommand() {
+  p.intro(" OpenCode Installer ");
+  const manifest = await loadManifest();
+  const paths = await resolveOpenCodePaths();
+  if (!paths) { p.outro("Cancelado."); return; }
+  await doAddMcp(manifest, paths);
+  printPostInstallSteps();
+  p.outro("Listo.");
+}
+
+export async function runInstallStackCommand() {
+  p.intro(" OpenCode Installer — Stack ");
+  const paths = await resolveOpenCodePaths();
+  if (!paths) { p.outro("Cancelado."); return; }
+  ensureToolDirs(paths.tools, ["codegraph", "engram", "context7"]);
+  await doInstallStack(paths.tools);
+  p.outro("Stack instalado.");
+}
+
+export async function runUninstallStackCommand() {
+  p.intro(" OpenCode Installer — Stack ");
+  const paths = await resolveOpenCodePaths();
+  if (!paths) { p.outro("Cancelado."); return; }
+
+  const confirm = await p.confirm({
+    message: "¿Remover la configuración del stack (CodeGraph, Engram, Context7) del proyecto? Los binarios globales no se tocan.",
+  });
+  onCancel(confirm);
+  if (!confirm) {
+    p.outro("Cancelado.");
+    return;
+  }
+
+  const result = uninstallStackConfig(paths);
+  if (result.success) {
+    p.log.success(result.message);
+  } else {
+    p.log.warn(result.message);
+  }
+
+  p.outro("Stack desinstalado.");
+}
+
 export async function runUpdateCommand() {
   p.intro(" OpenCode Installer ");
   const manifest = await loadLatestManifest();
@@ -596,7 +704,7 @@ async function doUninstallTotal(paths: OpenCodePaths) {
     pathsToDelete.push(join(paths.skills, name));
   }
   for (const name of Object.keys(lockfile.mcpServers ?? {})) {
-    pathsToDelete.push(join(paths.root, 'mcp', name));
+    pathsToDelete.push(join(paths.mcp, name));
   }
 
   p.note(
@@ -736,14 +844,50 @@ async function doUninstallSkill(paths: OpenCodePaths) {
   }
 }
 
+async function doUninstallMcp(paths: OpenCodePaths) {
+  const lockfile = readLockfile(paths.root);
+  if (!lockfile) {
+    p.log.warn("No hay instalación registrada.");
+    return;
+  }
+  const installed = Object.keys(lockfile.mcpServers ?? {});
+  if (installed.length === 0) {
+    p.log.info("No hay MCP servers instalados.");
+    return;
+  }
+
+  const options = installed.map((name) => ({
+    value: name,
+    label: name,
+    hint: `v${lockfile.mcpServers[name].version}`,
+  }));
+
+  const selected = await p.multiselect({
+    message: "¿Qué MCP servers querés desinstalar?",
+    options,
+    required: true,
+  });
+  onCancel(selected);
+
+  for (const name of selected as string[]) {
+    const ok = uninstallMcpServer(name, paths);
+    if (ok) {
+      p.log.success(`MCP server eliminado: ${name}`);
+    } else {
+      p.log.warn(`No se pudo eliminar el MCP server: ${name}`);
+    }
+  }
+}
+
 async function doUninstall(paths: OpenCodePaths) {
   const scope = await p.select({
     message: "¿Qué querés desinstalar?",
     options: [
-      { value: "all", label: "Todo (agentes + commands + skills)" },
+      { value: "all", label: "Todo (agentes + commands + skills + MCPs)" },
       { value: "agent", label: "Solo un agente" },
       { value: "command", label: "Solo un command" },
       { value: "skill", label: "Solo una skill" },
+      { value: "mcp", label: "Solo un MCP server" },
     ],
   });
   onCancel(scope);
@@ -760,6 +904,9 @@ async function doUninstall(paths: OpenCodePaths) {
       break;
     case "skill":
       await doUninstallSkill(paths);
+      break;
+    case "mcp":
+      await doUninstallMcp(paths);
       break;
   }
 }
@@ -879,6 +1026,43 @@ export async function runUninstallSkillCommand(name?: string) {
     }
   } else {
     await doUninstallSkill(paths);
+  }
+  p.outro("Listo.");
+}
+
+export async function runUninstallMcpCommand(name?: string) {
+  p.intro(" OpenCode Installer ");
+  const paths = await resolveOpenCodePaths();
+  if (!paths) { p.outro("Cancelado."); return; }
+
+  if (name) {
+    try {
+      validateFilePath(name);
+    } catch (e) {
+      p.log.warn(`Nombre inválido: ${(e as Error).message}`);
+      return;
+    }
+    const lockfile = readLockfile(paths.root);
+    if (!lockfile || !lockfile.mcpServers || !(name in lockfile.mcpServers)) {
+      p.log.warn(`${name} no está instalado.`);
+      return;
+    }
+    const dirPath = join(paths.mcp, name);
+    p.note(dirPath, `Se eliminará`);
+    const confirm = await p.confirm({ message: `¿Borrar el MCP server "${name}"?` });
+    onCancel(confirm);
+    if (!confirm) {
+      p.log.info("Cancelado.");
+      return;
+    }
+    const ok = uninstallMcpServer(name, paths);
+    if (ok) {
+      p.log.success(`MCP server eliminado: ${name}`);
+    } else {
+      p.log.warn(`No se pudo eliminar el MCP server: ${name}`);
+    }
+  } else {
+    await doUninstallMcp(paths);
   }
   p.outro("Listo.");
 }

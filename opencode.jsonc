@@ -25,7 +25,7 @@
     "codegraph": {
       "type": "local",
       "command": [
-        "codegraph",
+        ".opencode/tools/codegraph/bin/codegraph",
         "serve",
         "--mcp"
       ],
@@ -37,8 +37,6 @@
         "node",
         ".opencode/mcp/ask-user-server/index.js"
       ],
-      "cwd": ".",
-      "timeout": 10000,
       "enabled": true
     },
     "ostacky-controller": {
@@ -47,8 +45,19 @@
         "node",
         ".opencode/mcp/ostacky-controller/index.js"
       ],
-      "cwd": ".",
-      "timeout": 10000,
+      "enabled": true
+    },
+    "engram": {
+      "type": "local",
+      "command": [
+        ".opencode/tools/engram/bin/engram",
+        "mcp"
+      ],
+      "enabled": true
+    },
+    "context7": {
+      "type": "remote",
+      "url": "https://mcp.context7.com/mcp",
       "enabled": true
     }
   }

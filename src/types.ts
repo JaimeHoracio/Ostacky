@@ -4,4 +4,6 @@ export interface OpenCodePaths {
   agents: string;
   commands: string;
   skills: string;
+  mcp: string;
+  tools: string;
 }

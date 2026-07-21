@@ -7,27 +7,35 @@ import {
   runAddAgentCommand,
   runAddCommandCommand,
   runAddSkillCommand,
+  runAddMcpCommand,
+  runInstallStackCommand,
+  runUninstallStackCommand,
   runUpdateCommand,
   runUninstallCommand,
   runUninstallAgentCommand,
   runUninstallCommandCommand,
   runUninstallSkillCommand,
+  runUninstallMcpCommand,
 } from "./prompts.js";
 
 const HELP = `
-ostacky — Instalador de agentes, comandos y skills para OpenCode
+ostacky — Instalador de agentes, comandos, skills y MCPs para OpenCode
 
 Uso:
   npx ostacky                    Menú interactivo (instalación completa)
-  npx ostacky install            Instalar TODO (agente + skills + CodeGraph + OpenSpec + Engram)
+  npx ostacky install            Instalar TODO (agente + skills + MCPs + CodeGraph + OpenSpec + Engram + Context7)
   npx ostacky add agent          Agregar agente(s)
   npx ostacky add command        Agregar command(s)
   npx ostacky add skill          Agregar skill(s)
+  npx ostacky add mcp            Agregar MCP server(s)
+  npx ostacky install-stack      Instalar solo el stack de herramientas (CodeGraph, OpenSpec, Engram, Context7)
+  npx ostacky uninstall-stack    Remover la configuración del stack del proyecto
   npx ostacky update             Actualizar instalación
   npx ostacky uninstall          Desinstalar todo
   npx ostacky uninstall agent    Desinstalar agente(s)
   npx ostacky uninstall command  Desinstalar command(s)
   npx ostacky uninstall skill    Desinstalar skill(s)
+  npx ostacky uninstall mcp      Desinstalar MCP server(s)
   npx ostacky --help             Mostrar esta ayuda
   npx ostacky --version          Mostrar versión
 `.trim();
@@ -40,6 +48,14 @@ async function main() {
       await runInstallCommand();
       break;
 
+    case "install-stack":
+      await runInstallStackCommand();
+      break;
+
+    case "uninstall-stack":
+      await runUninstallStackCommand();
+      break;
+
     case "add":
       if (subcmd === "agent") {
         await runAddAgentCommand();
@@ -47,8 +63,10 @@ async function main() {
         await runAddCommandCommand();
       } else if (subcmd === "skill") {
         await runAddSkillCommand();
+      } else if (subcmd === "mcp") {
+        await runAddMcpCommand();
       } else {
-        console.error(`Tipo desconocido: "${subcmd}". Usa 'agent', 'command' o 'skill'.`);
+        console.error(`Tipo desconocido: "${subcmd}". Usa 'agent', 'command', 'skill' o 'mcp'.`);
         process.exit(1);
       }
       break;
@@ -67,11 +85,14 @@ async function main() {
       } else if (subcmd === "skill") {
         const name = process.argv[4];
         await runUninstallSkillCommand(name);
+      } else if (subcmd === "mcp") {
+        const name = process.argv[4];
+        await runUninstallMcpCommand(name);
       } else if (subcmd === undefined) {
         await runUninstallCommand();
       } else {
         console.error(
-          `Subcomando desconocido: "${subcmd}". Usa 'agent', 'command', 'skill' o nada.`
+          `Subcomando desconocido: "${subcmd}". Usa 'agent', 'command', 'skill', 'mcp' o nada.`
         );
         process.exit(1);
       }

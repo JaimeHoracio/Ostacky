@@ -215,33 +215,33 @@ Tras instalar, el proyecto queda así:
 
 ```json
 {
-    "version": "0.5.4",
+    "version": "0.5.5",
     "lockedAt": "2025-01-01T00:00:00.000Z",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.5.3",
+    "tag": "v0.5.5",
     "agents": {
         "ostacky": {
-            "version": "0.5.4",
+            "version": "0.5.5",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "abc123..."
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.5.4",
+            "version": "0.5.5",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "def456..."
         },
         "opsx-sync": {
-            "version": "0.5.4",
+            "version": "0.5.5",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "ghi789..."
         }
     },
     "skills": {
-        "brainstorming": { "version": "0.5.4", ... },
-        "execution-mode-evaluation": { "version": "0.5.4", ... },
-        "openspec-propose": { "version": "0.5.4", ... }
+        "brainstorming": { "version": "0.5.5", ... },
+        "execution-mode-evaluation": { "version": "0.5.5", ... },
+        "openspec-propose": { "version": "0.5.5", ... }
     }
 }
 ```
@@ -271,7 +271,7 @@ Es opcional y solo necesario si algo falló durante la instalación o si querés
 ## Seguridad
 
 - `opencode.jsonc` se versiona en el repo para compartir permisos y MCP de forma reproducible.
-- Las URLs de descarga usan **tags de GitHub** (ej. `v0.5.3`), nunca `main` — instalaciones reproducibles
+- Las URLs de descarga usan **tags de GitHub** (ej. `v0.5.5`), nunca `main` — instalaciones reproducibles
 - Cada path de archivo descargado es validado para prevenir **path traversal**
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
 - El cache local (`~/.opencode/cache/`) también valida integridad al servir archivos cacheados
@@ -291,6 +291,31 @@ Los archivos descargados se guardan en:
 ```
 
 Si ya existe un archivo en cache con el hash correcto, no se hace ninguna petición de red.
+
+## Comandos útiles de las herramientas
+
+### Engram (memoria persistente)
+
+Engram está instalado localmente en `.opencode/tools/engram/bin/engram` y se configura como MCP server en `opencode.json`. Desde el chat de OpenCode, usá las tools de Engram directamente. Algunos comandos CLI útiles:
+
+| Comando | Qué hace |
+| --- | --- |
+| `.opencode/tools/engram/bin/engram list-projects` | Lista todos los proyectos con memoria en Engram |
+| `.opencode/tools/engram/bin/engram clean-content --project <nombre>` | Borra el contenido de memoria de un proyecto específico |
+| `.opencode/tools/engram/bin/engram clean-content --all` | Borra TODO el contenido de memoria de todos los proyectos |
+| `.opencode/tools/engram/bin/engram serve` | Inicia el server de session tracking (puerto 7437) |
+| `.opencode/tools/engram/bin/engram --version` | Muestra la versión instalada |
+
+### CodeGraph (grafo de código)
+
+CodeGraph está instalado en `.opencode/tools/codegraph/bin/codegraph` y se configura como MCP server. Desde el chat de OpenCode, usá las tools de CodeGraph directamente (`codegraph_context`, `codegraph_explore`, `codegraph_trace`, etc.). Algunos comandos CLI útiles:
+
+| Comando | Qué hace |
+| --- | --- |
+| `.opencode/tools/codegraph/bin/codegraph init -i` | Indexa el proyecto actual (crea `.codegraph/` con el grafo) |
+| `.opencode/tools/codegraph/bin/codegraph sync` | Sincroniza cambios incrementales al grafo |
+| `.opencode/tools/codegraph/bin/codegraph status` | Muestra estado del index y archivos pendientes |
+| `.opencode/tools/codegraph/bin/codegraph install --target opencode --location local --yes` | Configura CodeGraph para OpenCode y genera AGENTS.md |
 
 ## Licencia
 

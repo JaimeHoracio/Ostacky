@@ -91,7 +91,7 @@ export function clearLockfile(opencodeRoot: string): void {
     if (!lockfile) {
         // Nothing to clear; write a fresh minimal lockfile.
         writeLockfile(opencodeRoot, {
-            version: '0.5.4',
+            version: '0.5.5',
             lockedAt: new Date().toISOString(),
             repo: '',
             tag: '',

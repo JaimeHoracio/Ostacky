@@ -5,6 +5,8 @@ agent: build
 
 Instala el stack tecnológico de desarrollo para OpenCode. **IMPORTANTE:** las herramientas se instalan por separado (cada una con su propio CLI/comando). `npx ostacky install` solo instala el agente y commands de Ostacky en `.opencode/`. Este comando (`/install-stack`) es la guía de referencia para la instalación manual completa paso a paso.
 
+**Nota:** A partir de v0.5.5, `npx ostacky install` ya instala automáticamente el stack completo (CodeGraph, OpenSpec, Engram, Context7, MCPs bundleados) además del agente y skills. Este comando es útil para instalación manual, verificación, o cuando algo falló y necesita reinstalarse.
+
 **RESTRICCIÓN ABSOLUTA:** instalar ÚNICAMENTE para OpenCode. Está terminantemente prohibido crear o modificar archivos en `.claude/`, `.kiro/`, `.cursor/`, `.gemini/`, `.codex/`, `.antigravity/`, `.windsurf/` o cualquier otro directorio de plataformas externas.
 
 **Origen del set curado:** el set de skills (6 Superpowers + 4 OpenSpec) referenciado en `assets/agents/ostacky.md` está bundleado en `assets/skills/` dentro del paquete npm. Context7 agrega su propio skill vía `npx ctx7 setup --opencode`. La definición del set y su trazabilidad viven en `manifest.json` y `.opencode/ostacky-lock.json`.
@@ -13,29 +15,49 @@ Instala el stack tecnológico de desarrollo para OpenCode. **IMPORTANTE:** las h
 
 ## Paso 1 — CodeGraph
 
-Verifica si `codegraph` está disponible en el PATH:
+CodeGraph se instala **localmente** en `.opencode/tools/codegraph/` — no se instala nada globalmente. El binario se descarga desde GitHub Releases para tu plataforma (linux/darwin x64/arm64, win32).
+
+`npx ostacky install` (o `npx ostacky install-stack`) hace esto automáticamente. Para instalación manual:
+
+Verificá si ya está descargado localmente:
 
 ```bash
-codegraph --version
+.opencode/tools/codegraph/bin/codegraph --version
 ```
 
-Si no está instalado, instálalo según el sistema operativo:
-- **Windows:** `irm https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.ps1 | iex`
-- **macOS/Linux:** `curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | sh`
-
-Luego instala CodeGraph localmente, apuntando solo a OpenCode:
-
-```bash
-codegraph install --target=opencode --location=local --yes
-```
+Si no está, descargalo manualmente desde [GitHub Releases](https://github.com/colbymchenry/codegraph/releases) y extraelo a `.opencode/tools/codegraph/` (el tar.gz tiene estructura `codegraph-{os}-{arch}/bin/codegraph`, `lib/`, `node`).
 
 Inicializa e indexa el proyecto actual:
 
 ```bash
-codegraph init -i
+.opencode/tools/codegraph/bin/codegraph init -i
 ```
 
-Verifica que el MCP server esté configurado en `opencode.json` (campo `mcpServers`) y que NO se hayan tocado configuraciones de otras plataformas.
+Verifica que el MCP server esté configurado en `opencode.json` apuntando al binario local:
+
+```json
+{
+    "mcp": {
+        "codegraph": {
+            "type": "local",
+            "command": [".opencode/tools/codegraph/bin/codegraph", "serve", "--mcp"],
+            "enabled": true
+        }
+    }
+}
+```
+
+### Desinstalar CodeGraph
+
+Para remover CodeGraph del proyecto:
+
+```bash
+# Remover el índice local
+rm -rf .codegraph/
+# Remover el binario local
+rm -rf .opencode/tools/codegraph/
+# Remover la entrada MCP de opencode.json (editar el archivo)
+```
 
 ---
 
@@ -47,31 +69,40 @@ El controller MCP se configura como server local en `opencode.json`. Si el contr
 
 ```json
 {
-  "mcp": {
-    "ostacky-controller": {
-      "type": "local",
-      "command": ["node", "assets/mcp/ostacky-controller/index.js"],
-      "enabled": true
+    "mcp": {
+        "ask-user-server": {
+            "type": "local",
+            "command": ["node", ".opencode/mcp/ask-user-server/index.js"],
+            "enabled": true
+        },
+        "ostacky-controller": {
+            "type": "local",
+            "command": ["node", ".opencode/mcp/ostacky-controller/index.js"],
+            "enabled": true
+        }
     }
-  }
 }
 ```
 
 **Notas:**
+
 - El controller no es obligatorio para operar Ostacky — es un refuerzo de disciplina.
 - Sin controller, Ostacky usa las mismas reglas en lenguaje natural pero sin validación de transiciones ni persistencia de estado.
 - El controller nunca autoriza subagentes sin confirmación explícita del usuario.
+- Los MCP servers se copian como archivos autocontenidos (bundleados en `dist/mcp/` durante el build). No requieren `npm install` ni `bun install` — cada `index.js` es un único archivo con todas las dependencias inlined.
+- El installer maneja `opencode.jsonc` (con comentarios) correctamente — strippea comentarios antes de parsear y escribe JSON válido de vuelta.
+- Si CodeGraph crea un `AGENTS.md` en la raíz del proyecto, el installer lo mueve a `.opencode/tools/codegraph/AGENTS.md` automáticamente.
 
 ---
 
 ## Paso 2 — Skills curadas (bundleadas)
 
-Las **10 skills curadas del set base** (6 Superpowers + 4 OpenSpec) están bundleadas dentro del paquete Ostacky en `assets/skills/`. No se descargan ni clonan; ya vienen en el paquete npm. Context7 agrega su propia skill aparte (Paso 6).
+Las **11 skills curadas del set base** (6 Superpowers + 4 OpenSpec + 1 Ostacky) están bundleadas dentro del paquete Ostacky en `assets/skills/`. No se descargan ni clonan; ya vienen en el paquete npm. Context7 agrega su propia skill aparte (Paso 6).
 
 Copiá cada skill bundleada a `.opencode/skills/<nombre>/` preservando la estructura interna (incluyendo `SKILL.md` y cualquier subdirectorio como `scripts/` o `references/`):
 
 ```bash
-# Ejemplo para una skill; aplicar a las 10
+# Ejemplo para una skill; aplicar a las 11
 mkdir -p .opencode/skills/brainstorming
 cp -r assets/skills/brainstorming/* .opencode/skills/brainstorming/
 ```
@@ -81,6 +112,8 @@ cp -r assets/skills/brainstorming/* .opencode/skills/brainstorming/
 **Superpowers (6):** `brainstorming`, `writing-plans`, `tdd`, `subagent-driven-development`, `dispatching-parallel-agents`, `review`
 
 **OpenSpec (4):** `openspec-explore`, `openspec-propose`, `openspec-apply-change`, `openspec-archive-change`
+
+**Ostacky (1):** `execution-mode-evaluation` — análisis de modo de ejecución (INLINE vs SUBAGENT_DRIVEN)
 
 **NO se requiere** el plugin `superpowers@git+...` en `opencode.json`. Las skills viven en `.opencode/skills/` y OpenCode las descubre automáticamente desde ahí.
 
@@ -94,18 +127,38 @@ Leé `opencode.json` (o `opencode.jsonc`) en la raíz del proyecto.
 
 **Preservá** sin tocar el bloque `mcp.codegraph` configurado en el Paso 1.
 
-**Resultado final esperado** de `opencode.json`:
+**Resultado final esperado** de `opencode.json` (o `opencode.jsonc`):
 
 ```json
 {
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "codegraph": {
-      "type": "local",
-      "command": ["codegraph", "serve", "--mcp"],
-      "enabled": true
+    "$schema": "https://opencode.ai/config.json",
+    "mcp": {
+        "codegraph": {
+            "type": "local",
+            "command": [".opencode/tools/codegraph/bin/codegraph", "serve", "--mcp"],
+            "enabled": true
+        },
+        "engram": {
+            "type": "local",
+            "command": [".opencode/tools/engram/bin/engram", "mcp"],
+            "enabled": true
+        },
+        "context7": {
+            "type": "remote",
+            "url": "https://mcp.context7.com/mcp",
+            "enabled": true
+        },
+        "ask-user-server": {
+            "type": "local",
+            "command": ["node", ".opencode/mcp/ask-user-server/index.js"],
+            "enabled": true
+        },
+        "ostacky-controller": {
+            "type": "local",
+            "command": ["node", ".opencode/mcp/ostacky-controller/index.js"],
+            "enabled": true
+        }
     }
-  }
 }
 ```
 
@@ -118,7 +171,7 @@ Leé `opencode.json` (o `opencode.jsonc`) en la raíz del proyecto.
 Inicializá OpenSpec configurándolo exclusivamente para OpenCode:
 
 ```bash
-openspec init --tools opencode --force
+bunx openspec init --tools opencode --force
 ```
 
 El flag `--tools opencode` garantiza que solo se generen archivos en `.opencode/skills/` y `.opencode/commands/`. El flag `--force` limpia archivos legacy de inicializaciones anteriores que hayan podido configurar otras plataformas.
@@ -126,10 +179,24 @@ El flag `--tools opencode` garantiza que solo se generen archivos en `.opencode/
 Si OpenSpec ya estaba correctamente inicializado para opencode, ejecutá en su lugar:
 
 ```bash
-openspec update
+bunx openspec update
 ```
 
 **IMPORTANTE:** verificar después de la ejecución que no existan carpetas `.claude/`, `.kiro/`, `.cursor/` ni similares generadas por OpenSpec. Si existen, eliminalas.
+
+### Desinstalar OpenSpec
+
+Para remover los archivos de OpenSpec del proyecto:
+
+```bash
+# Eliminar skills y commands de OpenSpec generados en .opencode/
+rm -rf .opencode/skills/openspec-explore .opencode/skills/openspec-propose \
+       .opencode/skills/openspec-apply-change .opencode/skills/openspec-archive-change
+# Los specs y changes viven en openspec/ — eliminarlos si no los necesitás:
+rm -rf openspec/
+```
+
+Esto no desinstala el CLI de OpenSpec (que se ejecuta via `npx`), solo limpia los artefactos del proyecto.
 
 ---
 
@@ -137,81 +204,74 @@ openspec update
 
 [Engram](https://github.com/Gentleman-Programming/engram) es el sistema de memoria persistente para agentes de IA. Se instala como un único binario Go con SQLite + FTS5, sin Node.js, Python ni Docker.
 
+**Instalación local:** Engram se descarga **localmente** a `.opencode/tools/engram/bin/engram` desde GitHub Releases — no se instala nada globalmente. `npx ostacky install` hace esto automáticamente.
+
 **RESTRICCIÓN:** configurar ÚNICAMENTE para OpenCode. Está terminantemente prohibido crear archivos en `.claude/`, `.kiro/`, `.cursor/`, `.gemini/`, `.codex/`, `.antigravity/`, `.windsurf/` o cualquier otro directorio de plataformas externas.
 
-### Verificar instalación actual
+### Verificar instalación local
 
-Chequeá si Engram ya está disponible:
+Chequeá si el binario local de Engram ya está disponible:
 
 ```bash
-engram --version 2>/dev/null || echo "no-instalado"
+.opencode/tools/engram/bin/engram --version 2>/dev/null || echo "no-instalado"
 ```
 
-#### Si ya está instalado
+#### Si ya está descargado localmente
 
-Si el comando devuelve una versión, Engram ya está en el sistema. Verificá si es la más reciente comparando con la [última release en GitHub](https://github.com/Gentleman-Programming/engram/releases).
+Si el comando devuelve una versión, Engram ya está disponible. Verificá si es la más reciente comparando con la [última release en GitHub](https://github.com/Gentleman-Programming/engram/releases).
 
-Si está desactualizado, actualizá según cómo lo instalaste originalmente:
-
-- **go install:** `go install github.com/Gentleman-Programming/engram/cmd/engram@latest`
-- **Homebrew:** `brew update && brew upgrade engram`
-- **Binario propio:** descargá la nueva versión desde [releases](https://github.com/Gentleman-Programming/engram/releases) y reemplazá el binario
+Si está desactualizado, descargá la nueva versión desde [releases](https://github.com/Gentleman-Programming/engram/releases) y reemplazá el binario en `.opencode/tools/engram/bin/engram`.
 
 Luego de actualizar, saltá directo a [Configurar para OpenCode](#configurar-para-opencode) — no necesitás reinstalar.
 
 #### Si no está instalado
 
-Preferí métodos de instalación local antes que global:
+Descargá el binario desde [GitHub Releases](https://github.com/Gentleman-Programming/engram/releases) para tu plataforma:
 
-**Opción recomendada — `go install` (local por usuario, sin sudo):**
+- **Linux x64:** `engram_{version}_linux_amd64.tar.gz`
+- **Linux arm64:** `engram_{version}_linux_arm64.tar.gz`
+- **macOS x64:** `engram_{version}_darwin_amd64.tar.gz`
+- **macOS arm64:** `engram_{version}_darwin_arm64.tar.gz`
+- **Windows x64:** `engram_{version}_windows_amd64.zip`
+- **Windows arm64:** `engram_{version}_windows_arm64.zip`
 
-```bash
-go install github.com/Gentleman-Programming/engram/cmd/engram@latest
-```
-
-El binario se instala en `$GOPATH/bin/engram` (usualmente `~/go/bin/engram`).
-
-**Alternativa — Homebrew (macOS/Linux):**
-
-```bash
-brew install gentleman-programming/tap/engram
-```
-
-**Alternativa — binario en el proyecto (máxima localidad):**
+Extraelo a `.opencode/tools/engram/bin/`:
 
 ```bash
-mkdir -p .opencode/bin
-# Descargar el binario desde https://github.com/Gentleman-Programming/engram/releases
-# y colocarlo en .opencode/bin/engram, luego:
-chmod +x .opencode/bin/engram
+mkdir -p .opencode/tools/engram/bin
+# Descargar y extraer el binario ahí
+chmod +x .opencode/tools/engram/bin/engram  # Unix only
 ```
 
 ### Configurar para OpenCode
 
-Una vez que Engram está instalado (ya sea porque ya lo tenías, lo actualizaste o lo instalaste ahora), ejecutá el setup que lo registra exclusivamente para OpenCode:
+Una vez que Engram está descargado localmente, ejecutá el setup que instala el plugin de OpenCode:
 
 ```bash
-engram setup opencode
+.opencode/tools/engram/bin/engram setup opencode
 ```
 
 Este comando:
-- Agrega el MCP server de Engram en `opencode.json` (tipo `local`, comando `engram mcp`)
-- Instala el plugin de Engram para OpenCode
+
+- Instala el plugin de Engram para OpenCode en `~/.config/opencode/plugins/`
+- **NO** agrega la entrada MCP al `opencode.json` del proyecto — eso lo hace `npx ostacky install` automáticamente
 - **NO** toca `.claude/`, `.cursor/`, `.gemini/` ni ninguna otra plataforma
 
-Verificá que `opencode.json` contenga la entrada MCP de Engram:
+Verificá que `opencode.json` contenga la entrada MCP de Engram apuntando al binario local (agregada por el installer de Ostacky, no por `engram setup`):
 
 ```json
 {
-  "mcp": {
-    "engram": {
-      "type": "local",
-      "command": ["engram", "mcp"],
-      "enabled": true
+    "mcp": {
+        "engram": {
+            "type": "local",
+            "command": [".opencode/tools/engram/bin/engram", "mcp"],
+            "enabled": true
+        }
     }
-  }
 }
 ```
+
+Si la entrada no está presente (por ejemplo si instalaste Engram manualmente sin Ostacky), agregala a mano al `opencode.json` o `opencode.jsonc`.
 
 ### Session tracking
 
@@ -222,6 +282,24 @@ engram serve
 ```
 
 Corre en el puerto 7437 por defecto. Los datos se almacenan en `~/.engram/engram.db` (SQLite local).
+
+### Desinstalar Engram del proyecto
+
+Para remover la configuración de Engram del proyecto (sin borrar los datos):
+
+```bash
+# Remover la entrada mcp.engram de opencode.json (editar el archivo)
+# Remover el plugin de Engram de OpenCode:
+rm -f ~/.config/opencode/plugins/engram.ts
+# Remover el binario local
+rm -rf .opencode/tools/engram/
+```
+
+Para borrar todos los datos de Engram (CUIDADO: borra toda la memoria persistente):
+
+```bash
+rm -rf ~/.engram/
+```
 
 ---
 
@@ -254,6 +332,7 @@ npx ctx7 setup --opencode
 ```
 
 Este comando:
+
 - Autentica vía OAuth y genera una API key
 - Instala un skill en `.opencode/skills/context7/` que el agente Ostacky usa automáticamente
 - Pregunta si preferís modo CLI + Skills o MCP
@@ -265,12 +344,12 @@ Agregá manualmente la entrada MCP en `opencode.json`:
 
 ```json
 {
-  "mcp": {
-    "context7": {
-      "type": "remote",
-      "url": "https://mcp.context7.com/mcp"
+    "mcp": {
+        "context7": {
+            "type": "remote",
+            "url": "https://mcp.context7.com/mcp"
+        }
     }
-  }
 }
 ```
 
@@ -278,15 +357,15 @@ Si tenés una API key de Context7 (recomendado para mejores rate limits):
 
 ```json
 {
-  "mcp": {
-    "context7": {
-      "type": "remote",
-      "url": "https://mcp.context7.com/mcp",
-      "headers": {
-        "CONTEXT7_API_KEY": "{env:CONTEXT7_API_KEY}"
-      }
+    "mcp": {
+        "context7": {
+            "type": "remote",
+            "url": "https://mcp.context7.com/mcp",
+            "headers": {
+                "CONTEXT7_API_KEY": "{env:CONTEXT7_API_KEY}"
+            }
+        }
     }
-  }
 }
 ```
 
@@ -317,16 +396,71 @@ use context7 to find Next.js 15 app router examples
 
 ---
 
+## Estructura de herramientas
+
+Cada herramienta se instala en su propia carpeta dentro de `.opencode/` para mantener una instalación limpia y aislada. El installer crea automáticamente `.opencode/tools/<nombre>/` para cada herramienta externa:
+
+```
+.opencode/
+├── agents/          # Agentes OpenCode
+│   └── ostacky.md
+├── commands/        # Comandos OpenCode
+│   ├── install-stack.md      # Bundleado por Ostacky
+│   ├── opsx-sync.md          # Bundleado por Ostacky
+│   ├── opsx-apply.md         # Generado por OpenSpec
+│   ├── opsx-archive.md       # Generado por OpenSpec
+│   ├── opsx-explore.md       # Generado por OpenSpec
+│   └── opsx-propose.md       # Generado por OpenSpec
+├── mcp/             # MCP servers bundleados (con node_modules)
+│   ├── ask-user-server/
+│   │   ├── index.js
+│   │   ├── package.json
+│   │   └── node_modules/
+│   └── ostacky-controller/
+│       ├── index.js
+│       ├── package.json
+│       └── node_modules/
+├── skills/          # Skills bundleadas
+│   ├── brainstorming/
+│   ├── writing-plans/
+│   ├── tdd/
+│   ├── subagent-driven-development/
+│   ├── dispatching-parallel-agents/
+│   ├── review/
+│   ├── openspec-explore/
+│   ├── openspec-propose/
+│   ├── openspec-apply-change/
+│   ├── openspec-archive-change/
+│   └── execution-mode-evaluation/
+├── tools/           # Config y archivos de herramientas externas
+│   ├── codegraph/   # Config de CodeGraph (AGENTS.md si codegraph lo crea)
+│   ├── engram/      # Config project-local de Engram
+│   └── context7/    # Config de Context7
+└── plugins/         # Plugins de OpenCode
+```
+
+**Notas sobre la estructura:**
+
+- `.codegraph/` (índice de CodeGraph) vive en la raíz del proyecto — CodeGraph lo espera ahí.
+- El binario de CodeGraph es **local al proyecto** en `.opencode/tools/codegraph/bin/codegraph` (con su runtime Node vendored en `.opencode/tools/codegraph/node`). No se instala globalmente.
+- El binario de Engram es **local al proyecto** en `.opencode/tools/engram/bin/engram`. No se instala globalmente.
+- Context7 se registra como MCP remoto en `opencode.jsonc`. Su skill opcional se instala via `npx ctx7 setup --opencode` en `.opencode/skills/context7/`.
+- Los MCP servers bundleados tienen sus `node_modules/` instalados localmente dentro de `.opencode/mcp/<name>/`.
+
 ## Verificación final
 
 Confirmá que:
 
-1. `.opencode/skills/` contiene las skills curadas (6 Superpowers + 4 OpenSpec) y opcionalmente `context7/` si se instaló con `npx ctx7 setup --opencode`
-2. `.opencode/commands/` contiene los 5 opsx-* commands (`opsx-apply`, `opsx-archive`, `opsx-explore`, `opsx-propose`, `opsx-sync`)
-3. `opencode.json` (o `.jsonc`) tiene los bloques `mcp.codegraph` y `mcp.engram` — sin campo `plugin`
+1. `.opencode/skills/` contiene las skills curadas (6 Superpowers + 4 OpenSpec + 1 Ostacky `execution-mode-evaluation`) y opcionalmente `context7/` si se instaló con `npx ctx7 setup --opencode`
+2. `.opencode/commands/` contiene los commands bundleados por Ostacky (`install-stack`, `opsx-sync`) y los 4 commands generados por OpenSpec (`opsx-apply`, `opsx-archive`, `opsx-explore`, `opsx-propose`) si OpenSpec fue inicializado en el Paso 4
+3. `opencode.json` (o `.jsonc`) tiene los bloques `mcp.codegraph` (apuntando a `.opencode/tools/codegraph/bin/codegraph`), `mcp.engram` (apuntando a `.opencode/tools/engram/bin/engram`), `mcp.context7` y los MCP bundleados (`ask-user-server`, `ostacky-controller`) — sin campo `plugin`
 4. `.codegraph/` existe en la raíz del proyecto (índice local de CodeGraph)
-5. `engram --version` funciona y `engram setup opencode` ya fue ejecutado
-6. Context7 configurado: `ctx7 --version` disponible y/o `.opencode/skills/context7/SKILL.md` existe
-7. **NO existen** archivos generados en `.claude/`, `.kiro/`, `.cursor/`, `.gemini/`, `.codex/` ni ningún directorio de otra plataforma
+5. `.opencode/tools/codegraph/bin/codegraph --version` funciona (binario local)
+6. `.opencode/tools/engram/bin/engram --version` funciona (binario local)
+7. Context7 configurado: `mcp.context7` presente en `opencode.jsonc` y/o `.opencode/skills/context7/SKILL.md` existe
+8. Los MCP bundleados tienen sus dependencias instaladas en `.opencode/mcp/*/node_modules/`
+9. `.opencode/tools/` contiene subdirectorios para `codegraph/`, `engram/` y `context7/`
+10. **NO existen** archivos generados en `.claude/`, `.kiro/`, `.cursor/`, `.gemini/`, `.codex/` ni ningún directorio de otra plataforma
+11. **NO existe** `AGENTS.md` en la raíz del proyecto (si CodeGraph lo creó, el installer lo mueve a `.opencode/tools/codegraph/`)
 
 Reportá el estado de cada componente con ✓ o ✗.
