@@ -1,14 +1,14 @@
 {
-    "version": "0.5.5",
+    "version": "0.5.6",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.5.5",
+    "tag": "v0.5.6",
     "agents": [
         {
             "name": "ostacky",
             "file": "assets/agents/ostacky.md",
             "description": "Orquestador principal con ruteo por nivel de impacto, máquina de estados persistida (controller MCP), edición segura con 3 outcomes, y delegación en OpenSpec + Superpowers",
-            "version": "0.5.5",
-            "sha256": "b96e6d8d85c1264675c31f364adddb4baba379aae57ccdcd3260f45517dee714"
+            "version": "0.5.6",
+            "sha256": "e9848ba26a932a7c2b78c998d750e4d011f95085899bab95cb6410cf74802ff3"
         }
     ],
     "commands": [
@@ -16,31 +16,24 @@
             "name": "install-stack",
             "file": "assets/commands/install-stack.md",
             "description": "Instala el stack tecnológico del proyecto (CodeGraph, skills, OpenSpec, Engram, Context7, controller MCP)",
-            "version": "0.5.5",
-            "sha256": "04d2b8e1944f121595fdad0711a48eaf0409fcab599f816ec9480a7df98914af"
+            "version": "0.5.6",
+            "sha256": "95f207e63015a6772cf60b3d8dd8878d0fb65229be925ec8c3d234c570553f29"
         },
         {
             "name": "opsx-sync",
             "file": "assets/commands/opsx-sync.md",
             "description": "Sincroniza delta specs del change activo sin inicializar CodeGraph si ya existe índice",
-            "version": "0.5.5",
+            "version": "0.5.6",
             "sha256": "ed9948f1910743b672e1dfad496bc96972a224a98b063232be39290d43068c50"
         }
     ],
     "mcpServers": [
         {
-            "name": "ask-user-server",
-            "file": "assets/mcp/ask-user-server/",
-            "description": "MCP server con tool ask_user para consultar al usuario con bloqueo de ejecución",
-            "version": "0.5.5",
-            "sha256": "e9ae702eb8b05d18742d64edf58fd55c5faf7b5ce24d62370918c619fa48cc24"
-        },
-        {
             "name": "ostacky-controller",
             "file": "assets/mcp/ostacky-controller/",
             "description": "Máquina de estados persistida para Ostacky: 13 tools MCP para ciclo completo de request (start_request → discovery → route → execution → sync → done), edición segura con validación de transiciones y persistencia atómica",
-            "version": "0.5.5",
-            "sha256": "9d2a76528b899096fa160ee864f42002fa4dbd81dd47501bd16801e06c7b4dff"
+            "version": "0.5.6",
+            "sha256": "70b8eaec4248cffb90a19625a8ff99dcc9cfe9e678c25093358a31409975aeb0"
         }
     ],
     "skills": [
@@ -48,78 +41,85 @@
             "name": "execution-mode-evaluation",
             "file": "assets/skills/execution-mode-evaluation/SKILL.md",
             "description": "Skill de análisis de modo de ejecución — output reconciliado con controller snapshot contract (recommendation field)",
-            "version": "0.5.5",
+            "version": "0.5.6",
             "sha256": "1063bc501b284d84daa181198cfb8194beff481594ba9931e6bbd46d89cfdabd"
         },
         {
             "name": "brainstorming",
             "file": "assets/skills/brainstorming/SKILL.md",
             "description": "Skill de descubrimiento y exploración (Superpowers)",
-            "version": "0.5.5",
+            "version": "0.5.6",
             "sha256": "ad15458c54912007ae3f708c698a11f0a4a58e2a7c7860a1ae8874db573c9e98"
         },
         {
             "name": "writing-plans",
             "file": "assets/skills/writing-plans/SKILL.md",
             "description": "Skill de planificación de implementación (Superpowers) — execution handoff removido, Ostacky decide modo de ejecución",
-            "version": "0.5.5",
+            "version": "0.5.6",
             "sha256": "ff242e9205666f74dc1b28bf19bd77270d46dcc5c322d643faa49aabf8e8d096"
         },
         {
             "name": "tdd",
             "file": "assets/skills/tdd/SKILL.md",
             "description": "Skill de test-driven development (Superpowers)",
-            "version": "0.5.5",
+            "version": "0.5.6",
             "sha256": "7eacd8ee81dc5c0b85065c0392e37ee10314661f7edb59dd8e70a9e0dae8f371"
         },
         {
             "name": "subagent-driven-development",
             "file": "assets/skills/subagent-driven-development/SKILL.md",
             "description": "Skill de ejecución con subagentes (Superpowers) — ejecuta solo después de confirmación del coordinador Ostacky",
-            "version": "0.5.5",
+            "version": "0.5.6",
             "sha256": "a9e6c9070f63dcac0a065a1abd91c9218fa07e201f594d1ce5f6a0dc0bfa0674"
         },
         {
             "name": "dispatching-parallel-agents",
             "file": "assets/skills/dispatching-parallel-agents/SKILL.md",
             "description": "Skill de dispatch paralelo de agentes (Superpowers)",
-            "version": "0.5.5",
+            "version": "0.5.6",
             "sha256": "281edf0c38f358497c7e2066fa8217a2ba3e2a39b4205c4af0c41d328fc035a1"
         },
         {
             "name": "review",
             "file": "assets/skills/review/SKILL.md",
             "description": "Skill de revisión de código (Superpowers)",
-            "version": "0.5.5",
+            "version": "0.5.6",
             "sha256": "c78d3beff45e9bb6b5e9e1d7155910f379e082d7aaf3c61b90d651d09e0d2e2a"
         },
         {
             "name": "openspec-explore",
             "file": "assets/skills/openspec-explore/SKILL.md",
             "description": "Skill de exploración pre-spec (OpenSpec)",
-            "version": "0.5.5",
+            "version": "0.5.6",
             "sha256": "1c75cab8672c2eb8b12f27a0b31f0b7fdb73c21c72583c1e8a566e09fe4108a6"
         },
         {
             "name": "openspec-propose",
             "file": "assets/skills/openspec-propose/SKILL.md",
             "description": "Skill de generación de proposal (OpenSpec)",
-            "version": "0.5.5",
+            "version": "0.5.6",
             "sha256": "ab88e9aa22db09559ccf7987d08adc0469b7c6fbe46498e63a3b64926f19e66b"
         },
         {
             "name": "openspec-apply-change",
             "file": "assets/skills/openspec-apply-change/SKILL.md",
             "description": "Skill de aplicación de change (OpenSpec)",
-            "version": "0.5.5",
+            "version": "0.5.6",
             "sha256": "847c2f88a66e8d5946c1fec422a5367c89eca5340839b659bbaaeb6f0bdac487"
         },
         {
             "name": "openspec-archive-change",
             "file": "assets/skills/openspec-archive-change/SKILL.md",
             "description": "Skill de archivo de change (OpenSpec)",
-            "version": "0.5.5",
+            "version": "0.5.6",
             "sha256": "3d35905ec40a081b8fd77b144426e540c67b1f50cc5801b655313a4fdfaa087a"
+        },
+        {
+            "name": "question-validation",
+            "file": "assets/skills/question-validation/SKILL.md",
+            "description": "Valida que el agente use el tool nativo question en vez del MCP ask_user eliminado",
+            "version": "0.5.6",
+            "sha256": "1b3a9dca1fecbcc74371e2132660b1740b585bc26a80cf13040d333f4c5eb6f1"
         }
     ]
 }

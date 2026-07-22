@@ -31,14 +31,6 @@
       ],
       "enabled": true
     },
-    "ask-user-server": {
-      "type": "local",
-      "command": [
-        "node",
-        ".opencode/mcp/ask-user-server/index.js"
-      ],
-      "enabled": true
-    },
     "ostacky-controller": {
       "type": "local",
       "command": [
