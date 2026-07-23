@@ -357,12 +357,19 @@ class OstackyController {
         // If oldString not found, check if newString is already present (edit was already applied)
         if (oldCount === 0) {
             if (content.includes(newString)) {
-                return { outcome: 'ALREADY_APPLIED', taskId, reason: 'oldString not found but newString is present — edit was already applied' };
+                return {
+                    outcome: 'ALREADY_APPLIED',
+                    taskId,
+                    reason: 'oldString not found but newString is present — edit was already applied',
+                };
             }
             return { outcome: 'CONFLICT', reason: 'oldString not found in content — file was modified externally' };
         }
         if (oldCount > 1) {
-            return { outcome: 'CONFLICT', reason: `oldString found ${oldCount} times — need more context to disambiguate` };
+            return {
+                outcome: 'CONFLICT',
+                reason: `oldString found ${oldCount} times — need more context to disambiguate`,
+            };
         }
         // oldString found exactly once → safe to replace
         return { outcome: 'EDITABLE', taskId };
@@ -390,7 +397,12 @@ class OstackyController {
             this.#state.fileFingerprints[filePath] = fileHash;
         }
         this.#persist();
-        return { taskId, status: 'COMPLETED', totalCompleted: Object.keys(this.#state.tasks).filter(k => this.#state.tasks[k].status === 'COMPLETED').length };
+        return {
+            taskId,
+            status: 'COMPLETED',
+            totalCompleted: Object.keys(this.#state.tasks).filter((k) => this.#state.tasks[k].status === 'COMPLETED')
+                .length,
+        };
     }
 }
 
@@ -399,7 +411,7 @@ const controller = new OstackyController({ statePath });
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.5.6',
+    version: '0.5.7',
 });
 
 server.registerTool(
