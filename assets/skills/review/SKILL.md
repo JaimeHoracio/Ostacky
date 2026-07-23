@@ -52,10 +52,12 @@ After obtaining the diff, if it is empty, inform the user that there are no chan
 
 Before analyzing the diff:
 
-1. **Read changed files in full** - Do not review a diff in isolation. Read each modified file to understand the surrounding code, imports, types, and control flow.
-2. **Identify the tech stack** - Note languages, frameworks, and libraries in use. This affects what patterns are risky.
-3. **Check for related test files** - For each changed source file, look for corresponding test files. Note whether tests were updated alongside the changes.
-4. **Check for configuration changes** - If config files changed (env, CI, package.json, tsconfig, etc.), pay extra attention to side effects.
+1. **Follow Core Instructions** — `ostacky.md` Core Instructions section for CodeGraph usage patterns. Use `codegraph_explore` to understand the code structure before reading files directly.
+2. **Use CodeGraph for code understanding** — `codegraph_explore` on the changed symbols gives you call paths, blast radius, and related code in ONE call. Only `Read` files for details CodeGraph didn't cover.
+3. **Read changed files for full context** — After CodeGraph exploration, read each modified file to understand the surrounding code, imports, types, and control flow.
+4. **Identify the tech stack** — Note languages, frameworks, and libraries in use. This affects what patterns are risky.
+5. **Check for related test files** — For each changed source file, look for corresponding test files. Note whether tests were updated alongside the changes.
+6. **Check for configuration changes** — If config files changed (env, CI, package.json, tsconfig, etc.), pay extra attention to side effects.
 
 </gather_context>
 
@@ -133,7 +135,7 @@ Severity levels:
 
 <critical_rules>
 
-1. **READ THE FULL FILE**: Never review a diff without reading the complete source file for context
+1. **FOLLOW CORE INSTRUCTIONS** — Use CodeGraph for code understanding before reading files. See `ostacky.md` Core Instructions section.
 2. **NO FALSE ALARMS**: Only report issues you can explain concretely. Do not report vague concerns
 3. **PRIORITIZE**: Lead with the most severe findings. Do not bury critical issues under style nits
 4. **BE SPECIFIC**: Include file paths, line numbers, and code references for every finding

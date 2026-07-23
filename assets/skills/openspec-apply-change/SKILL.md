@@ -15,16 +15,25 @@ Implement tasks from an OpenSpec change.
 
 **Steps**
 
-1. **Select the change**
+1. **Check Engram for past implementation patterns**
+
+   Before implementing, `engram_mem_search` with keywords from the change name and affected modules. Look for:
+   - Similar changes implemented before (approaches that worked or failed)
+   - Known gotchas or edge cases in related areas
+   - Model selection patterns for similar task complexity
+
+   Surface relevant findings to inform implementation decisions.
+
+2. **Select the change**
 
    If a name is provided, use it. Otherwise:
    - Infer from conversation context if the user mentioned a change
    - Auto-select if only one active change exists
-   - If ambiguous, run `openspec list --json` to get available changes and use the **AskUserQuestion tool** to let the user select
+   - If ambiguous, run `openspec list --json` to get available changes and use the **question tool** to let the user select. After calling `question`, STOP and wait for the answer.
 
    Always announce: "Using change: <name>" and how to override (e.g., `/opsx-apply <other>`).
 
-2. **Check status to understand the schema**
+3. **Check status to understand the schema**
    ```bash
    openspec status --change "<name>" --json
    ```
@@ -32,7 +41,7 @@ Implement tasks from an OpenSpec change.
    - `schemaName`: The workflow being used (e.g., "spec-driven")
    - Which artifact contains the tasks (typically "tasks" for spec-driven, check status for others)
 
-3. **Get apply instructions**
+4. **Get apply instructions**
 
    ```bash
    openspec instructions apply --change "<name>" --json
@@ -49,14 +58,14 @@ Implement tasks from an OpenSpec change.
    - If `state: "all_done"`: congratulate, suggest archive
    - Otherwise: proceed to implementation
 
-4. **Read context files**
+5. **Read context files**
 
-   Read every file path listed under `contextFiles` from the apply instructions output.
+   Use **CodeGraph** (`codegraph_explore`) to understand the code structure before reading files directly. Then read every file path listed under `contextFiles` from the apply instructions output.
    The files depend on the schema being used:
    - **spec-driven**: proposal, specs, design, tasks
    - Other schemas: follow the contextFiles from CLI output
 
-5. **Show current progress**
+6. **Show current progress**
 
    Display:
    - Schema being used
@@ -64,7 +73,7 @@ Implement tasks from an OpenSpec change.
    - Remaining tasks overview
    - Dynamic instruction from CLI
 
-6. **Implement tasks (loop until done or blocked)**
+7. **Implement tasks (loop until done or blocked)**
 
    For each pending task:
    - Show which task is being worked on
@@ -79,7 +88,7 @@ Implement tasks from an OpenSpec change.
    - Error or blocker encountered → report and wait for guidance
    - User interrupts
 
-7. **On completion or pause, show status**
+8. **On completion or pause, show status**
 
    Display:
    - Tasks completed this session

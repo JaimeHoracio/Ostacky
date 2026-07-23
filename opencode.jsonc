@@ -29,7 +29,10 @@
         "serve",
         "--mcp"
       ],
-      "enabled": true
+      "enabled": true,
+      "env": {
+        "CODEGRAPH_MCP_TOOLS": "explore,node,search,callers,callees,impact,files,status"
+      }
     },
     "ostacky-controller": {
       "type": "local",

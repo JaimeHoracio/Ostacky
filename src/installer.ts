@@ -289,8 +289,9 @@ function upsertLockfile(
   // Lockfiles escritos antes de soportar skills no tendrán la clave.
   if (!existing.skills) existing.skills = {};
   if (!existing.mcpServers) existing.mcpServers = {};
+  if (!existing[type]) existing[type] = {};
 
-  existing[type][item.name] = {
+  existing[type]![item.name] = {
     version: item.version,
     installedAt: new Date().toISOString(),
     sha256: contentHash,
@@ -589,6 +590,17 @@ export function uninstallAll(paths: OpenCodePaths): void {
   for (const name of Object.keys(lockfile.mcpServers ?? {})) {
     uninstallMcpServer(name, paths);
   }
+
+  // Also scan mcp/ directory for servers not in lockfile (legacy installs)
+  if (existsSync(paths.mcp)) {
+    for (const entry of readdirSync(paths.mcp)) {
+      const dirPath = join(paths.mcp, entry);
+      if (statSync(dirPath).isDirectory()) {
+        uninstallMcpServer(entry, paths);
+      }
+    }
+  }
+
   clearLockfile(paths.root);
 }
 
@@ -656,9 +668,9 @@ function downloadToFile(url: string, dest: string, timeoutMs: number = 180_000):
         const pump = ({ done, value }: { done: boolean; value?: Uint8Array }): Promise<void> => {
           if (done) {
             file.end();
-            return Promise.resolve();
+            return Promise.resolve(undefined);
           }
-          return new Promise((w) => file.write(Buffer.from(value!), () => w())).then(() =>
+          return new Promise<void>((ok) => file.write(Buffer.from(value!), () => ok())).then(() =>
             reader.read().then(pump)
           );
         };

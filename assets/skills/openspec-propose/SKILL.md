@@ -24,22 +24,24 @@ When ready to implement, run /opsx-apply
 
 **Steps**
 
-1. **If no clear input provided, ask what they want to build**
+1. **Check Engram for similar changes** — `engram_mem_search` with keywords from the user's description. If a similar change was proposed or implemented before, surface it to the user. They may want to extend the existing work instead of starting fresh.
 
-   Use the **AskUserQuestion tool** (open-ended, no preset options) to ask:
+2. **If no clear input provided, ask what they want to build**
+
+   Use the **question tool** (open-ended, no preset options) to ask:
    > "What change do you want to work on? Describe what you want to build or fix."
 
    From their description, derive a kebab-case name (e.g., "add user authentication" → `add-user-auth`).
 
-   **IMPORTANT**: Do NOT proceed without understanding what the user wants to build.
+   **IMPORTANT**: Do NOT proceed without understanding what the user wants to build. **IMPORTANT**: After calling `question`, STOP. Do not generate more text or execute tools.
 
-2. **Create the change directory**
+3. **Create the change directory**
    ```bash
    openspec new change "<name>"
    ```
    This creates a scaffolded change at `openspec/changes/<name>/` with `.openspec.yaml`.
 
-3. **Get the artifact build order**
+4. **Get the artifact build order**
    ```bash
    openspec status --change "<name>" --json
    ```
@@ -47,7 +49,7 @@ When ready to implement, run /opsx-apply
    - `applyRequires`: array of artifact IDs needed before implementation (e.g., `["tasks"]`)
    - `artifacts`: list of all artifacts with their status and dependencies
 
-4. **Create artifacts in sequence until apply-ready**
+5. **Create artifacts in sequence until apply-ready**
 
    Use the **TodoWrite tool** to track progress through the artifacts.
 
@@ -76,10 +78,10 @@ When ready to implement, run /opsx-apply
       - Stop when all `applyRequires` artifacts are done
 
    c. **If an artifact requires user input** (unclear context):
-      - Use **AskUserQuestion tool** to clarify
+      - Use **question tool** to clarify, then STOP and wait for the answer
       - Then continue with creation
 
-5. **Show final status**
+6. **Show final status**
    ```bash
    openspec status --change "<name>"
    ```

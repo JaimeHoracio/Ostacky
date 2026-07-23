@@ -113,13 +113,6 @@
             "description": "Skill de archivo de change (OpenSpec)",
             "version": "0.5.6",
             "sha256": "3d35905ec40a081b8fd77b144426e540c67b1f50cc5801b655313a4fdfaa087a"
-        },
-        {
-            "name": "question-validation",
-            "file": "assets/skills/question-validation/SKILL.md",
-            "description": "Valida que el agente use el tool nativo question en vez del MCP ask_user eliminado",
-            "version": "0.5.6",
-            "sha256": "1b3a9dca1fecbcc74371e2132660b1740b585bc26a80cf13040d333f4c5eb6f1"
         }
     ]
 }

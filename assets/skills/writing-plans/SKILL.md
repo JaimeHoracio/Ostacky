@@ -18,9 +18,20 @@ Assume they are a skilled developer, but know almost nothing about our toolset o
 **Save plans to:** `docs/superpowers/plans/YYYY-MM-DD-<feature-name>.md`
 - (User preferences for plan location override this default)
 
+## Pre-Plan: Check Engram for Past Decisions
+
+Before writing the plan, **consult Engram** to avoid repeating past mistakes:
+
+1. `engram_mem_search` with keywords from the feature name and affected modules
+2. Look for:
+   - Previous plans for similar features (avoid duplicating approaches)
+   - Architecture decisions that affect implementation (design patterns, library choices)
+   - Known gotchas or edge cases discovered in similar work
+3. If relevant findings exist, incorporate them into the plan's context section
+
 ## Scope Check
 
-If the spec covers multiple independent subsystems, it should have been broken into sub-project specs during brainstorming. If it wasn't, suggest breaking this into separate plans — one per subsystem. Each plan should produce working, testable software on its own.
+If the spec covers multiple independent subsystems, it should have been broken into sub-project specs during thinking (creative-design mode). If it wasn't, suggest breaking this into separate plans — one per subsystem. Each plan should produce working, testable software on its own.
 
 ## File Structure
 

@@ -10,6 +10,7 @@ description: Use when Ostacky has confirmed subagent-driven execution mode and d
 2. Presented evidence and recommendation to the user
 3. Received explicit user confirmation for subagent-driven mode
 4. Called `controller.consumeExecutionDecision({ mode: "SUBAGENT_DRIVEN" })`
+5. Checked Engram (`engram_mem_search`) for past subagent execution patterns on similar changes — if a previous approach failed, avoid repeating it
 
 Subagents are execution-only. They never create routing decisions, re-analyze execution mode, or duplicate discovery that the coordinator already resolved.
 
@@ -46,6 +47,18 @@ digraph when_to_use {
 - Fresh subagent per task (no context pollution)
 - Two-stage review after each task: spec compliance first, then code quality
 - Faster iteration (no human-in-loop between tasks)
+
+## Context Gathering for Subagents
+
+**Follow Core Instructions** — `ostacky.md` Core Instructions section for CodeGraph usage patterns. Do NOT duplicate those instructions here.
+
+When constructing the context package for each subagent:
+
+1. Use `codegraph_explore` to get the verbatim source of relevant symbols, their call paths, and blast radius — in ONE call.
+2. Only use `Read` for files or details CodeGraph didn't cover.
+3. Include the CodeGraph output in the subagent's context package so they have structural understanding without needing to re-explore.
+
+**Why this matters:** Subagents have limited context. CodeGraph gives them more accurate information in fewer tokens than they'd consume re-reading files themselves.
 
 ## The Process
 
@@ -256,6 +269,7 @@ Done!
 - Let implementer self-review replace actual review (both are needed)
 - **Start code quality review before spec compliance is ✅** (wrong order)
 - Move to next task while either review has open issues
+- **Use `Bash` with `rg`/`grep` for code search** — follow Core Instructions in `ostacky.md`
 
 **If subagent asks questions:**
 - Answer clearly and completely

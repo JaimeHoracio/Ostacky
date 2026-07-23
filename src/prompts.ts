@@ -436,7 +436,8 @@ async function doAddMcp(manifest: Manifest, paths: OpenCodePaths) {
 
   const spin = p.spinner();
   for (const name of selected as string[]) {
-    const item = manifest.mcpServers.find((m) => m.name === name)!;
+    const item = manifest.mcpServers?.find((m) => m.name === name);
+    if (!item) continue;
     spin.start(`Instalando MCP server: ${name}  (${item.version})`);
     try {
       await installMcpServer(item, manifest, paths);
@@ -859,7 +860,7 @@ async function doUninstallMcp(paths: OpenCodePaths) {
   const options = installed.map((name) => ({
     value: name,
     label: name,
-    hint: `v${lockfile.mcpServers[name].version}`,
+    hint: `v${lockfile.mcpServers?.[name]?.version ?? '?'}`,
   }));
 
   const selected = await p.multiselect({

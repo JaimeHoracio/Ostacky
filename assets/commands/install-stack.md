@@ -103,15 +103,15 @@ Copiá cada skill bundleada a `.opencode/skills/<nombre>/` preservando la estruc
 
 ```bash
 # Ejemplo para una skill; aplicar a las 11
-mkdir -p .opencode/skills/brainstorming
-cp -r assets/skills/brainstorming/* .opencode/skills/brainstorming/
+mkdir -p .opencode/skills/thinking
+cp -r assets/skills/thinking/* .opencode/skills/thinking/
 ```
 
 **Set curado (referenciado en `assets/agents/ostacky.md`):**
 
-**Superpowers (6):** `brainstorming`, `writing-plans`, `tdd`, `subagent-driven-development`, `dispatching-parallel-agents`, `review`
+**Superpowers (6):** `thinking`, `writing-plans`, `tdd`, `subagent-driven-development`, `dispatching-parallel-agents`, `review`
 
-**OpenSpec (4):** `openspec-explore`, `openspec-propose`, `openspec-apply-change`, `openspec-archive-change`
+**OpenSpec (3):** `openspec-propose`, `openspec-apply-change`, `openspec-archive-change`
 
 **Ostacky (1):** `execution-mode-evaluation` — análisis de modo de ejecución (INLINE vs SUBAGENT_DRIVEN)
 
@@ -190,7 +190,7 @@ Para remover los archivos de OpenSpec del proyecto:
 
 ```bash
 # Eliminar skills y commands de OpenSpec generados en .opencode/
-rm -rf .opencode/skills/openspec-explore .opencode/skills/openspec-propose \
+rm -rf .opencode/skills/thinking .opencode/skills/openspec-propose \
        .opencode/skills/openspec-apply-change .opencode/skills/openspec-archive-change
 # Los specs y changes viven en openspec/ — eliminarlos si no los necesitás:
 rm -rf openspec/
@@ -421,13 +421,12 @@ Cada herramienta se instala en su propia carpeta dentro de `.opencode/` para man
 │       ├── package.json
 │       └── node_modules/
 ├── skills/          # Skills bundleadas
-│   ├── brainstorming/
+│   ├── thinking/
 │   ├── writing-plans/
 │   ├── tdd/
 │   ├── subagent-driven-development/
 │   ├── dispatching-parallel-agents/
 │   ├── review/
-│   ├── openspec-explore/
 │   ├── openspec-propose/
 │   ├── openspec-apply-change/
 │   ├── openspec-archive-change/
