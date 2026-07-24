@@ -411,7 +411,7 @@ const controller = new OstackyController({ statePath });
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.5.7',
+    version: '0.5.8',
 });
 
 server.registerTool(
