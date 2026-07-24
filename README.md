@@ -57,7 +57,7 @@ Ostacky integra **5 herramientas** especializadas para que trabajen en conjunto 
 
 1. **CodeGraph** descubre el alcance del cambio sin escanear el repo entero (consulta `codegraph_context`, `codegraph_impact`).
 2. **OpenSpec** documenta requisitos, contratos y escenarios de aceptación (proposal → design → spec → tasks).
-3. **Superpowers** ejecuta con TDD, testing automatizado y review (brainstorming → plans → tdd → review).
+3. **Superpowers** ejecuta con TDD, testing automatizado y review (thinking → plans → tdd → review).
 4. **Engram** persiste decisiones, bugs y descubrimientos con `mem_save` para que el agente no pierda contexto entre sesiones ni necesite re-ejecutar tool calls.
 5. **Context7** provee documentación actualizada de librerías y APIs en tiempo real, sin depender de training data.
 
@@ -197,17 +197,20 @@ Tras instalar, el proyecto queda así:
 │   ├── install-stack.md
 │   └── opsx-sync.md
 ├── skills/
-│   ├── brainstorming/
+│   ├── thinking/
 │   ├── writing-plans/
 │   ├── tdd/
 │   ├── review/
 │   ├── execution-mode-evaluation/
 │   ├── subagent-driven-development/
 │   ├── dispatching-parallel-agents/
-│   ├── openspec-explore/
 │   ├── openspec-propose/
 │   ├── openspec-apply-change/
-│   └── openspec-archive-change/
+│   ├── openspec-archive-change/
+│   ├── receiving-code-review/
+│   ├── using-git-worktrees/
+│   ├── using-superpowers/
+│   └── writing-skills/
 └── ostacky-lock.json          ← versiones instaladas (agentes, commands y skills)
 ```
 
@@ -239,7 +242,7 @@ Tras instalar, el proyecto queda así:
         }
     },
     "skills": {
-        "brainstorming": { "version": "0.5.8", ... },
+        "thinking": { "version": "0.5.8", ... },
         "execution-mode-evaluation": { "version": "0.5.8", ... },
         "openspec-propose": { "version": "0.5.8", ... }
     }

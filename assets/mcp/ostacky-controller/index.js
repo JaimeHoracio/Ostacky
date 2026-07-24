@@ -50,8 +50,13 @@ class OstackyController {
 
     constructor(opts = {}) {
         this.#statePath = opts.statePath;
-        this.#state = opts.initialState ? { ...DEFAULT_STATE, ...opts.initialState } : null;
-        this.#loaded = false;
+        if (opts.initialState) {
+            this.#state = { ...DEFAULT_STATE, ...opts.initialState };
+            this.#loaded = true;
+        } else {
+            this.#state = null;
+            this.#loaded = false;
+        }
     }
 
     #load() {
@@ -621,16 +626,20 @@ server.registerTool(
     {
         description:
             'Validate an edit against current file content. Returns EDITABLE, ALREADY_APPLIED, or CONFLICT. ' +
-            'Call BEFORE executing an edit tool. Only valid in EXECUTING_INLINE or EXECUTING_SUBAGENTS states.',
+            'Call BEFORE executing an edit tool. Only valid in EXECUTING_INLINE or EXECUTING_SUBAGENTS states. ' +
+            'IMPORTANT: content parameter is REQUIRED. Read the file first, then pass the full content.',
         inputSchema: z.object({
             oldString: z.string().describe('The exact string to find in content (must be unique).'),
             newString: z.string().describe('The replacement string.'),
-            content: z.string().describe('The current file content (read fresh with Read tool).'),
+            content: z.string().optional().describe('The current file content. REQUIRED — read the file first with Read tool.'),
             taskId: z.string().optional().describe('Optional task ID for tracking.'),
         }),
     },
     async ({ oldString, newString, content, taskId }) => {
-        log('tool:validate_edit', { taskId, oldLen: oldString.length, newLen: newString.length });
+        log('tool:validate_edit', { taskId, oldLen: oldString?.length, newLen: newString?.length, hasContent: !!content });
+        if (typeof content !== 'string' || typeof oldString !== 'string' || typeof newString !== 'string') {
+            return { content: [{ type: 'text', text: JSON.stringify({ outcome: 'CONFLICT', reason: 'Missing required fields: content, oldString, and newString are all required. Read the file first, then pass content to validate_edit.' }) }] };
+        }
         const result = await controller.validateEdit({ oldString, newString, content, taskId });
         return { content: [{ type: 'text', text: JSON.stringify(result) }] };
     }
@@ -663,7 +672,16 @@ async function main() {
     log('ostacky-controller connected and ready');
 }
 
-main().catch((error) => {
-    console.error('Fatal error:', error);
-    process.exit(1);
-});
+const isDirectRun = process.argv[1] && (
+    process.argv[1].endsWith('/index.js') ||
+    process.argv[1].endsWith('\\index.js')
+);
+
+if (isDirectRun) {
+    main().catch((error) => {
+        console.error('Fatal error:', error);
+        process.exit(1);
+    });
+}
+
+export { OstackyController };
