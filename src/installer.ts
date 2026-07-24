@@ -457,10 +457,9 @@ export async function installMcpServer(
       });
       if (output) console.error(output);
     } catch (e) {
-      throw new Error(
-        `MCP server "${item.name}" copiado pero ${installCmd} falló: ${(e as Error).message}.\n` +
-          `Resolvé las dependencias manualmente:\n` +
-          `  cd .opencode/mcp/${item.name} && bun install`
+      console.error(
+        `[WARN] MCP server "${item.name}" copiado pero ${installCmd} falló: ${(e as Error).message}.\n` +
+          `  Resolvé las dependencias manualmente: cd .opencode/mcp/${item.name} && bun install`
       );
     }
   }

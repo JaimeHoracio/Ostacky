@@ -160,6 +160,24 @@ La opción por defecto va primera. **La primera respuesta del usuario es vincula
 
 **Cierre obligatorio:** DESPUÉS de `implementation_complete`, llamá `sync_complete` en el MISMO turno. Si te olvidás, el controller queda en SYNC y el próximo request falla.
 
+## Manejo de errores de tools MCP
+
+**Si una tool MCP no responde o devuelve error, la jerarquía de recursos es:**
+
+1. **CodeGraph** (primera opción siempre) → explora símbolos, callers, impacto, flujos
+2. **Engram** (si CodeGraph no está disponible) → `engram_mem_context` y `engram_mem_search` para recuperar contexto de sesiones previas, decisiones, bugs. Engram sabe lo que se hizo antes — no caigas a Grep si Engram está vivo.
+3. **Read + Glob** (último recurso) → solo cuando **ninguno** de los dos anteriores funciona
+
+**Por tool:**
+
+1. **CodeGraph**: Si `codegraph_explore` falla o no responde → si Engram está funcionando, usá `engram_mem_context` + `engram_mem_search` para recuperar contexto. Como último recurso, `Read` archivos directamente. **NUNCA uses Grep para explorar si Engram está disponible.**
+2. **Controller**: Si el ostacky-controller no está disponible → operá sin validación de estado. Todas las transiciones se manejan en lenguaje natural. No ejecutes subagentes sin autorización explícita.
+3. **Engram**: Si `engram_mem_*` falla → continuá sin memoria persistente. No bloquees el flujo por falta de memoria.
+4. **Timeout en tool call**: Si una tool no responde después de un intento, **no reintentes**. Reportá el error al usuario y seguí con lo que tenés. No te quedes en loop.
+5. **Tool no encontrada**: Si llamás una tool y recibís "tool not found" o "unavailable tool" → esa tool no está registrada. Reportalo. Si Engram está disponible, usalo para contexto. Si no, `Read` + `Glob`. Grep es el ABSOLUTO último recurso.
+
+**Regla de oro: ninguna tool failure debe congelar el agente.** Siempre tené un plan B antes de llamar a cualquier tool. Engram > Read > Grep.
+
 ## Guardrails
 
 ### Decisiones y estado

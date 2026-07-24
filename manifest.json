@@ -8,7 +8,7 @@
             "file": "assets/agents/ostacky.md",
             "description": "Orquestador principal con ruteo por nivel de impacto, máquina de estados persistida (controller MCP), edición segura con 3 outcomes, y delegación en OpenSpec + Superpowers",
             "version": "0.5.9",
-            "sha256": "ede9800f644d890fa81c4827592ca62ce00756a25fbdb594cb8a7b40cd7ca2fc"
+            "sha256": "c624b9163a97fe0aa17a4688f59e2bcfa958c64fbde71c05c0c071911f62b7ad"
         }
     ],
     "commands": [
@@ -33,7 +33,7 @@
             "file": "assets/mcp/ostacky-controller/",
             "description": "Máquina de estados persistida para Ostacky: 13 tools MCP para ciclo completo de request (start_request → discovery → route → execution → sync → done), edición segura con validación de transiciones y persistencia atómica",
             "version": "0.5.9",
-            "sha256": "68b42dfb65938e423a7c81d9e9b179c0d82533047d5c0205cf459f5aa2fc6fa2"
+            "sha256": "e9933d74b46e0381ec7efd886678cb0bedb8afeff58ad84c3f7c9abc88406278"
         }
     ],
     "skills": [
