@@ -16,13 +16,17 @@ const MAX_STATE_FILE_SIZE = 1024 * 1024; // 1MB hard cap for the entire state fi
 function safeJsonStringify(obj, pretty = false) {
     const seen = new WeakSet();
     try {
-        return JSON.stringify(obj, (key, value) => {
-            if (typeof value === 'object' && value !== null) {
-                if (seen.has(value)) return '[Circular]';
-                seen.add(value);
-            }
-            return value;
-        }, pretty ? 2 : undefined);
+        return JSON.stringify(
+            obj,
+            (key, value) => {
+                if (typeof value === 'object' && value !== null) {
+                    if (seen.has(value)) return '[Circular]';
+                    seen.add(value);
+                }
+                return value;
+            },
+            pretty ? 2 : undefined
+        );
     } catch (e) {
         return `[Unstringifiable: ${e.message}]`;
     }
@@ -44,10 +48,16 @@ function cleanupTmpFiles(statePath) {
     try {
         for (const entry of readdirSync(dir)) {
             if (entry.startsWith(name + '.tmp.')) {
-                try { unlinkSync(dir + '/' + entry); } catch { /* best-effort */ }
+                try {
+                    unlinkSync(dir + '/' + entry);
+                } catch {
+                    /* best-effort */
+                }
             }
         }
-    } catch { /* directory may not exist yet */ }
+    } catch {
+        /* directory may not exist yet */
+    }
 }
 
 const STATES = Object.freeze({
@@ -160,7 +170,9 @@ class OstackyController {
         try {
             const backupPath = this.#statePath + '.backup';
             writeFileSync(backupPath, serialized, 'utf8');
-        } catch { /* backup is best-effort */ }
+        } catch {
+            /* backup is best-effort */
+        }
     }
 
     /**
@@ -544,7 +556,7 @@ function safeHandler(fn) {
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.5.9',
+    version: '0.5.10',
 });
 
 server.registerTool(
@@ -745,9 +757,11 @@ server.registerTool(
         inputSchema: z.object({
             oldString: z.string().describe('The exact string to find in content (must be unique).'),
             newString: z.string().describe('The replacement string.'),
-            content: z.string().describe(
-                'REQUIRED — The current file content. Read the file first with Read tool, then pass the full content here.'
-            ),
+            content: z
+                .string()
+                .describe(
+                    'REQUIRED — The current file content. Read the file first with Read tool, then pass the full content here.'
+                ),
             taskId: z.string().optional().describe('Optional task ID for tracking.'),
         }),
     },
@@ -793,9 +807,17 @@ function setupGracefulShutdown(ctrl) {
     const shutdown = (signal) => {
         log('shutdown', { signal });
         // Final persist attempt (flush via public method, sync inside)
-        try { if (ctrl) ctrl.flush(); } catch { /* best-effort */ }
+        try {
+            if (ctrl) ctrl.flush();
+        } catch {
+            /* best-effort */
+        }
         // Clean up own tmp files
-        try { cleanupTmpFiles(statePath); } catch { /* best-effort */ }
+        try {
+            cleanupTmpFiles(statePath);
+        } catch {
+            /* best-effort */
+        }
         process.exit(signal === 'SIGINT' ? 130 : 0);
     };
     process.on('SIGTERM', () => shutdown('SIGTERM'));
