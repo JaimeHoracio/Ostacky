@@ -416,7 +416,7 @@ const controller = new OstackyController({ statePath });
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.5.8',
+    version: '0.5.9',
 });
 
 server.registerTool(
@@ -631,14 +631,32 @@ server.registerTool(
         inputSchema: z.object({
             oldString: z.string().describe('The exact string to find in content (must be unique).'),
             newString: z.string().describe('The replacement string.'),
-            content: z.string().optional().describe('The current file content. REQUIRED — read the file first with Read tool.'),
+            content: z
+                .string()
+                .optional()
+                .describe('The current file content. REQUIRED — read the file first with Read tool.'),
             taskId: z.string().optional().describe('Optional task ID for tracking.'),
         }),
     },
     async ({ oldString, newString, content, taskId }) => {
-        log('tool:validate_edit', { taskId, oldLen: oldString?.length, newLen: newString?.length, hasContent: !!content });
+        log('tool:validate_edit', {
+            taskId,
+            oldLen: oldString?.length,
+            newLen: newString?.length,
+            hasContent: !!content,
+        });
         if (typeof content !== 'string' || typeof oldString !== 'string' || typeof newString !== 'string') {
-            return { content: [{ type: 'text', text: JSON.stringify({ outcome: 'CONFLICT', reason: 'Missing required fields: content, oldString, and newString are all required. Read the file first, then pass content to validate_edit.' }) }] };
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: JSON.stringify({
+                            outcome: 'CONFLICT',
+                            reason: 'Missing required fields: content, oldString, and newString are all required. Read the file first, then pass content to validate_edit.',
+                        }),
+                    },
+                ],
+            };
         }
         const result = await controller.validateEdit({ oldString, newString, content, taskId });
         return { content: [{ type: 'text', text: JSON.stringify(result) }] };
@@ -672,10 +690,8 @@ async function main() {
     log('ostacky-controller connected and ready');
 }
 
-const isDirectRun = process.argv[1] && (
-    process.argv[1].endsWith('/index.js') ||
-    process.argv[1].endsWith('\\index.js')
-);
+const isDirectRun =
+    process.argv[1] && (process.argv[1].endsWith('/index.js') || process.argv[1].endsWith('\\index.js'));
 
 if (isDirectRun) {
     main().catch((error) => {
