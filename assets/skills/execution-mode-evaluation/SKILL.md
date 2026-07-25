@@ -17,7 +17,7 @@ Determinar el modo de ejecución óptimo entre **inline** y **subagent-driven** 
 | Dato | Fuente | Obligatorio |
 |------|--------|-------------|
 | Tasks del change | `tasks.md` del cambio activo | ✅ |
-| Archivos que modifica cada task | `codegraph_context` o lectura directa | ✅ |
+| Archivos que modifica cada task | `codegraph_explore` o lectura directa | ✅ |
 | Blast radius por símbolo | `codegraph_impact` | Para alta precisión |
 | Contratos entre tasks | `design.md` | Para evaluar dependencias |
 
@@ -25,11 +25,11 @@ Determinar el modo de ejecución óptimo entre **inline** y **subagent-driven** 
 
 ### Paso 0: Verificar datos existentes en contexto
 
-Si ya tenés output de `codegraph_context` para el área del cambio **Y** ese output distingue archivos por task → **saltá al Paso 0.5**. Si no, ejecutá el Paso 1.
+Si ya tenés output de `codegraph_explore` para el área del cambio **Y** ese output distingue archivos por task → **saltá al Paso 0.5**. Si no, ejecutá el Paso 1.
 
 ### Paso 0.1: Consultar Engram por decisiones previas
 
-`engram_mem_search` con keywords del cambio (nombre del módulo, área afectada). Si existe una decisión de modo de ejecución anterior para un cambio similar, considerarla como referencia — no como vinculante. Las condiciones pueden haber cambiado.
+`mem_search` con keywords del cambio (nombre del módulo, área afectada). Si existe una decisión de modo de ejecución anterior para un cambio similar, considerarla como referencia — no como vinculante. Las condiciones pueden haber cambiado.
 
 ### Paso 0.5: Early exit para cambios pequeños
 
@@ -49,7 +49,7 @@ Si el change tiene **≤2 tasks** Y **no comparten archivos entre sí** → devo
 ### Paso 1: Obtener datos de CodeGraph
 
 ```
-codegraph_context con task: "<descripción del cambio>"
+codegraph_explore con query: "<área del cambio>"
 ```
 
 Si el output es muy general → `codegraph_impact` sobre símbolos centrales para blast radius preciso.
@@ -108,7 +108,7 @@ Para cada fase de `tasks.md`, evaluar intra-fase:
 {
   "recommendation": "INLINE" | "SUBAGENT_DRIVEN",
   "reasons": ["razón principal", "razón secundaria"],
-  "codegraphUsed": ["codegraph_context"],
+  "codegraphUsed": ["codegraph_explore"],
   "taskCount": <N>,
   "sharedFiles": { "src/archivo.ts": ["task1", "task2"] },
   "fileClusters": [["task1", "task2"], ["task3"]],
@@ -122,7 +122,7 @@ Para cada fase de `tasks.md`, evaluar intra-fase:
 }
 ```
 
-**Output para el usuario (mostrar con `question` tool):**
+**Output para el usuario (mostrar en lenguaje natural):**
 
 ```markdown
 ## Análisis de modo de ejecución
@@ -166,7 +166,7 @@ Para cada fase de `tasks.md`, evaluar intra-fase:
 | `estLines` | Estimación conservadora |
 | `hasExplicitContract` | `true` si design.md explicita contratos |
 
-**⚠️ Este skill provee ANÁLISIS, no autorización.** El coordinador muestra el snapshot al usuario y pide confirmación con `question` tool.
+**⚠️ Este skill provee ANÁLISIS, no autorización.** El coordinador muestra el snapshot al usuario y pide confirmación en lenguaje natural, luego espera la respuesta.
 
 ## Ejemplo compacto
 
@@ -176,7 +176,7 @@ Para cada fase de `tasks.md`, evaluar intra-fase:
 
 ## Checklist
 
-- [ ] Ejecuté `codegraph_context` (o verifiqué datos existentes)?
+- [ ] Ejecuté `codegraph_explore` (o verifiqué datos existentes)?
 - [ ] Construí mapa de dependencias con `fileClusters`?
 - [ ] Identifiqué clusters (componentes conectados)?
 - [ ] Verifiqué deps ENTRE clusters (no solo intra)?

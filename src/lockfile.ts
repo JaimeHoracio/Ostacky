@@ -1,7 +1,9 @@
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import localManifest from '../manifest.json' with { type: 'json' };
 
 const LOCKFILE_NAME = 'ostacky-lock.json';
+const LOCKFILE_VERSION = localManifest.version;
 
 export interface LockfileItem {
     version: string;
@@ -91,7 +93,7 @@ export function clearLockfile(opencodeRoot: string): void {
     if (!lockfile) {
         // Nothing to clear; write a fresh minimal lockfile.
         writeLockfile(opencodeRoot, {
-            version: '0.5.10',
+            version: LOCKFILE_VERSION,
             lockedAt: new Date().toISOString(),
             repo: '',
             tag: '',

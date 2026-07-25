@@ -44,7 +44,7 @@ If no directory exists and no AGENTS.md / OpenCode preference:
 No worktree directory found. Where should I create worktrees?
 
 1. .worktrees/ (project-local, hidden)
-2. ~/.config/superpowers/worktrees/<project-name>/ (global location)
+2. worktrees/ (project-local, visible)
 
 Which would you prefer?
 ```
@@ -69,10 +69,6 @@ Per Jesse's rule "Fix broken things immediately":
 
 **Why critical:** Prevents accidentally committing worktree contents to repository.
 
-### For Global Directory (~/.config/superpowers/worktrees)
-
-No .gitignore verification needed - outside project entirely.
-
 ## Creation Steps
 
 ### 1. Detect Project Name
@@ -88,9 +84,6 @@ project=$(basename "$(git rev-parse --show-toplevel)")
 case $LOCATION in
   .worktrees|worktrees)
     path="$LOCATION/$BRANCH_NAME"
-    ;;
-  ~/.config/superpowers/worktrees/*)
-    path="~/.config/superpowers/worktrees/$project/$BRANCH_NAME"
     ;;
 esac
 
@@ -211,10 +204,9 @@ Ready to implement auth feature
 ## Integration
 
 **Called by:**
-- **thinking** (creative-design mode) - REQUIRED when design is approved and implementation follows
+- **brainstorming** (creative-design mode) - REQUIRED when design is approved and implementation follows
 - **subagent-driven-development** - REQUIRED before executing any tasks
-- **executing-plans** - REQUIRED before executing any tasks
 - Any skill needing isolated workspace
 
 **Pairs with:**
-- **finishing-a-development-branch** - REQUIRED for cleanup after work complete
+- **review** - Code review after work complete

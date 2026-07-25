@@ -1,0 +1,226 @@
+---
+name: graceful-degradation
+description: "Handle situations where multiple tools (CodeGraph, Engram, Controller) are unavailable. Provides a systematic approach to continue working with reduced capabilities."
+---
+
+# Graceful Degradation
+
+When critical tools are unavailable, this skill provides a systematic approach to continue working with reduced capabilities instead of failing completely.
+
+**Follow Core Instructions** — `ostacky.md` Core Instructions section for CodeGraph and Engram usage patterns.
+
+---
+
+## Tool Availability Matrix
+
+| Tool | Fallback Chain | Impact |
+|------|---------------|--------|
+| CodeGraph | Engram → Read + Glob | No structural analysis, manual exploration |
+| Engram | Continue without memory | No persistence across sessions |
+| Controller | Inline validation + manual state | No state machine, no edit validation |
+| Context7 | Skip documentation | No external API docs |
+
+## Detection
+
+After health check pre-vuelo, classify the situation:
+
+### All Tools Available
+Normal operation. No degradation needed.
+
+### Partial Degradation (1-2 tools down)
+Continue with available tools. Report to user.
+
+### Complete Degradation (All tools down)
+Switch to basic mode with manual workflows.
+
+## Degraded Workflows
+
+### Without CodeGraph
+
+**Available alternatives:**
+1. **Engram** — Check if previous analysis exists for the area
+2. **Read + Glob** — Manual file exploration
+
+**Workflow:**
+```
+1. mem_search for related analysis (if Engram available)
+2. Use Glob to find relevant files: **/*.ts, src/**/*.ts
+3. Read files manually to understand structure
+4. Proceed with caution — no blast radius analysis
+```
+
+**Limitations:**
+- No call path analysis
+- No blast radius calculation
+- No symbol search
+- Higher risk of missing dependencies
+
+### Without Engram
+
+**Available alternatives:**
+1. **OpenSpec** — Check for active changes with proposals/designs
+2. **Filesystem** — Check for previous analysis docs
+
+**Workflow:**
+```
+1. Check openspec/changes/ for active change artifacts
+2. Check docs/superpowers/specs/ for design documents
+3. Proceed without session memory
+4. At session end, document key decisions in a summary
+```
+
+**Limitations:**
+- No cross-session memory
+- No decision history
+- Risk of repeating previous mistakes
+
+### Without Controller
+
+**Available alternatives:**
+1. **Inline validation** — Manual edit validation
+2. **Manual state tracking** — Track progress in conversation
+
+**Workflow:**
+```
+1. For each edit:
+   - Read file fresh
+   - Verify oldString ≠ newString
+   - Verify oldString appears exactly once
+   - Execute edit
+2. Track completed tasks mentally or in conversation
+3. No automatic state persistence
+```
+
+**Limitations:**
+- No automatic edit validation
+- No task completion tracking
+- No state persistence across crashes
+
+### Without Context7
+
+**Impact:** Minimal — only affects external API documentation lookups.
+
+**Workflow:** Proceed normally. Use existing knowledge.
+
+## Communication Protocol
+
+### Status Report Format
+
+When degradation is detected, report to user:
+
+```
+⚠️ [Tool] no disponible — usando fallback: [fallback]
+
+Herramientas disponibles:
+✅ [Tool1] — [status]
+❌ [Tool2] — [fallback being used]
+⚠️ [Tool3] — [degraded mode]
+
+¿Continuar con funcionalidad reducida?
+```
+
+### Example Reports
+
+**CodeGraph down:**
+```
+⚠️ CodeGraph no disponible — usando fallback: Engram → Read
+
+Herramientas disponibles:
+✅ Controller — ping OK
+❌ CodeGraph — timeout 10s
+✅ Engram — disponible
+✅ Context7 — disponible
+
+¿Continuar con lectura manual de archivos?
+```
+
+**All tools down:**
+```
+🔴 Stack de herramientas no disponible — modo básico activado
+
+Herramientas disponibles:
+❌ Controller — no responde
+❌ CodeGraph — no instalado
+❌ Engram — timeout 5s
+✅ Context7 — disponible (pero sin docs relevantes)
+
+Modo básico: sin validación de edits, sin memoria persistente, sin análisis estructural.
+¿Continuar o cancelar?
+```
+
+## Recovery After Degradation
+
+When a tool becomes available again during the session:
+
+1. **Detect:** Health check succeeds on next call
+2. **Report:** "✅ [Tool] disponible nuevamente"
+3. **Resume:** Switch back to normal workflow
+4. **Catch up:** Use the tool to verify recent work
+
+## Guardrails
+
+### During Degradation
+
+- **Never skip validation** — Use inline validation when controller is down
+- **Never assume structure** — Read files even if you think you know them
+- **Document decisions** — Write down key choices since Engram may be down
+- **Report limitations** — User must know what's working and what's not
+
+### When Choosing to Continue
+
+Ask yourself:
+1. Can I safely complete this task without the missing tool?
+2. What's the worst case if I proceed without it?
+3. Is the user aware of the limitations?
+
+If unsure → ask the user.
+
+### When to Stop
+
+- All critical tools are down AND the task requires them
+- The task is high-risk without structural analysis (CodeGraph)
+- The user requests to stop
+
+## Integration
+
+This skill is loaded automatically when the agent detects tool failures during the health check pre-vuelo.
+
+It does NOT replace other skills — it provides degraded workflows for them.
+
+## Examples
+
+### Example 1: CodeGraph fails, others work
+
+```
+Agent: ⚠️ CodeGraph no disponible (timeout 10s).
+
+Voy a usar Engram para buscar análisis previos y luego leer archivos manualmente.
+
+¿Continuar con esta aproximación?
+
+User: Sí
+
+Agent: [Uses mem_search to find related analysis]
+       [Uses Glob to find relevant files]
+       [Reads files manually]
+       [Proceeds with task]
+```
+
+### Example 2: Controller fails
+
+```
+Agent: ⚠️ Controller no disponible — operando con validación inline.
+
+Cada edit será validado manualmente:
+- oldString ≠ newString
+- oldString aparece exactamente una vez
+
+¿Continuar?
+
+User: Sí
+
+Agent: [Reads file fresh]
+       [Validates oldString manually]
+       [Executes edit]
+       [Reports completion]
+```

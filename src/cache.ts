@@ -1,26 +1,36 @@
-import { homedir } from 'os';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { sha256 } from './security.js';
 
-/** Directorio raíz del cache: ~/.opencode/cache */
-const CACHE_ROOT = join(homedir(), '.opencode', 'cache');
-
 /**
- * Genera la ruta absoluta del archivo en cache.
- * Ejemplo: ~/.opencode/cache/JaimeHoracio__ostacky/v0.5.10/assets/agents/ostacky.md
+ * Returns the cache root directory for a given project.
+ * Cache is project-local: <projectRoot>/.opencode/cache/
  */
-function cacheKey(repo: string, tag: string, filePath: string): string {
-    const repoSlug = repo.replace('/', '__');
-    return join(CACHE_ROOT, repoSlug, tag, filePath);
+export function getCacheRoot(projectRoot: string): string {
+    return join(projectRoot, '.opencode', 'cache');
 }
 
 /**
- * Devuelve el contenido cacheado si existe y (opcionalmente) coincide el hash.
- * Retorna null si no hay cache o el hash no coincide.
+ * Generates the absolute path for a cached file.
+ * Example: <projectRoot>/.opencode/cache/ostacky/v0.6.0/assets/agents/ostacky.md
  */
-export function getCached(repo: string, tag: string, filePath: string, expectedHash?: string | null): string | null {
-    const cachePath = cacheKey(repo, tag, filePath);
+function cacheKey(projectRoot: string, repo: string, tag: string, filePath: string): string {
+    const repoSlug = repo.replace('/', '__');
+    return join(getCacheRoot(projectRoot), repoSlug, tag, filePath);
+}
+
+/**
+ * Returns cached content if it exists and (optionally) matches the hash.
+ * Returns null if no cache or hash mismatch.
+ */
+export function getCached(
+    projectRoot: string,
+    repo: string,
+    tag: string,
+    filePath: string,
+    expectedHash?: string | null
+): string | null {
+    const cachePath = cacheKey(projectRoot, repo, tag, filePath);
     if (!existsSync(cachePath)) return null;
 
     try {
@@ -34,10 +44,10 @@ export function getCached(repo: string, tag: string, filePath: string, expectedH
 }
 
 /**
- * Guarda contenido en cache. Crea los directorios necesarios.
+ * Saves content to cache. Creates necessary directories.
  */
-export function putCache(repo: string, tag: string, filePath: string, content: string): void {
-    const cachePath = cacheKey(repo, tag, filePath);
+export function putCache(projectRoot: string, repo: string, tag: string, filePath: string, content: string): void {
+    const cachePath = cacheKey(projectRoot, repo, tag, filePath);
     const dir = dirname(cachePath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     writeFileSync(cachePath, content, 'utf-8');

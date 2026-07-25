@@ -55,9 +55,9 @@ Ostacky integra **5 herramientas** especializadas para que trabajen en conjunto 
 
 ### Cómo trabajan en sinergia
 
-1. **CodeGraph** descubre el alcance del cambio sin escanear el repo entero (consulta `codegraph_context`, `codegraph_impact`).
+1. **CodeGraph** descubre el alcance del cambio sin escanear el repo entero (consulta `codegraph_explore`, `codegraph_impact`).
 2. **OpenSpec** documenta requisitos, contratos y escenarios de aceptación (proposal → design → spec → tasks).
-3. **Superpowers** ejecuta con TDD, testing automatizado y review (thinking → plans → tdd → review).
+3. **Superpowers** ejecuta con TDD, testing automatizado y review (brainstorming → plans → tdd → review).
 4. **Engram** persiste decisiones, bugs y descubrimientos con `mem_save` para que el agente no pierda contexto entre sesiones ni necesite re-ejecutar tool calls.
 5. **Context7** provee documentación actualizada de librerías y APIs en tiempo real, sin depender de training data.
 
@@ -76,13 +76,13 @@ Antes de ejecutar, Ostacky **muestra el análisis de archivos compartidos** (qu�
 - Instalar el agente `Ostacky` en cualquier proyecto con un solo comando.
 - Mantener un registro de qué versión está instalada (`ostacky-lock.json`)
 - Detectar y aplicar actualizaciones mostrando el diff de versiones antes de confirmar
-- Evitar descargas repetidas gracias al cache local en `~/.opencode/cache/`
+- Evitar descargas repetidas gracias al cache local en `.opencode/cache/`
 - Resolver tareas chicas sin overhead extra de coordinación.
 - Ejecutar tareas independientes en paralelo con **subagentes** cuando no comparten archivos, o inline secuencial cuando se pisan.
 
 ## Requisitos
 
-- [Node.js](https://nodejs.org/) >= 18 (para usar con `npx`)
+- [Node.js](https://nodejs.org/) >= 20 (para usar con `npx`)
 - o [Bun](https://bun.sh/) >= 1.x (para usar con `bunx` o desarrollo)
 - [OpenCode](https://opencode.ai) instalado en tu máquina
 - **WSL:** Si usás Windows con WSL, seguí las instrucciones para **Linux** — WSL corre un kernel Linux real. No uses los comandos de PowerShell aunque estés en Windows.
@@ -197,7 +197,7 @@ Tras instalar, el proyecto queda así:
 │   ├── install-stack.md
 │   └── opsx-sync.md
 ├── skills/
-│   ├── thinking/
+│   ├── brainstorming/
 │   ├── writing-plans/
 │   ├── tdd/
 │   ├── review/
@@ -210,7 +210,8 @@ Tras instalar, el proyecto queda así:
 │   ├── receiving-code-review/
 │   ├── using-git-worktrees/
 │   ├── using-superpowers/
-│   └── writing-skills/
+│   ├── writing-skills/
+│   └── graceful-degradation/
 └── ostacky-lock.json          ← versiones instaladas (agentes, commands y skills)
 ```
 
@@ -218,33 +219,33 @@ Tras instalar, el proyecto queda así:
 
 ```json
 {
-    "version": "0.5.10",
+    "version": "0.6.0",
     "lockedAt": "2025-01-01T00:00:00.000Z",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.5.10",
+    "tag": "v0.6.0",
     "agents": {
         "ostacky": {
-            "version": "0.5.10",
+            "version": "0.6.0",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "abc123..."
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.5.10",
+            "version": "0.6.0",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "def456..."
         },
         "opsx-sync": {
-            "version": "0.5.10",
+            "version": "0.6.0",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "ghi789..."
         }
     },
     "skills": {
-        "thinking": { "version": "0.5.10", ... },
-        "execution-mode-evaluation": { "version": "0.5.10", ... },
-        "openspec-propose": { "version": "0.5.10", ... }
+        "brainstorming": { "version": "0.6.0", ... },
+        "execution-mode-evaluation": { "version": "0.6.0", ... },
+        "openspec-propose": { "version": "0.6.0", ... }
     }
 }
 ```
@@ -274,23 +275,23 @@ Es opcional y solo necesario si algo falló durante la instalación o si querés
 ## Seguridad
 
 - `opencode.jsonc` se versiona en el repo para compartir permisos y MCP de forma reproducible.
-- Las URLs de descarga usan **tags de GitHub** (ej. `v0.5.10`), nunca `main` — instalaciones reproducibles
+- Las URLs de descarga usan **tags de GitHub** (ej. `v0.6.0`), nunca `main` — instalaciones reproducibles
 - Cada path de archivo descargado es validado para prevenir **path traversal**
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
-- El cache local (`~/.opencode/cache/`) también valida integridad al servir archivos cacheados
+- El cache local (`.opencode/cache/`) también valida integridad al servir archivos cacheados
 
 #### Restricciones de acceso a credenciales
 
 - La configuración local de OpenCode (`opencode.jsonc`) bloquea lectura y escritura de `*.env` y `.secret/**` con `deny`.
 - La sesión sigue ejecutándose después del bloqueo porque `experimental.continue_loop_on_deny` está activado.
-- Para worktrees, el repo prefiere `.worktrees/`; `~/.config/superpowers/worktrees` solo se usa con confirmación explícita.
+- Para worktrees, el repo prefiere `.worktrees/` o `worktrees/` (ambos project-local).
 
 ## Cache
 
 Los archivos descargados se guardan en:
 
 ```
-~/.opencode/cache/<repo>/<tag>/<ruta-del-archivo>
+.opencode/cache/<repo>/<tag>/<ruta-del-archivo>
 ```
 
 Si ya existe un archivo en cache con el hash correcto, no se hace ninguna petición de red.
@@ -311,7 +312,7 @@ Engram está instalado localmente en `.opencode/tools/engram/bin/engram` y se co
 
 ### CodeGraph (grafo de código)
 
-CodeGraph está instalado en `.opencode/tools/codegraph/bin/codegraph` y se configura como MCP server. Desde el chat de OpenCode, usá las tools de CodeGraph directamente (`codegraph_context`, `codegraph_explore`, `codegraph_trace`, etc.). Algunos comandos CLI útiles:
+CodeGraph está instalado en `.opencode/tools/codegraph/bin/codegraph` y se configura como MCP server. Desde el chat de OpenCode, usá las tools de CodeGraph directamente (`codegraph_explore`, `codegraph_trace`, etc.). Algunos comandos CLI útiles:
 
 | Comando                                                                                    | Qué hace                                                    |
 | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------- |

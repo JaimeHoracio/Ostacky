@@ -7,8 +7,68 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, readdirSync, unlink
 import { dirname, basename } from 'node:path';
 
 const MAX_TASKS = 50;
-const MAX_SNAPSHOT_JSON_LENGTH = 100 * 1024; // 100KB per snapshot serialized
-const MAX_STATE_FILE_SIZE = 1024 * 1024; // 1MB hard cap for the entire state file
+const MAX_SNAPSHOT_JSON_LENGTH = 100 * 1024;
+const MAX_STATE_FILE_SIZE = 1024 * 1024;
+
+const TRANSITIONS = {
+    INTERPRETATION_PENDING: [
+        { via: 'request_clarification', to: 'CLARIFICATION_PENDING' },
+        { via: 'proceed_to_discovery', to: 'DISCOVERY' },
+        { via: 'record_discovery', to: 'ROUTE_DECISION_PENDING' },
+        { via: 'block', to: 'BLOCKED' },
+    ],
+    CLARIFICATION_PENDING: [
+        { via: 'record_clarification', to: 'DISCOVERY' },
+        { via: 'block', to: 'BLOCKED' },
+        { via: 'abandon', to: 'BLOCKED' },
+    ],
+    DISCOVERY: [
+        { via: 'record_discovery', to: 'LEVEL_RESOLVED' },
+        { via: 'block', to: 'BLOCKED' },
+        { via: 'abandon', to: 'BLOCKED' },
+    ],
+    LEVEL_RESOLVED: [
+        { via: 'proceed_to_route', to: 'ROUTE_DECISION_PENDING' },
+        { via: 'block', to: 'BLOCKED' },
+    ],
+    ROUTE_DECISION_PENDING: [
+        { via: 'consume_route_decision', to: 'SPECIFICATION', choice: 'SPEC' },
+        { via: 'consume_route_decision', to: 'EXECUTION_ANALYSIS', choice: 'DIRECT' },
+        { via: 'block', to: 'BLOCKED' },
+    ],
+    SPECIFICATION: [
+        { via: 'spec_complete', to: 'EXECUTION_ANALYSIS' },
+        { via: 'block', to: 'BLOCKED' },
+        { via: 'abandon', to: 'BLOCKED' },
+    ],
+    EXECUTION_ANALYSIS: [
+        { via: 'analysis_complete', to: 'EXECUTION_DECISION_PENDING' },
+        { via: 'block', to: 'BLOCKED' },
+        { via: 'abandon', to: 'BLOCKED' },
+    ],
+    EXECUTION_DECISION_PENDING: [
+        { via: 'consume_execution_decision', to: 'EXECUTING_INLINE', mode: 'INLINE' },
+        { via: 'consume_execution_decision', to: 'EXECUTING_SUBAGENTS', mode: 'SUBAGENT_DRIVEN' },
+        { via: 'block', to: 'BLOCKED' },
+    ],
+    EXECUTING_INLINE: [
+        { via: 'implementation_complete', to: 'SYNC' },
+        { via: 'block', to: 'BLOCKED' },
+    ],
+    EXECUTING_SUBAGENTS: [
+        { via: 'implementation_complete', to: 'SYNC' },
+        { via: 'block', to: 'BLOCKED' },
+    ],
+    BLOCKED: [
+        { via: 'replan', to: 'INTERPRETATION_PENDING' },
+        { via: 'abandon', to: 'DONE' },
+    ],
+    SYNC: [
+        { via: 'sync_complete', to: 'DONE' },
+        { via: 'block', to: 'BLOCKED' },
+    ],
+    DONE: [],
+};
 
 /**
  * Safe JSON.stringify that won't throw on circular references.
@@ -107,6 +167,19 @@ class OstackyController {
         }
     }
 
+    /**
+     * Validates that a parsed state object has the required fields and valid values.
+     * Returns null if valid, or an error message if invalid.
+     */
+    #validateState(parsed) {
+        if (typeof parsed !== 'object' || parsed === null) return 'State is not an object';
+        if (typeof parsed.state !== 'string') return 'Missing or invalid "state" field';
+        if (!STATES[parsed.state]) return `Unknown state: "${parsed.state}"`;
+        if (typeof parsed.revision !== 'number') return 'Missing or invalid "revision" field';
+        if (parsed.revision < 0) return `Invalid revision: ${parsed.revision}`;
+        return null; // valid
+    }
+
     #load() {
         if (this.#loaded) return;
         if (!this.#statePath) {
@@ -118,7 +191,10 @@ class OstackyController {
         try {
             const raw = readFileSync(this.#statePath, 'utf8');
             if (raw.length > MAX_STATE_FILE_SIZE) throw new Error(`State file too large: ${raw.length} bytes`);
-            this.#state = { ...DEFAULT_STATE, ...JSON.parse(raw) };
+            const parsed = JSON.parse(raw);
+            const validationError = this.#validateState(parsed);
+            if (validationError) throw new Error(`State validation failed: ${validationError}`);
+            this.#state = { ...DEFAULT_STATE, ...parsed };
             this.#loaded = true;
             return;
         } catch (err) {
@@ -129,17 +205,20 @@ class OstackyController {
         try {
             const raw = readFileSync(backupPath, 'utf8');
             if (raw.length > MAX_STATE_FILE_SIZE) throw new Error(`Backup too large: ${raw.length} bytes`);
-            this.#state = { ...DEFAULT_STATE, ...JSON.parse(raw), error: 'State restored from backup' };
+            const parsed = JSON.parse(raw);
+            const validationError = this.#validateState(parsed);
+            if (validationError) throw new Error(`Backup validation failed: ${validationError}`);
+            this.#state = { ...DEFAULT_STATE, ...parsed, error: 'State restored from backup' };
             log('warn:state_restored_from_backup');
             this.#loaded = true;
             return;
-        } catch {
+        } catch (backupErr) {
             // No backup either — set error state instead of silent reset
             this.#state = {
                 ...DEFAULT_STATE,
-                error: `State file corrupt: ${err.message}. No backup available. State reset to default.`,
+                error: `State file corrupt: ${backupErr.message}. No backup available. State reset to default.`,
             };
-            log('warn:state_reset', { error: err.message });
+            log('warn:state_reset', { error: backupErr.message });
         }
         this.#loaded = true;
     }
@@ -148,28 +227,24 @@ class OstackyController {
         if (!this.#statePath) return;
         const dir = dirname(this.#statePath);
         mkdirSync(dir, { recursive: true });
-        const serialized = safeJsonStringify(this.#state, true);
-        // Hard cap — if state exceeds 1MB, trim snapshots and retry
+        let serialized = safeJsonStringify(this.#state, true);
         if (serialized.length > MAX_STATE_FILE_SIZE) {
             log('warn:state_oversized', { size: serialized.length });
-            this.#state.snapshots = { codegraph: null, execution: null };
-            const trimmed = safeJsonStringify(this.#state, true);
-            if (trimmed.length > MAX_STATE_FILE_SIZE) {
+            const trimmed = { ...this.#state, snapshots: { codegraph: null, execution: null } };
+            serialized = safeJsonStringify(trimmed, true);
+            if (serialized.length > MAX_STATE_FILE_SIZE) {
                 log('error:state_too_large_even_after_trim');
-                return; // Don't persist — better to keep old state than write garbage
+                return;
             }
-            const tmp = this.#statePath + '.tmp.' + process.pid;
-            writeFileSync(tmp, trimmed, 'utf8');
-            renameSync(tmp, this.#statePath);
-            return;
+            this.#state.snapshots = { codegraph: null, execution: null };
         }
         const tmp = this.#statePath + '.tmp.' + process.pid;
         writeFileSync(tmp, serialized, 'utf8');
         renameSync(tmp, this.#statePath);
-        // Best-effort backup
         try {
-            const backupPath = this.#statePath + '.backup';
-            writeFileSync(backupPath, serialized, 'utf8');
+            const backupTmp = this.#statePath + '.backup.tmp.' + process.pid;
+            writeFileSync(backupTmp, serialized, 'utf8');
+            renameSync(backupTmp, this.#statePath + '.backup');
         } catch {
             /* backup is best-effort */
         }
@@ -198,71 +273,11 @@ class OstackyController {
         this.#state.revision++;
         this.#state.state = to;
         Object.assign(this.#state, changes);
-        this.#trimTasks();
         this.#persist();
     }
 
     #isAllowedTransition(from, via, choiceOrMode) {
-        const table = {
-            INTERPRETATION_PENDING: [
-                { to: 'CLARIFICATION_PENDING', via: 'request_clarification' },
-                { to: 'DISCOVERY', via: 'proceed_to_discovery' },
-                { to: 'ROUTE_DECISION_PENDING', via: 'record_discovery' },
-                { to: 'BLOCKED', via: 'block' },
-            ],
-            CLARIFICATION_PENDING: [
-                { to: 'DISCOVERY', via: 'record_clarification' },
-                { to: 'BLOCKED', via: 'block' },
-                { to: 'BLOCKED', via: 'abandon' },
-            ],
-            DISCOVERY: [
-                { to: 'LEVEL_RESOLVED', via: 'record_discovery' },
-                { to: 'BLOCKED', via: 'block' },
-                { to: 'BLOCKED', via: 'abandon' },
-            ],
-            LEVEL_RESOLVED: [
-                { to: 'ROUTE_DECISION_PENDING', via: 'route_decision_pending' },
-                { to: 'BLOCKED', via: 'block' },
-            ],
-            ROUTE_DECISION_PENDING: [
-                { to: 'SPECIFICATION', via: 'consume_route_decision', choice: 'SPEC' },
-                { to: 'EXECUTION_ANALYSIS', via: 'consume_route_decision', choice: 'DIRECT' },
-                { to: 'BLOCKED', via: 'block' },
-            ],
-            SPECIFICATION: [
-                { to: 'EXECUTION_ANALYSIS', via: 'spec_complete' },
-                { to: 'BLOCKED', via: 'block' },
-                { to: 'BLOCKED', via: 'abandon' },
-            ],
-            EXECUTION_ANALYSIS: [
-                { to: 'EXECUTION_DECISION_PENDING', via: 'analysis_complete' },
-                { to: 'BLOCKED', via: 'block' },
-                { to: 'BLOCKED', via: 'abandon' },
-            ],
-            EXECUTION_DECISION_PENDING: [
-                { to: 'EXECUTING_INLINE', via: 'consume_execution_decision', mode: 'INLINE' },
-                { to: 'EXECUTING_SUBAGENTS', via: 'consume_execution_decision', mode: 'SUBAGENT_DRIVEN' },
-                { to: 'BLOCKED', via: 'block' },
-            ],
-            EXECUTING_INLINE: [
-                { to: 'SYNC', via: 'implementation_complete' },
-                { to: 'BLOCKED', via: 'block' },
-            ],
-            EXECUTING_SUBAGENTS: [
-                { to: 'SYNC', via: 'implementation_complete' },
-                { to: 'BLOCKED', via: 'block' },
-            ],
-            BLOCKED: [
-                { to: 'INTERPRETATION_PENDING', via: 'replan' },
-                { to: 'DONE', via: 'abandon' },
-            ],
-            SYNC: [
-                { to: 'DONE', via: 'sync_complete' },
-                { to: 'BLOCKED', via: 'block' },
-            ],
-            DONE: [],
-        };
-        const transitions = table[from] || [];
+        const transitions = TRANSITIONS[from] || [];
         for (const t of transitions) {
             if (t.via !== via) continue;
             if (t.choice !== undefined && t.choice !== choiceOrMode) continue;
@@ -274,11 +289,7 @@ class OstackyController {
 
     async startRequest({ requestId, changeId } = {}) {
         this.#load();
-        if (
-            this.#state.state !== 'INTERPRETATION_PENDING' &&
-            this.#state.state !== 'BLOCKED' &&
-            this.#state.state !== 'DONE'
-        ) {
+        if (this.#state.state === 'INTERPRETATION_PENDING' && !requestId) {
             return { state: this.#state.state, revision: this.#state.revision, requestId: this.#state.requestId };
         }
         this.#transition('INTERPRETATION_PENDING', {
@@ -316,7 +327,9 @@ class OstackyController {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'record_discovery');
         if (!to) return { error: `Cannot record discovery from state ${this.#state.state}` };
-        if (!['0', '0+1', '1+'].includes(level)) return { error: `Invalid level: ${level}` };
+        if (snapshot && safeJsonStringify(snapshot).length > MAX_SNAPSHOT_JSON_LENGTH) {
+            return { error: `Snapshot exceeds maximum size of ${MAX_SNAPSHOT_JSON_LENGTH} bytes` };
+        }
         this.#transition(to, {
             routeDecisionId: routeDecisionId || 'route-' + Date.now(),
             routeChoice: null,
@@ -332,17 +345,28 @@ class OstackyController {
         };
     }
 
+    async proceedToRoute() {
+        this.#load();
+        const to = this.#isAllowedTransition(this.#state.state, 'proceed_to_route');
+        if (!to) return { error: `Cannot proceed to route from state ${this.#state.state}` };
+        this.#transition(to);
+        return { state: this.#state.state, revision: this.#state.revision };
+    }
+
+    async abandon({ reason } = {}) {
+        this.#load();
+        const to = this.#isAllowedTransition(this.#state.state, 'abandon');
+        if (!to) return { error: `Cannot abandon from state ${this.#state.state}` };
+        this.#transition(to, { error: reason || 'Abandoned' });
+        return { state: this.#state.state, revision: this.#state.revision };
+    }
+
     async consumeRouteDecision({ decisionId, choice } = {}) {
         this.#load();
         if (this.#state.state !== 'ROUTE_DECISION_PENDING') {
-            if (this.#state.routeDecisionId === decisionId && this.#state.routeChoice) {
-                return { error: `Route decision ${decisionId} already consumed as ${this.#state.routeChoice}` };
-            }
             return { error: `Cannot consume route decision from state ${this.#state.state}` };
         }
         if (this.#state.routeDecisionId !== decisionId) return { error: `Decision ID mismatch` };
-        if (choice !== 'SPEC' && choice !== 'DIRECT') return { error: `Invalid choice: ${choice}` };
-        if (this.#state.routeChoice) return { error: `Decision already consumed as ${this.#state.routeChoice}` };
         const to = this.#isAllowedTransition(this.#state.state, 'consume_route_decision', choice);
         if (!to) return { error: `Route ${choice} not allowed from ${this.#state.state}` };
         this.#transition(to, { routeChoice: choice });
@@ -361,7 +385,10 @@ class OstackyController {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'analysis_complete');
         if (!to) return { error: `Cannot record execution analysis from state ${this.#state.state}` };
-        this.#transition('EXECUTION_DECISION_PENDING', {
+        if (snapshot && safeJsonStringify(snapshot).length > MAX_SNAPSHOT_JSON_LENGTH) {
+            return { error: `Snapshot exceeds maximum size of ${MAX_SNAPSHOT_JSON_LENGTH} bytes` };
+        }
+        this.#transition(to, {
             executionDecisionId: executionDecisionId || 'exec-' + Date.now(),
             executionMode: null,
             snapshots: { ...this.#state.snapshots, execution: snapshot || null },
@@ -376,14 +403,9 @@ class OstackyController {
     async consumeExecutionDecision({ decisionId, mode } = {}) {
         this.#load();
         if (this.#state.state !== 'EXECUTION_DECISION_PENDING') {
-            if (this.#state.executionDecisionId === decisionId && this.#state.executionMode) {
-                return { error: `Execution decision ${decisionId} already consumed as ${this.#state.executionMode}` };
-            }
             return { error: `Cannot consume execution decision from state ${this.#state.state}` };
         }
         if (this.#state.executionDecisionId !== decisionId) return { error: `Decision ID mismatch` };
-        if (mode !== 'INLINE' && mode !== 'SUBAGENT_DRIVEN') return { error: `Invalid mode: ${mode}` };
-        if (this.#state.executionMode) return { error: `Decision already consumed as ${this.#state.executionMode}` };
         const to = this.#isAllowedTransition(this.#state.state, 'consume_execution_decision', mode);
         if (!to) return { error: `Mode ${mode} not allowed from ${this.#state.state}` };
         this.#transition(to, { executionMode: mode });
@@ -433,12 +455,20 @@ class OstackyController {
 
     async getState() {
         this.#load();
-        return { ...this.#state };
+        return structuredClone(this.#state);
     }
 
     async getTasks() {
         this.#load();
         return { ...this.#state.tasks };
+    }
+
+    async getAvailableTransitions() {
+        this.#load();
+        return {
+            currentState: this.#state.state,
+            transitions: TRANSITIONS[this.#state.state] || [],
+        };
     }
 
     /**
@@ -545,7 +575,11 @@ function safeHandler(fn) {
             const result = await fn(params);
             return { content: [{ type: 'text', text: safeJsonStringify(result) }] };
         } catch (error) {
-            log('tool:error', { name: fn.name || 'anonymous', error: error.message });
+            log('tool:error', {
+                name: fn.name || 'anonymous',
+                error: error.message,
+                stack: error.stack,
+            });
             return {
                 content: [{ type: 'text', text: safeJsonStringify({ error: error.message }) }],
                 isError: true,
@@ -556,13 +590,13 @@ function safeHandler(fn) {
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.5.10',
+    version: '0.6.0',
 });
 
 server.registerTool(
     'start_request',
     {
-        description: 'Start or resume a new request in the state machine. Call this first.',
+        description: 'Start or reset a new request. Can be called from ANY state — resets state machine. Call this first.',
         inputSchema: z.object({
             requestId: z.string().optional().describe('Unique request ID'),
             changeId: z.string().optional().describe('Optional change ID for OpenSpec tracking'),
@@ -603,7 +637,7 @@ server.registerTool(
 server.registerTool(
     'record_discovery',
     {
-        description: 'Record discovery complete with level classification. Transitions to ROUTE_DECISION_PENDING.',
+        description: 'Record discovery complete with level classification. From INTERPRETATION_PENDING goes to ROUTE_DECISION_PENDING. From DISCOVERY goes to LEVEL_RESOLVED.',
         inputSchema: z.object({
             level: z.enum(['0', '0+1', '1+']).describe('Impact level'),
             routeDecisionId: z.string().optional().describe('Unique route decision ID'),
@@ -726,6 +760,50 @@ server.registerTool(
 );
 
 server.registerTool(
+    'proceed_to_route',
+    {
+        description: 'Proceed from LEVEL_RESOLVED to ROUTE_DECISION_PENDING after discovery is confirmed.',
+        inputSchema: z.object({}),
+    },
+    safeHandler(async () => {
+        log('tool:proceed_to_route');
+        return await controller.proceedToRoute();
+    })
+);
+
+server.registerTool(
+    'abandon',
+    {
+        description: 'Abandon the current request. Transitions to BLOCKED from most states, or to DONE from BLOCKED.',
+        inputSchema: z.object({
+            reason: z.string().optional().describe('Reason for abandoning'),
+        }),
+    },
+    safeHandler(async ({ reason }) => {
+        log('tool:abandon');
+        return await controller.abandon({ reason });
+    })
+);
+
+server.registerTool(
+    'ping',
+    {
+        description: 'Health check — returns pong if controller is alive. Use this to verify controller availability before making other calls.',
+        inputSchema: z.object({}),
+    },
+    safeHandler(async () => {
+        return {
+            pong: true,
+            state: await controller.getState().then(s => ({
+                state: s.state,
+                revision: s.revision,
+                requestId: s.requestId,
+            })),
+        };
+    })
+);
+
+server.registerTool(
     'get_state',
     {
         description: 'Get the current controller state (reads persistent store).',
@@ -744,6 +822,17 @@ server.registerTool(
     },
     safeHandler(async () => {
         return await controller.getTasks();
+    })
+);
+
+server.registerTool(
+    'get_available_transitions',
+    {
+        description: 'Get valid transitions from current state. Useful for debugging state machine issues.',
+        inputSchema: z.object({}),
+    },
+    safeHandler(async () => {
+        return await controller.getAvailableTransitions();
     })
 );
 
@@ -822,6 +911,8 @@ function setupGracefulShutdown(ctrl) {
     };
     process.on('SIGTERM', () => shutdown('SIGTERM'));
     process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGHUP', () => shutdown('SIGHUP'));
+    process.on('SIGPIPE', () => shutdown('SIGPIPE'));
     // Prevent unhandled rejections from silently killing the server
     process.on('unhandledRejection', (reason) => {
         log('unhandled_rejection', { reason: String(reason) });

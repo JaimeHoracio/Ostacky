@@ -17,7 +17,7 @@ Implement tasks from an OpenSpec change.
 
 1. **Check Engram for past implementation patterns**
 
-   Before implementing, `engram_mem_search` with keywords from the change name and affected modules. Look for:
+   Before implementing, `mem_search` with keywords from the change name and affected modules. Look for:
    - Similar changes implemented before (approaches that worked or failed)
    - Known gotchas or edge cases in related areas
    - Model selection patterns for similar task complexity
@@ -29,7 +29,7 @@ Implement tasks from an OpenSpec change.
    If a name is provided, use it. Otherwise:
    - Infer from conversation context if the user mentioned a change
    - Auto-select if only one active change exists
-   - If ambiguous, run `openspec list --json` to get available changes and use the **question tool** to let the user select. After calling `question`, STOP and wait for the answer.
+   - If ambiguous, run `openspec list --json` to get available changes and ask the user in natural language to select one, then stop and wait for the answer.
 
    Always announce: "Using change: <name>" and how to override (e.g., `/opsx-apply <other>`).
 

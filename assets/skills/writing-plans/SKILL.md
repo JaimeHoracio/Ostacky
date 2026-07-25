@@ -13,7 +13,7 @@ Assume they are a skilled developer, but know almost nothing about our toolset o
 
 **Announce at start:** "I'm using the writing-plans skill to create the implementation plan."
 
-**Context:** If working in an isolated worktree, it should have been created via the `superpowers:using-git-worktrees` skill at execution time.
+**Context:** If working in an isolated worktree, it should have been created via the `using-git-worktrees` skill at execution time.
 
 **Save plans to:** `docs/superpowers/plans/YYYY-MM-DD-<feature-name>.md`
 - (User preferences for plan location override this default)
@@ -22,7 +22,7 @@ Assume they are a skilled developer, but know almost nothing about our toolset o
 
 Before writing the plan, **consult Engram** to avoid repeating past mistakes:
 
-1. `engram_mem_search` with keywords from the feature name and affected modules
+1. `mem_search` with keywords from the feature name and affected modules
 2. Look for:
    - Previous plans for similar features (avoid duplicating approaches)
    - Architecture decisions that affect implementation (design patterns, library choices)
@@ -31,7 +31,7 @@ Before writing the plan, **consult Engram** to avoid repeating past mistakes:
 
 ## Scope Check
 
-If the spec covers multiple independent subsystems, it should have been broken into sub-project specs during thinking (creative-design mode). If it wasn't, suggest breaking this into separate plans — one per subsystem. Each plan should produce working, testable software on its own.
+If the spec covers multiple independent subsystems, it should have been broken into sub-project specs during brainstorming (creative-design mode). If it wasn't, suggest breaking this into separate plans — one per subsystem. Each plan should produce working, testable software on its own.
 
 ## File Structure
 

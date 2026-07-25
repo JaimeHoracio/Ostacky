@@ -1,9 +1,9 @@
 ---
-name: thinking
+name: brainstorming
 description: "Thinking partner for exploring ideas, investigating problems, and designing solutions. Two modes: creative-design (structured, produces design doc) and open-explore (unstructured, no mandatory output). Use when the user wants to think through something, brainstorm, explore an idea, or design a solution before or during a change."
 ---
 
-# Thinking
+# Brainstorming
 
 A thinking partner that adapts to what the user needs: structured design when they're building something, open exploration when they're investigating or clarifying.
 
@@ -19,7 +19,7 @@ A thinking partner that adapts to what the user needs: structured design when th
 | "explore", "investigate", "think through", "what if", "how does" | **open-explore** |
 | "brainstorm", "ideate", "propose approach" | **creative-design** |
 | "check", "understand", "review existing" | **open-explore** |
-| Unclear | Ask with **question** tool: "¿Querés diseñar algo nuevo o explorar/entender algo existente?" |
+| Unclear | Ask in natural language: "¿Querés diseñar algo nuevo o explorar/entender algo existente?" |
 
 ---
 
@@ -33,7 +33,7 @@ Do NOT invoke any implementation skill, write any code, or scaffold any project 
 
 ### Process
 
-1. **Check Engram** — `engram_mem_search` with keywords from the user's idea. Surface any prior design decisions or similar proposals.
+1. **Check Engram** — `mem_search` with keywords from the user's idea. Surface any prior design decisions or similar proposals.
 2. **Explore via CodeGraph** — `codegraph_explore` on the affected area. Only `Read` files CodeGraph didn't cover.
 3. **Ask clarifying questions** — one at a time, understand purpose/constraints/success criteria
 4. **Propose 2-3 approaches** — with trade-offs and your recommendation
@@ -41,7 +41,7 @@ Do NOT invoke any implementation skill, write any code, or scaffold any project 
 6. **Write design doc** — save to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` and commit
 7. **Spec self-review** — check for placeholders, contradictions, ambiguity, scope
 8. **User reviews spec** — ask user to review before proceeding
-9. **Save to Engram** — `engram_mem_save` with the design decision and tradeoffs
+9. **Save to Engram** — `mem_save` with the design decision and tradeoffs
 10. **Transition** — based on routing decision (see Transition Rules below)
 
 ### Transition Rules
@@ -192,4 +192,4 @@ Browser use is text-only by default.
 
 - Only use the browser when the user explicitly asks for browser/visual help.
 - Do not suggest the browser just because it might explain something more clearly.
-- If the user asks for browser/visual help, read `skills/thinking/visual-companion.md` before proceeding.
+- If the user asks for browser/visual help, use illustrations and diagrams in the conversation to explain concepts.

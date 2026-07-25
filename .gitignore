@@ -147,9 +147,12 @@ package-lock.json
 .opencode/
 #!.opencode/agents/ostacky.md
 #!.opencode/commands/install-stack.md
-**.test.*
+# Unit tests are source files and should be tracked — do not ignore them
+#**.test.*
+opencode.*
 scripts/
 .worktrees/
 .codegraph
 openspec/
 docs/
+.github/

@@ -1,6 +1,6 @@
 ---
 name: using-superpowers
-description: Use when starting any conversation - establishes how to find and use skills, requiring Skill tool invocation before ANY response including clarifying questions
+description: Use when starting any conversation - establishes how to find and use skills, requiring skill tool invocation before ANY response including clarifying questions
 ---
 
 <SUBAGENT-STOP>
@@ -27,17 +27,11 @@ If AGENTS.md or GEMINI.md says "don't use TDD" and a skill says "always use TDD,
 
 ## How to Access Skills
 
-**In Claude Code:** Use the `Skill` tool. When you invoke a skill, its content is loaded and presented to you—follow it directly. Never use the Read tool on skill files.
+**In OpenCode:** Use the `skill` tool. Skills are loaded from `.opencode/skills/`, `assets/skills/`, and installed plugins. When you invoke a skill, its content is loaded and presented to you—follow it directly. Never use the Read tool on skill files.
 
-**In Copilot CLI:** Use the `skill` tool. Skills are auto-discovered from installed plugins. The `skill` tool works the same as Claude Code's `Skill` tool.
+**In Copilot CLI:** Use the `skill` tool. Skills are auto-discovered from installed plugins.
 
 **In Gemini CLI:** Skills activate via the `activate_skill` tool. Gemini loads skill metadata at session start and activates the full content on demand.
-
-**In OpenCode:** Use the native `skill` tool. Skills are loaded from `.opencode/skills/`, `assets/skills/`, and installed plugins.
-
-## Platform Adaptation
-
-Skills use Claude Code tool names. Non-CC platforms: see `references/copilot-tools.md` (Copilot CLI), `references/codex-tools.md` (Codex) for tool equivalents. Gemini CLI users get the tool mapping loaded automatically via GEMINI.md.
 
 # Using Skills
 
@@ -50,28 +44,28 @@ digraph skill_flow {
     "User message received" [shape=doublecircle];
     "About to EnterPlanMode?" [shape=doublecircle];
     "Already thought through?" [shape=diamond];
-    "Invoke thinking skill" [shape=box];
+    "Invoke brainstorming skill" [shape=box];
     "Might any skill apply?" [shape=diamond];
-    "Invoke Skill tool" [shape=box];
+    "Invoke skill tool" [shape=box];
     "Announce: 'Using [skill] to [purpose]'" [shape=box];
     "Has checklist?" [shape=diamond];
-    "Create TodoWrite todo per item" [shape=box];
+    "Create todowrite todo per item" [shape=box];
     "Follow skill exactly" [shape=box];
     "Respond (including clarifications)" [shape=doublecircle];
 
     "About to EnterPlanMode?" -> "Already thought through?";
-    "Already thought through?" -> "Invoke thinking skill" [label="no"];
+    "Already thought through?" -> "Invoke brainstorming skill" [label="no"];
     "Already thought through?" -> "Might any skill apply?" [label="yes"];
-    "Invoke thinking skill" -> "Might any skill apply?";
+    "Invoke brainstorming skill" -> "Might any skill apply?";
 
     "User message received" -> "Might any skill apply?";
-    "Might any skill apply?" -> "Invoke Skill tool" [label="yes, even 1%"];
+    "Might any skill apply?" -> "Invoke skill tool" [label="yes, even 1%"];
     "Might any skill apply?" -> "Respond (including clarifications)" [label="definitely not"];
-    "Invoke Skill tool" -> "Announce: 'Using [skill] to [purpose]'";
+    "Invoke skill tool" -> "Announce: 'Using [skill] to [purpose]'";
     "Announce: 'Using [skill] to [purpose]'" -> "Has checklist?";
-    "Has checklist?" -> "Create TodoWrite todo per item" [label="yes"];
+    "Has checklist?" -> "Create todowrite todo per item" [label="yes"];
     "Has checklist?" -> "Follow skill exactly" [label="no"];
-    "Create TodoWrite todo per item" -> "Follow skill exactly";
+    "Create todowrite todo per item" -> "Follow skill exactly";
 }
 ```
 
@@ -98,10 +92,10 @@ These thoughts mean STOP—you're rationalizing:
 
 When multiple skills could apply, use this order:
 
-1. **Process skills first** (thinking, debugging) - these determine HOW to approach the task
+1. **Process skills first** (brainstorming, debugging) - these determine HOW to approach the task
 2. **Implementation skills second** (frontend-design, mcp-builder) - these guide execution
 
-"Let's build X" → thinking first, then implementation skills.
+"Let's build X" → brainstorming first, then implementation skills.
 "Fix this bug" → debugging first, then domain-specific skills.
 
 ## Skill Types

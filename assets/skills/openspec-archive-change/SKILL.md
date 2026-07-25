@@ -17,7 +17,7 @@ Archive a completed change in the experimental workflow.
 
 1. **If no change name provided, prompt for selection**
 
-   Run `openspec list --json` to get available changes. Use the **question tool** to let the user select. After calling `question`, STOP and wait for the answer.
+   Run `openspec list --json` to get available changes. Ask the user in natural language to select one, then stop and wait for the answer.
 
    Show only active changes (not already archived).
    Include the schema used for each change if available.
@@ -34,7 +34,7 @@ Archive a completed change in the experimental workflow.
 
    **If any artifacts are not `done`:**
    - Display warning listing incomplete artifacts
-   - Use **question tool** to confirm user wants to proceed. After calling `question`, STOP and wait for the answer.
+   - Ask the user in natural language to confirm they want to proceed, then stop and wait
    - Proceed if user confirms
 
 3. **Check task completion status**
@@ -45,7 +45,7 @@ Archive a completed change in the experimental workflow.
 
    **If incomplete tasks found:**
    - Display warning showing count of incomplete tasks
-   - Use **question tool** to confirm user wants to proceed. After calling `question`, STOP and wait for the answer.
+   - Ask the user in natural language to confirm they want to proceed, then stop and wait
    - Proceed if user confirms
 
    **If no tasks file exists:** Proceed without task-related warning.
@@ -63,7 +63,7 @@ Archive a completed change in the experimental workflow.
    - If changes needed: "Sync now (recommended)", "Archive without syncing"
    - If already synced: "Archive now", "Sync anyway", "Cancel"
 
-   If user chooses sync, use Task tool (subagent_type: "general-purpose", prompt: "Use Skill tool to invoke openspec-sync-specs for change '<name>'. Delta spec analysis: <include the analyzed delta spec summary>"). Proceed to archive regardless of choice.
+   If user chooses sync, use the orchestrator to sync specs before archiving. Proceed to archive regardless of choice.
 
 5. **Perform the archive**
 

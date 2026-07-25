@@ -1,8 +1,9 @@
-import localManifest from '../manifest.json' assert { type: 'json' };
+import localManifest from '../manifest.json' with { type: 'json' };
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { getCached, putCache } from './cache.js';
 import { validateFilePath, verifyChecksum } from './security.js';
+import { USER_AGENT, findProjectRoot } from './fs.js';
 
 export interface ManifestItem {
     name: string;
@@ -23,7 +24,6 @@ export interface Manifest {
 }
 
 const GITHUB_RAW = 'https://raw.githubusercontent.com';
-const GITHUB_API = 'https://api.github.com';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -60,22 +60,36 @@ export function getRawUrl(repo: string, tag: string, path: string): string {
 }
 
 /**
- * Consulta la GitHub Releases API para obtener el tag de la última release.
+ * Consulta la GitHub Releases API (con fallback al redirect) para obtener el tag de la última release.
  * Retorna null si no hay releases o la petición falla.
  */
-export async function fetchLatestTag(repo: string): Promise<string | null> {
+export async function fetchLatestReleaseTag(repo: string): Promise<string | null> {
     try {
-        const url = `${GITHUB_API}/repos/${repo}/releases/latest`;
-        const response = await fetch(url, {
+        const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
             signal: AbortSignal.timeout(5000),
-            headers: { 'User-Agent': 'ostacky-installer' },
+            headers: { 'User-Agent': USER_AGENT },
         });
-        if (!response.ok) return null;
-        const data = (await response.json()) as { tag_name?: string };
-        return data.tag_name ?? null;
+        if (res.ok) {
+            const data = (await res.json()) as { tag_name?: string };
+            return data.tag_name ?? null;
+        }
     } catch {
-        return null;
+        // Network error — try redirect fallback
     }
+    // Fallback: redirect de releases/latest → releases/tag/vX.Y.Z
+    try {
+        const res = await fetch(`https://github.com/${repo}/releases/latest`, {
+            redirect: 'manual',
+            signal: AbortSignal.timeout(5000),
+            headers: { 'User-Agent': USER_AGENT },
+        });
+        const loc = res.headers.get('location') ?? '';
+        const m = loc.match(/releases\/tag\/(v[^/]+)$/);
+        if (m) return m[1];
+    } catch {
+        // Both attempts failed
+    }
+    return null;
 }
 
 /**
@@ -88,7 +102,7 @@ export async function fetchManifest(tag?: string): Promise<Manifest> {
         const url = getRawUrl(localManifest.repo, resolvedTag, 'manifest.json');
         const response = await fetch(url, {
             signal: AbortSignal.timeout(5000),
-            headers: { 'User-Agent': 'ostacky-installer' },
+            headers: { 'User-Agent': USER_AGENT },
         });
         if (response.ok) {
             return (await response.json()) as Manifest;
@@ -108,7 +122,7 @@ export async function fetchLatestManifest(): Promise<{
     isNew: boolean;
     latestTag: string | null;
 }> {
-    const latestTag = await fetchLatestTag(localManifest.repo);
+    const latestTag = await fetchLatestReleaseTag(localManifest.repo);
     const currentTag = localManifest.tag;
     const isNew = latestTag !== null && latestTag !== currentTag;
     const manifest = await fetchManifest(latestTag ?? currentTag);
@@ -125,18 +139,24 @@ export async function fetchLatestManifest(): Promise<{
 export async function downloadFile(manifest: Manifest, filePath: string): Promise<string> {
     validateFilePath(filePath);
 
-    const item = [...manifest.agents, ...manifest.commands, ...(manifest.skills ?? []), ...(manifest.mcpServers ?? [])].find(
-        (i) => i.file === filePath
-    );
+    const item = [
+        ...manifest.agents,
+        ...manifest.commands,
+        ...(manifest.skills ?? []),
+        ...(manifest.mcpServers ?? []),
+    ].find((i) => i.file === filePath);
     const expectedHash = item?.sha256 ?? null;
 
+    const projectRoot = findProjectRoot();
+
     // Intenta servir desde cache
-    const cached = getCached(manifest.repo, manifest.tag, filePath, expectedHash);
+    const cached = getCached(projectRoot, manifest.repo, manifest.tag, filePath, expectedHash);
     if (cached !== null) return cached;
 
     const url = getRawUrl(manifest.repo, manifest.tag, filePath);
     const response = await fetch(url, {
-        headers: { 'User-Agent': 'ostacky-installer' },
+        headers: { 'User-Agent': USER_AGENT },
+        signal: AbortSignal.timeout(30_000),
     });
     if (!response.ok) {
         throw new Error(`Error descargando ${url}: ${response.status} ${response.statusText}`);
@@ -148,7 +168,7 @@ export async function downloadFile(manifest: Manifest, filePath: string): Promis
     verifyChecksum(content, expectedHash, filePath);
 
     // Guarda en cache para usos futuros
-    putCache(manifest.repo, manifest.tag, filePath, content);
+    putCache(projectRoot, manifest.repo, manifest.tag, filePath, content);
 
     return content;
 }

@@ -24,16 +24,16 @@ When ready to implement, run /opsx-apply
 
 **Steps**
 
-1. **Check Engram for similar changes** — `engram_mem_search` with keywords from the user's description. If a similar change was proposed or implemented before, surface it to the user. They may want to extend the existing work instead of starting fresh.
+1. **Check Engram for similar changes** — `mem_search` with keywords from the user's description. If a similar change was proposed or implemented before, surface it to the user. They may want to extend the existing work instead of starting fresh.
 
 2. **If no clear input provided, ask what they want to build**
 
-   Use the **question tool** (open-ended, no preset options) to ask:
+   Ask the user in natural language (open-ended, no preset options):
    > "What change do you want to work on? Describe what you want to build or fix."
 
    From their description, derive a kebab-case name (e.g., "add user authentication" → `add-user-auth`).
 
-   **IMPORTANT**: Do NOT proceed without understanding what the user wants to build. **IMPORTANT**: After calling `question`, STOP. Do not generate more text or execute tools.
+   **IMPORTANT**: Do NOT proceed without understanding what the user wants to build. After asking, stop and wait for their response.
 
 3. **Create the change directory**
    ```bash
@@ -51,7 +51,7 @@ When ready to implement, run /opsx-apply
 
 5. **Create artifacts in sequence until apply-ready**
 
-   Use the **TodoWrite tool** to track progress through the artifacts.
+   Use the **todowrite tool** to track progress through the artifacts.
 
    Loop through artifacts in dependency order (artifacts with no pending dependencies first):
 
@@ -78,7 +78,7 @@ When ready to implement, run /opsx-apply
       - Stop when all `applyRequires` artifacts are done
 
    c. **If an artifact requires user input** (unclear context):
-      - Use **question tool** to clarify, then STOP and wait for the answer
+      - Ask the user in natural language to clarify, then stop and wait for the answer
       - Then continue with creation
 
 6. **Show final status**

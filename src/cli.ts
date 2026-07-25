@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import packageJson from "../package.json" assert { type: "json" };
+import packageJson from "../package.json" with { type: "json" };
 import {
   runInteractiveMenu,
   runInstallCommand,
@@ -16,7 +16,7 @@ import {
   runUninstallCommandCommand,
   runUninstallSkillCommand,
   runUninstallMcpCommand,
-} from "./prompts.js";
+} from "./prompts/index.js";
 
 const HELP = `
 ostacky — Instalador de agentes, comandos, skills y MCPs para OpenCode
@@ -109,7 +109,12 @@ async function main() {
       break;
 
     default:
-      // Sin argumentos o comando desconocido → menú interactivo
+      if (cmd) {
+        // Comando desconocido — mostrar error, no el menú interactivo
+        console.error(`Comando desconocido: "${cmd}". Usá --help para ver los comandos disponibles.`);
+        process.exit(1);
+      }
+      // Sin argumentos → menú interactivo
       await runInteractiveMenu();
   }
 }
