@@ -9,6 +9,8 @@ import {
   downloadAndExtractWithRetry,
   findBinaryInDir,
   isCommandAvailable,
+  findExecutablePath,
+  checkBunAvailability,
   detectPlatformTarget,
 } from "./fs.js";
 import {
@@ -170,8 +172,20 @@ export function setupOpenSpec(): { success: boolean; message: string } {
 export async function installEngram(toolsDir?: string): Promise<{ success: boolean; message: string }> {
   const projectRoot = findProjectRoot();
 
+  // Check Bun availability and show suggestion if not found
+  const bunStatus = checkBunAvailability();
+  if (!bunStatus.available) {
+    console.log(`\n⚠️  Bun no detectado en el sistema.`);
+    console.log(`   Para instalar Bun, ejecutá:\n`);
+    console.log(`     ${bunStatus.installCommand}`);
+    if (bunStatus.installNote) {
+      console.log(`   Nota: ${bunStatus.installNote}`);
+    }
+    console.log(`\n   Documentación: https://bun.com/docs/installation\n`);
+  }
+
   // Check if Engram is already available globally — skip local install if so
-  const globalBin = Bun.which("engram");
+  const globalBin = findExecutablePath("engram");
   if (globalBin) {
     // Global binary exists — create local symlink so MCP entry works portably
     const engramToolDir = join(toolsDir ?? join(projectRoot, ".opencode", "tools"), "engram");

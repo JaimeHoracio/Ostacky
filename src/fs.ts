@@ -164,6 +164,85 @@ export function isCommandAvailable(cmd: string): boolean {
 }
 
 /**
+ * Finds the full path of an executable on the system PATH.
+ * Returns null if not found.
+ */
+export function findExecutablePath(cmd: string): string | null {
+  try {
+    const result = execSync(
+      process.platform === "win32" ? `where ${cmd}` : `which ${cmd}`,
+      { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
+    ).trim();
+    return result || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Returns the appropriate Bun install command for the current platform.
+ */
+export function getBunInstallCommand(): { command: string; note?: string } {
+  const platform = process.platform;
+  
+  if (platform === "darwin" || platform === "linux") {
+    return {
+      command: "curl -fsSL https://bun.com/install | bash",
+      note: platform === "linux" ? "Requires 'unzip' package (sudo apt install unzip)" : undefined,
+    };
+  }
+  
+  if (platform === "win32") {
+    return {
+      command: 'powershell -c "irm bun.sh/install.ps1|iex"',
+      note: "Requires Windows 10 v1809 or later",
+    };
+  }
+  
+  // Fallback: suggest npm install (cross-platform)
+  return {
+    command: "npm install -g bun",
+    note: "Cross-platform fallback",
+  };
+}
+
+/**
+ * Checks if Bun is available and returns diagnostic info.
+ * Useful for suggesting installation when Bun is missing.
+ */
+export function checkBunAvailability(): {
+  available: boolean;
+  path?: string;
+  version?: string;
+  installCommand?: string;
+  installNote?: string;
+} {
+  const bunPath = findExecutablePath("bun");
+  
+  if (bunPath) {
+    // Bun is available — try to get version
+    let version: string | undefined;
+    try {
+      version = execSync("bun --version", {
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      }).trim();
+    } catch {
+      // Version check failed but binary exists
+    }
+    return { available: true, path: bunPath, version };
+  }
+  
+  // Bun not found — provide install instructions
+  const { command, note } = getBunInstallCommand();
+  return {
+    available: false,
+    installCommand: command,
+    installNote: note,
+  };
+}
+
+/**
  * Detects the platform target triple (os-arch) for downloading the correct binary.
  * Returns null if the platform is not supported.
  */
