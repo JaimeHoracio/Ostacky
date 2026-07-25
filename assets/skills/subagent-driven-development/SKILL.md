@@ -5,6 +5,8 @@ description: Use when Ostacky has confirmed subagent-driven execution mode and d
 
 # Subagent-Driven Development
 
+**IMPORTANT:** Engram is an **MCP server**, not a skill. Tools `mem_save`, `mem_search`, `mem_context` are MCP tools. Do NOT use `skill("engram")` — it doesn't exist.
+
 **Prerequisite:** This skill runs AFTER the coordinator (Ostacky) has:
 1. Performed execution analysis (via `execution-mode-evaluation` skill)
 2. Presented evidence and recommendation to the user

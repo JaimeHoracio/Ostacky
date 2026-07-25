@@ -9,6 +9,8 @@ metadata:
   generatedBy: "1.3.1"
 ---
 
+**IMPORTANT:** Engram is an **MCP server**, not a skill. Tools `mem_save`, `mem_search`, `mem_context` are MCP tools. Do NOT use `skill("engram")` — it doesn't exist.
+
 Implement tasks from an OpenSpec change.
 
 **Input**: Optionally specify a change name. If omitted, check if it can be inferred from conversation context. If vague or ambiguous you MUST prompt for available changes.

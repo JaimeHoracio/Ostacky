@@ -8,6 +8,8 @@ metadata:
   version: "2.0"
 ---
 
+**IMPORTANT:** Engram is an **MCP server**, not a skill. Tools `mem_save`, `mem_search`, `mem_context` are MCP tools. Do NOT use `skill("engram")` — it doesn't exist.
+
 # Skill: execution-mode-evaluation
 
 Determinar el modo de ejecución óptimo entre **inline** y **subagent-driven** usando datos concretos de CodeGraph. La decisión sigue reglas estrictas en orden de precedencia.

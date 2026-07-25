@@ -9,6 +9,9 @@ import { dirname, basename } from 'node:path';
 const MAX_TASKS = 50;
 const MAX_SNAPSHOT_JSON_LENGTH = 100 * 1024;
 const MAX_STATE_FILE_SIZE = 1024 * 1024;
+const WATCHDOG_TIMEOUT_MS = 30_000;
+const WATCHDOG_CHECK_INTERVAL_MS = 10_000;
+let lastToolActivity = Date.now();
 
 const TRANSITIONS = {
     INTERPRETATION_PENDING: [
@@ -35,6 +38,7 @@ const TRANSITIONS = {
         { via: 'consume_route_decision', to: 'SPECIFICATION', choice: 'SPEC' },
         { via: 'consume_route_decision', to: 'EXECUTION_ANALYSIS', choice: 'DIRECT' },
         { via: 'block', to: 'BLOCKED' },
+        { via: 'abandon', to: 'BLOCKED' },
     ],
     SPECIFICATION: [
         { via: 'spec_complete', to: 'EXECUTION_ANALYSIS' },
@@ -50,6 +54,7 @@ const TRANSITIONS = {
         { via: 'consume_execution_decision', to: 'EXECUTING_INLINE', mode: 'INLINE' },
         { via: 'consume_execution_decision', to: 'EXECUTING_SUBAGENTS', mode: 'SUBAGENT_DRIVEN' },
         { via: 'block', to: 'BLOCKED' },
+        { via: 'abandon', to: 'BLOCKED' },
     ],
     EXECUTING_INLINE: [
         { via: 'implementation_complete', to: 'SYNC' },
@@ -571,6 +576,7 @@ const controller = new OstackyController({ statePath });
  */
 function safeHandler(fn) {
     return async (params) => {
+        lastToolActivity = Date.now();
         try {
             const result = await fn(params);
             return { content: [{ type: 'text', text: safeJsonStringify(result) }] };
@@ -837,6 +843,36 @@ server.registerTool(
 );
 
 server.registerTool(
+    'check_pending_state',
+    {
+        description:
+            'Check if agent is in a pending state waiting for user input. ' +
+            'MUST be called before ANY tool call when controller is available. ' +
+            'Returns ALLOW or BLOCKED with reason. ' +
+            'EXCEPTION: controller tools (consume_route_decision, consume_execution_decision, ' +
+            'record_clarification, abandon) are ALWAYS allowed — they unlock the state.',
+        inputSchema: z.object({}),
+    },
+    safeHandler(async () => {
+        const state = await controller.getState();
+        const pendingStates = [
+            'CLARIFICATION_PENDING',
+            'ROUTE_DECISION_PENDING',
+            'EXECUTION_DECISION_PENDING',
+        ];
+        if (pendingStates.includes(state.state)) {
+            return {
+                status: 'BLOCKED',
+                state: state.state,
+                revision: state.revision,
+                reason: `Cannot execute tools while in ${state.state}. Wait for user response first.`,
+            };
+        }
+        return { status: 'ALLOW', state: state.state, revision: state.revision };
+    })
+);
+
+server.registerTool(
     'validate_edit',
     {
         description:
@@ -919,12 +955,27 @@ function setupGracefulShutdown(ctrl) {
     });
 }
 
+/**
+ * Watchdog that forces process restart if controller stops responding.
+ * This prevents the agent from hanging when the MCP server is stuck.
+ */
+function setupWatchdog() {
+    setInterval(() => {
+        const idleMs = Date.now() - lastToolActivity;
+        if (idleMs > WATCHDOG_TIMEOUT_MS) {
+            log('watchdog:timeout', { idleMs, threshold: WATCHDOG_TIMEOUT_MS });
+            process.exit(1);
+        }
+    }, WATCHDOG_CHECK_INTERVAL_MS);
+}
+
 async function main() {
     log('Starting ostacky-controller MCP...');
     log('State path:', { path: statePath });
     // Clean up stale tmp files from previous runs
     cleanupTmpFiles(statePath);
     setupGracefulShutdown(controller);
+    setupWatchdog();
     const transport = new StdioServerTransport();
     await server.connect(transport);
     log('ostacky-controller connected and ready');

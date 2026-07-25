@@ -9,6 +9,8 @@ metadata:
   generatedBy: "1.3.1"
 ---
 
+**IMPORTANT:** Engram is an **MCP server**, not a skill. Tools `mem_save`, `mem_search`, `mem_context` are MCP tools. Do NOT use `skill("engram")` — it doesn't exist.
+
 Propose a new change - create the change and generate all artifacts in one step.
 
 I'll create a change with artifacts:

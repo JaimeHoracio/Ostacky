@@ -1,6 +1,6 @@
 ---
 name: graceful-degradation
-description: "Handle situations where multiple tools (CodeGraph, Engram, Controller) are unavailable. Provides a systematic approach to continue working with reduced capabilities."
+description: "Handle situations where multiple tools (CodeGraph, Engram MCP, Controller) are unavailable. Provides a systematic approach to continue working with reduced capabilities."
 ---
 
 # Graceful Degradation
@@ -9,16 +9,18 @@ When critical tools are unavailable, this skill provides a systematic approach t
 
 **Follow Core Instructions** — `ostacky.md` Core Instructions section for CodeGraph and Engram usage patterns.
 
+**IMPORTANT:** Engram is an **MCP server**, not a skill. Tools `mem_save`, `mem_search`, `mem_context` are MCP tools. Do NOT use `skill("engram")` — it doesn't exist.
+
 ---
 
 ## Tool Availability Matrix
 
-| Tool | Fallback Chain | Impact |
-|------|---------------|--------|
-| CodeGraph | Engram → Read + Glob | No structural analysis, manual exploration |
-| Engram | Continue without memory | No persistence across sessions |
-| Controller | Inline validation + manual state | No state machine, no edit validation |
-| Context7 | Skip documentation | No external API docs |
+| Tool | Type | Fallback Chain | Impact |
+|------|------|----------------|--------|
+| CodeGraph | MCP server | Engram → Read + Glob | No structural analysis, manual exploration |
+| Engram | MCP server | Continue without memory | No persistence across sessions |
+| Controller | MCP server | Inline validation + manual state | No state machine, no edit validation |
+| Context7 | MCP server (remote) | Skip documentation | No external API docs |
 
 ## Detection
 
@@ -91,10 +93,17 @@ Switch to basic mode with manual workflows.
 3. No automatic state persistence
 ```
 
+**IMPORTANT — No check_pending_state:**
+When controller is unavailable, `check_pending_state` does NOT exist.
+- Do NOT try to call it — it will fail
+- The enforcement rule in Core Instructions applies ONLY when controller is available
+- In degraded mode, rely on the "Una pregunta por turno" rule directly
+
 **Limitations:**
 - No automatic edit validation
 - No task completion tracking
 - No state persistence across crashes
+- No pending state enforcement (check_pending_state unavailable)
 
 ### Without Context7
 

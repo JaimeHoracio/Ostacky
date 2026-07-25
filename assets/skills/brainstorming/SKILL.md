@@ -9,6 +9,8 @@ A thinking partner that adapts to what the user needs: structured design when th
 
 **Follow Core Instructions** — `ostacky.md` Core Instructions section for CodeGraph and Engram usage patterns.
 
+**IMPORTANT:** Engram is an **MCP server**, not a skill. Tools `mem_save`, `mem_search`, `mem_context` are MCP tools. Do NOT use `skill("engram")` — it doesn't exist.
+
 ---
 
 ## Mode Detection
