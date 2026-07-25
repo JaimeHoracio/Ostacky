@@ -1,56 +1,56 @@
-import { describe, it, expect } from "bun:test";
-import { getInstalledVersion, type Lockfile } from "./lockfile.js";
+import { describe, it, expect } from 'bun:test';
+import { getInstalledVersion, type Lockfile } from './lockfile.js';
 
 const mockLockfile: Lockfile = {
-  version: "0.6.0",
-  lockedAt: "2025-01-01T00:00:00.000Z",
-  repo: "JaimeHoracio/Ostacky",
-  tag: "v0.6.0",
-  agents: {
-    ostacky: {
-      version: "0.6.0",
-      installedAt: "2025-01-01T00:00:00.000Z",
-      sha256: "abc123",
+    version: '0.6.1',
+    lockedAt: '2025-01-01T00:00:00.000Z',
+    repo: 'JaimeHoracio/Ostacky',
+    tag: 'v0.6.1',
+    agents: {
+        ostacky: {
+            version: '0.6.1',
+            installedAt: '2025-01-01T00:00:00.000Z',
+            sha256: 'abc123',
+        },
     },
-  },
-  commands: {
-    "install-stack": {
-      version: "0.6.0",
-      installedAt: "2025-01-01T00:00:00.000Z",
+    commands: {
+        'install-stack': {
+            version: '0.6.1',
+            installedAt: '2025-01-01T00:00:00.000Z',
+        },
     },
-  },
-  skills: {},
-  mcpServers: {},
+    skills: {},
+    mcpServers: {},
 };
 
-describe("getInstalledVersion", () => {
-  it("returns version for existing agent", () => {
-    const v = getInstalledVersion(mockLockfile, "agents", "ostacky");
-    expect(v).toBe("0.6.0");
-  });
+describe('getInstalledVersion', () => {
+    it('returns version for existing agent', () => {
+        const v = getInstalledVersion(mockLockfile, 'agents', 'ostacky');
+        expect(v).toBe('0.6.1');
+    });
 
-  it("returns version for existing command", () => {
-    const v = getInstalledVersion(mockLockfile, "commands", "install-stack");
-    expect(v).toBe("0.6.0");
-  });
+    it('returns version for existing command', () => {
+        const v = getInstalledVersion(mockLockfile, 'commands', 'install-stack');
+        expect(v).toBe('0.6.1');
+    });
 
-  it("returns null for missing item", () => {
-    const v = getInstalledVersion(mockLockfile, "agents", "nonexistent");
-    expect(v).toBeNull();
-  });
+    it('returns null for missing item', () => {
+        const v = getInstalledVersion(mockLockfile, 'agents', 'nonexistent');
+        expect(v).toBeNull();
+    });
 
-  it("returns null for null lockfile", () => {
-    const v = getInstalledVersion(null, "agents", "ostacky");
-    expect(v).toBeNull();
-  });
+    it('returns null for null lockfile', () => {
+        const v = getInstalledVersion(null, 'agents', 'ostacky');
+        expect(v).toBeNull();
+    });
 
-  it("returns null for empty type", () => {
-    const v = getInstalledVersion(mockLockfile, "skills", "anything");
-    expect(v).toBeNull();
-  });
+    it('returns null for empty type', () => {
+        const v = getInstalledVersion(mockLockfile, 'skills', 'anything');
+        expect(v).toBeNull();
+    });
 
-  it("returns null for mcpServers when none exist", () => {
-    const v = getInstalledVersion(mockLockfile, "mcpServers", "anything");
-    expect(v).toBeNull();
-  });
+    it('returns null for mcpServers when none exist', () => {
+        const v = getInstalledVersion(mockLockfile, 'mcpServers', 'anything');
+        expect(v).toBeNull();
+    });
 });

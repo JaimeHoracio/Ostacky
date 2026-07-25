@@ -596,7 +596,7 @@ function safeHandler(fn) {
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.6.0',
+    version: '0.6.1',
 });
 
 server.registerTool(
