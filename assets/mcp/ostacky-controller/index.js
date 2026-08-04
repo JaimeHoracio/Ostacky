@@ -1,5 +1,17 @@
 #!/usr/bin/env node
 
+/**
+ * Ostacky Controller — MCP Server
+ *
+ * Máquina de estados persistida para Ostacky. Valida transiciones,
+ * consume decisiones, autoriza side effects y persiste snapshots.
+ *
+ * Usage: node .opencode/mcp/ostacky-controller/index.js
+ *
+ * Environment:
+ *   OSTACKY_STATE_PATH — Ruta al archivo de estado JSON (default: .opencode/ostacky-state.json)
+ */
+
 import { McpServer } from '@modelcontextprotocol/server';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import * as z from 'zod/v4';
@@ -881,7 +893,10 @@ server.registerTool(
             content: z
                 .string()
                 .describe(
-                    'REQUIRED — The current file content. Read the file first with Read tool, then pass the full content here.'
+                    'REQUIRED — The full file content. ' +
+                    'You MUST read the file first with the Read tool, then pass the complete content here. ' +
+                    'Example: call Read on the file, store the output, then call validate_edit with that content. ' +
+                    'Without this parameter, validate_edit will fail.'
                 ),
             taskId: z.string().optional().describe('Optional task ID for tracking.'),
         }),
