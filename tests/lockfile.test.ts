@@ -2,20 +2,20 @@ import { describe, it, expect } from 'bun:test';
 import { getInstalledVersion, type Lockfile } from '../src/lockfile.js';
 
 const mockLockfile: Lockfile = {
-    version: '0.6.1',
+    version: '0.6.2',
     lockedAt: '2025-01-01T00:00:00.000Z',
     repo: 'JaimeHoracio/Ostacky',
-    tag: 'v0.6.1',
+    tag: 'v0.6.2',
     agents: {
         ostacky: {
-            version: '0.6.1',
+            version: '0.6.2',
             installedAt: '2025-01-01T00:00:00.000Z',
             sha256: 'abc123',
         },
     },
     commands: {
         'install-stack': {
-            version: '0.6.1',
+            version: '0.6.2',
             installedAt: '2025-01-01T00:00:00.000Z',
         },
     },
@@ -26,12 +26,12 @@ const mockLockfile: Lockfile = {
 describe('getInstalledVersion', () => {
     it('returns version for existing agent', () => {
         const v = getInstalledVersion(mockLockfile, 'agents', 'ostacky');
-        expect(v).toBe('0.6.1');
+        expect(v).toBe('0.6.2');
     });
 
     it('returns version for existing command', () => {
         const v = getInstalledVersion(mockLockfile, 'commands', 'install-stack');
-        expect(v).toBe('0.6.1');
+        expect(v).toBe('0.6.2');
     });
 
     it('returns null for missing item', () => {

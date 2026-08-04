@@ -604,13 +604,14 @@ function safeHandler(fn) {
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.6.1',
+    version: '0.6.2',
 });
 
 server.registerTool(
     'start_request',
     {
-        description: 'Start or reset a new request. Can be called from ANY state — resets state machine. Call this first.',
+        description:
+            'Start or reset a new request. Can be called from ANY state — resets state machine. Call this first.',
         inputSchema: z.object({
             requestId: z.string().optional().describe('Unique request ID'),
             changeId: z.string().optional().describe('Optional change ID for OpenSpec tracking'),
@@ -651,7 +652,8 @@ server.registerTool(
 server.registerTool(
     'record_discovery',
     {
-        description: 'Record discovery complete with level classification. From INTERPRETATION_PENDING goes to ROUTE_DECISION_PENDING. From DISCOVERY goes to LEVEL_RESOLVED.',
+        description:
+            'Record discovery complete with level classification. From INTERPRETATION_PENDING goes to ROUTE_DECISION_PENDING. From DISCOVERY goes to LEVEL_RESOLVED.',
         inputSchema: z.object({
             level: z.enum(['0', '0+1', '1+']).describe('Impact level'),
             routeDecisionId: z.string().optional().describe('Unique route decision ID'),
@@ -802,13 +804,14 @@ server.registerTool(
 server.registerTool(
     'ping',
     {
-        description: 'Health check — returns pong if controller is alive. Use this to verify controller availability before making other calls.',
+        description:
+            'Health check — returns pong if controller is alive. Use this to verify controller availability before making other calls.',
         inputSchema: z.object({}),
     },
     safeHandler(async () => {
         return {
             pong: true,
-            state: await controller.getState().then(s => ({
+            state: await controller.getState().then((s) => ({
                 state: s.state,
                 revision: s.revision,
                 requestId: s.requestId,
@@ -863,11 +866,7 @@ server.registerTool(
     },
     safeHandler(async () => {
         const state = await controller.getState();
-        const pendingStates = [
-            'CLARIFICATION_PENDING',
-            'ROUTE_DECISION_PENDING',
-            'EXECUTION_DECISION_PENDING',
-        ];
+        const pendingStates = ['CLARIFICATION_PENDING', 'ROUTE_DECISION_PENDING', 'EXECUTION_DECISION_PENDING'];
         if (pendingStates.includes(state.state)) {
             return {
                 status: 'BLOCKED',
@@ -894,9 +893,9 @@ server.registerTool(
                 .string()
                 .describe(
                     'REQUIRED — The full file content. ' +
-                    'You MUST read the file first with the Read tool, then pass the complete content here. ' +
-                    'Example: call Read on the file, store the output, then call validate_edit with that content. ' +
-                    'Without this parameter, validate_edit will fail.'
+                        'You MUST read the file first with the Read tool, then pass the complete content here. ' +
+                        'Example: call Read on the file, store the output, then call validate_edit with that content. ' +
+                        'Without this parameter, validate_edit will fail.'
                 ),
             taskId: z.string().optional().describe('Optional task ID for tracking.'),
         }),
