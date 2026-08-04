@@ -4,14 +4,11 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import * as z from 'zod/v4';
 import { readFileSync, writeFileSync, renameSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
-import { dirname, basename } from 'node:path';
+import { dirname, basename, join, resolve } from 'node:path';
 
 const MAX_TASKS = 50;
 const MAX_SNAPSHOT_JSON_LENGTH = 100 * 1024;
 const MAX_STATE_FILE_SIZE = 1024 * 1024;
-const WATCHDOG_TIMEOUT_MS = 30_000;
-const WATCHDOG_CHECK_INTERVAL_MS = 10_000;
-let lastToolActivity = Date.now();
 
 const TRANSITIONS = {
     INTERPRETATION_PENDING: [
@@ -114,7 +111,7 @@ function cleanupTmpFiles(statePath) {
         for (const entry of readdirSync(dir)) {
             if (entry.startsWith(name + '.tmp.')) {
                 try {
-                    unlinkSync(dir + '/' + entry);
+                    unlinkSync(join(dir, entry));
                 } catch {
                     /* best-effort */
                 }
@@ -566,7 +563,7 @@ class OstackyController {
     }
 }
 
-const statePath = process.env.OSTACKY_STATE_PATH || '.opencode/ostacky-state.json';
+const statePath = resolve(process.env.OSTACKY_STATE_PATH || join(process.cwd(), '.opencode', 'ostacky-state.json'));
 const controller = new OstackyController({ statePath });
 
 /**
@@ -576,7 +573,6 @@ const controller = new OstackyController({ statePath });
  */
 function safeHandler(fn) {
     return async (params) => {
-        lastToolActivity = Date.now();
         try {
             const result = await fn(params);
             return { content: [{ type: 'text', text: safeJsonStringify(result) }] };
@@ -955,27 +951,12 @@ function setupGracefulShutdown(ctrl) {
     });
 }
 
-/**
- * Watchdog that forces process restart if controller stops responding.
- * This prevents the agent from hanging when the MCP server is stuck.
- */
-function setupWatchdog() {
-    setInterval(() => {
-        const idleMs = Date.now() - lastToolActivity;
-        if (idleMs > WATCHDOG_TIMEOUT_MS) {
-            log('watchdog:timeout', { idleMs, threshold: WATCHDOG_TIMEOUT_MS });
-            process.exit(1);
-        }
-    }, WATCHDOG_CHECK_INTERVAL_MS);
-}
-
 async function main() {
     log('Starting ostacky-controller MCP...');
     log('State path:', { path: statePath });
     // Clean up stale tmp files from previous runs
     cleanupTmpFiles(statePath);
     setupGracefulShutdown(controller);
-    setupWatchdog();
     const transport = new StdioServerTransport();
     await server.connect(transport);
     log('ostacky-controller connected and ready');

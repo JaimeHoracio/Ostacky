@@ -1,27 +1,29 @@
-import { existsSync, mkdirSync, copyFileSync, unlinkSync, rmSync } from "fs";
-import { join } from "path";
-import { execSync } from "child_process";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, rmSync, unlinkSync } from "fs";
+import { basename, dirname, join, resolve } from "path";
+import { execFileSync } from "child_process";
 import {
   findProjectRoot,
   findOpenCodeDir,
-  ensureToolDirs,
-  downloadToFile,
   downloadAndExtractWithRetry,
   findBinaryInDir,
+  getCommandInvocation,
+  getExecutableNames,
+  getEngramReleaseTarget,
+  getExecutableName,
   isCommandAvailable,
+  type DirectoryPromotion,
   findExecutablePath,
-  checkBunAvailability,
   detectPlatformTarget,
 } from "./fs.js";
 import {
   findOpenCodeConfig,
   readOpenCodeConfig,
   writeOpenCodeConfig,
-  setMcpEntry,
-  ensureMcpEntry,
+  ensureMcpEntryAtProjectRoot,
   patchOpenCodeConfig,
+  setMcpEntryAtProjectRoot,
 } from "./config.js";
-import { fetchLatestReleaseTag } from "./github.js";
+import { fetchLatestReleaseTag, PACKAGE_ROOT } from "./github.js";
 import type { OpenCodePaths } from "./types.js";
 
 // ─── Stack installation (tools: CodeGraph, OpenSpec, Engram, Context7) ─────
@@ -38,6 +40,84 @@ export interface StackResult {
   config: { success: boolean; message: string };
 }
 
+interface ToolInstallLocation {
+  projectRoot: string;
+  toolsDir: string;
+}
+
+function resolveToolInstallLocation(toolsDir?: string): ToolInstallLocation {
+  const resolvedToolsDir = resolve(toolsDir ?? join(findProjectRoot(), ".opencode", "tools"));
+  const possibleOpenCodeDir = dirname(resolvedToolsDir);
+  return {
+    projectRoot: basename(possibleOpenCodeDir) === ".opencode"
+      ? dirname(possibleOpenCodeDir)
+      : findProjectRoot(),
+    toolsDir: resolvedToolsDir,
+  };
+}
+
+function runTool(binary: string, args: string[], cwd?: string, timeout = 30_000): void {
+  const invocation = getCommandInvocation(binary, args);
+  execFileSync(invocation.command, invocation.args, {
+    cwd,
+    stdio: "pipe",
+    timeout,
+  });
+}
+
+function findToolBinary(toolDir: string, name: string): string | null {
+  const binDir = join(toolDir, "bin");
+  for (const executable of getExecutableNames(name)) {
+    const candidate = join(binDir, executable);
+    if (existsSync(candidate)) return candidate;
+  }
+  return findBinaryInDir(toolDir, name);
+}
+
+function configureLocalTool(
+  projectRoot: string,
+  name: string,
+  command: string[]
+): void {
+  setMcpEntryAtProjectRoot(projectRoot, name, {
+    type: "local",
+    command,
+    enabled: true,
+  });
+}
+
+/** Converts a local executable plus arguments into an OpenCode-safe MCP command. */
+export function buildLocalMcpCommand(
+  executable: string,
+  args: string[],
+  platform: string = process.platform
+): string[] {
+  const invocation = getCommandInvocation(executable, args, platform);
+  return [invocation.command, ...invocation.args];
+}
+
+function copyEngramPlugin(projectRoot: string): void {
+  const pluginSource = join(PACKAGE_ROOT, "assets", "plugins", "engram.ts");
+  const pluginsDir = join(projectRoot, ".opencode", "plugins");
+  if (!existsSync(pluginSource)) {
+    throw new Error(`Plugin bundleado de Engram no encontrado: ${pluginSource}`);
+  }
+  mkdirSync(pluginsDir, { recursive: true });
+  copyFileSync(pluginSource, join(pluginsDir, "engram.ts"));
+}
+
+/** Builds an Engram release URL using its platform-specific asset naming. */
+export function buildEngramDownloadUrl(
+  tag: string,
+  platform: string = process.platform,
+  arch: string = process.arch
+): string | null {
+  const target = getEngramReleaseTarget(platform, arch);
+  if (!target) return null;
+  const extension = platform === "win32" ? "zip" : "tar.gz";
+  return `https://github.com/Gentleman-Programming/engram/releases/download/${tag}/engram_${tag.replace(/^v/, "")}_${target.replace("-", "_")}.${extension}`;
+}
+
 /**
  * Installs CodeGraph (binary) locally to .opencode/tools/codegraph/.
  * Downloads the release archive from GitHub and extracts it to the tool directory.
@@ -45,8 +125,9 @@ export interface StackResult {
  * Does not install anything globally — everything is local to the project.
  */
 export async function installCodeGraph(toolsDir?: string): Promise<{ success: boolean; message: string }> {
-  const projectRoot = findProjectRoot();
-  const cgToolDir = join(toolsDir ?? join(projectRoot, ".opencode", "tools"), "codegraph");
+  const location = resolveToolInstallLocation(toolsDir);
+  const { projectRoot } = location;
+  const cgToolDir = join(location.toolsDir, "codegraph");
   if (!existsSync(cgToolDir)) mkdirSync(cgToolDir, { recursive: true });
 
   const target = detectPlatformTarget();
@@ -57,21 +138,26 @@ export async function installCodeGraph(toolsDir?: string): Promise<{ success: bo
     };
   }
 
-  const localBin = join(cgToolDir, "bin", "codegraph");
-  const localBinExe = localBin + (process.platform === "win32" ? ".exe" : "");
+  let localBin = findToolBinary(cgToolDir, "codegraph");
+  let archivePromotion: DirectoryPromotion | null = null;
+  const failAfterExtraction = (message: string): { success: false; message: string } => {
+    try { archivePromotion?.rollback(); } catch {}
+    return { success: false, message };
+  };
 
   // Si ya está descargado localmente, lo usamos
-  if (existsSync(localBinExe)) {
+  if (localBin) {
     try {
-      execSync(`"${localBinExe}" --version`, { stdio: "pipe", timeout: 10_000 });
+      runTool(localBin, ["--version"], projectRoot, 10_000);
     } catch {
       // Binario corrupto — re-descargar
-      try { rmSync(join(cgToolDir, "bin"), { recursive: true, force: true }); } catch {}
+      try { rmSync(cgToolDir, { recursive: true, force: true }); } catch {}
+      localBin = null;
     }
   }
 
   // Descargar el binario si no está o se corrompió
-  if (!existsSync(localBinExe)) {
+  if (!localBin) {
     const tag = await fetchLatestReleaseTag("colbymchenry/codegraph");
     if (!tag) {
       return {
@@ -82,77 +168,68 @@ export async function installCodeGraph(toolsDir?: string): Promise<{ success: bo
     const ext = process.platform === "win32" ? "zip" : "tar.gz";
     const url = `https://github.com/colbymchenry/codegraph/releases/download/${tag}/codegraph-${target}.${ext}`;
     try {
-      await downloadAndExtractWithRetry(url, cgToolDir, 1, 180_000, 2);
+      archivePromotion = await downloadAndExtractWithRetry(url, cgToolDir, 1, 180_000, 2);
     } catch (e) {
       return {
         success: false,
         message: `Error descargando CodeGraph ${tag}: ${(e as Error).message}`,
       };
     }
-    if (!existsSync(localBinExe)) {
-      return {
-        success: false,
-        message: `Descarga de CodeGraph ${tag} completada pero no se encontró el binario en ${localBinExe}.`,
-      };
+    localBin = findToolBinary(cgToolDir, "codegraph");
+    if (!localBin) {
+      return failAfterExtraction(`Descarga de CodeGraph ${tag} completada pero no se encontró el binario en ${join(cgToolDir, "bin")}.`);
     }
     if (process.platform !== "win32") {
-      try { execSync(`chmod +x "${localBinExe}"`, { stdio: "pipe" }); } catch {}
+      try { chmodSync(localBin, 0o755); } catch {}
     }
+  }
+
+  try {
+    runTool(localBin, ["--version"], projectRoot, 10_000);
+  } catch (error) {
+    return failAfterExtraction(`CodeGraph fue extraído pero no se puede ejecutar: ${(error as Error).message}`);
   }
 
   // Inicializar el índice de CodeGraph en el proyecto
+  let indexWarning: string | null = null;
   try {
-    execSync(`"${localBinExe}" init -i`, { stdio: "pipe", timeout: 120_000, cwd: projectRoot });
-  } catch {
-    // No fatal — el índice puede inicializarse después
+    runTool(localBin, ["init", "-i"], projectRoot, 120_000);
+  } catch (error) {
+    indexWarning = `El índice no se pudo inicializar todavía: ${(error as Error).message}`;
   }
 
-  // Ejecutar codegraph install --target opencode para configurar MCP y crear AGENTS.md
-  // --target opencode asegura que SOLO toca opencode (no .claude/, .cursor/, etc.)
-  // --location local usa el binario local (no global)
+  // Registrar directamente evita que `codegraph install` cree o mueva archivos
+  // fuera de la configuración administrada por Ostacky.
   try {
-    execSync(`"${localBinExe}" install --target opencode --location local --yes`, {
-      stdio: "pipe",
-      timeout: 30_000,
-      cwd: projectRoot,
-    });
-  } catch {
-    // No fatal — la entrada MCP la seteamos nosotros abajo
+    configureLocalTool(projectRoot, "codegraph", buildLocalMcpCommand(localBin, ["serve", "--mcp"]));
+  } catch (error) {
+    return failAfterExtraction(`CodeGraph fue instalado pero no se pudo configurar el MCP: ${(error as Error).message}`);
   }
 
-  // Mover AGENTS.md si codegraph lo creó en la raíz → .opencode/tools/codegraph/AGENTS.md
-  const rootAgentsMd = join(projectRoot, "AGENTS.md");
-  if (existsSync(rootAgentsMd)) {
-    const dest = join(cgToolDir, "AGENTS.md");
-    try {
-      copyFileSync(rootAgentsMd, dest);
-      unlinkSync(rootAgentsMd);
-    } catch {
-      // Si no se puede mover, lo dejamos — no es crítico
-    }
-  }
+  archivePromotion?.commit();
 
-  // Re-assert nuestro MCP entry (en caso de que codegraph install lo haya cambiado)
-  // Siempre apuntamos al binario local en .opencode/tools/codegraph/bin/codegraph
-  setMcpEntry("codegraph", {
-    type: "local",
-    command: [`.opencode/tools/codegraph/bin/codegraph`, "serve", "--mcp"],
-    enabled: true,
-  });
-
-  return { success: true, message: "CodeGraph instalado localmente en .opencode/tools/codegraph/ y configurado para OpenCode" };
+  return {
+    success: true,
+    message: indexWarning
+      ? `CodeGraph instalado y configurado para OpenCode. ${indexWarning}`
+      : "CodeGraph instalado localmente y configurado para OpenCode",
+  };
 }
 
 /**
  * Configura OpenSpec para el proyecto via npx/bunx (sin requerir instalación global).
  * Usa bunx si bun está disponible, sino npx.
  */
-export function setupOpenSpec(): { success: boolean; message: string } {
-  const npxCmd = isCommandAvailable("bun") ? "bunx" : "npx --yes";
+export function setupOpenSpec(projectRoot: string = findProjectRoot()): { success: boolean; message: string } {
+  const useBun = isCommandAvailable("bun");
   try {
-    execSync(`${npxCmd} openspec init --tools opencode --force`, {
+    const invocation = getCommandInvocation(useBun ? "bunx" : "npx", useBun
+      ? ["openspec", "init", "--tools", "opencode", "--force"]
+      : ["--yes", "openspec", "init", "--tools", "opencode", "--force"]);
+    execFileSync(invocation.command, invocation.args, {
       stdio: "pipe",
       timeout: 120_000,
+      cwd: projectRoot,
     });
     return { success: true, message: "OpenSpec configurado para OpenCode" };
   } catch (e) {
@@ -170,82 +247,22 @@ export function setupOpenSpec(): { success: boolean; message: string } {
  * Registers the MCP server entry and installs the OpenCode plugin locally.
  */
 export async function installEngram(toolsDir?: string): Promise<{ success: boolean; message: string }> {
-  const projectRoot = findProjectRoot();
-
-  // Check Bun availability and show suggestion if not found
-  const bunStatus = checkBunAvailability();
-  if (!bunStatus.available) {
-    console.log(`\n⚠️  Bun no detectado en el sistema.`);
-    console.log(`   Para instalar Bun, ejecutá:\n`);
-    console.log(`     ${bunStatus.installCommand}`);
-    if (bunStatus.installNote) {
-      console.log(`   Nota: ${bunStatus.installNote}`);
-    }
-    console.log(`\n   Documentación: https://bun.com/docs/installation\n`);
-  }
-
-  // Check if Engram is already available globally — skip local install if so
-  const globalBin = findExecutablePath("engram");
-  if (globalBin) {
-    // Global binary exists — create local symlink so MCP entry works portably
-    const engramToolDir = join(toolsDir ?? join(projectRoot, ".opencode", "tools"), "engram");
-    const engramBinDir = join(engramToolDir, "bin");
-    if (!existsSync(engramBinDir)) mkdirSync(engramBinDir, { recursive: true });
-    const localBin = join(engramBinDir, "engram" + (process.platform === "win32" ? ".exe" : ""));
-    if (!existsSync(localBin)) {
-      try { unlinkSync(localBin); } catch {}
-      try {
-        if (process.platform !== "win32") {
-          execSync(`ln -s "${globalBin}" "${localBin}"`, { stdio: "pipe" });
-        } else {
-          copyFileSync(globalBin, localBin);
-        }
-      } catch {
-        // Symlink failed — MCP entry will still work if user adds global to PATH
-      }
-    }
-
-    // Register MCP entry pointing to local path (symlink or fallback)
-    setMcpEntry("engram", {
-      type: "local",
-      command: [`.opencode/tools/engram/bin/engram`, "mcp"],
-      enabled: true,
-    });
-
-    // Copy plugin from assets/ to .opencode/plugins/ (always local)
-    const pluginSource = join(projectRoot, "assets", "plugins", "engram.ts");
-    const pluginsDir = join(projectRoot, ".opencode", "plugins");
-    const pluginTarget = join(pluginsDir, "engram.ts");
-    if (existsSync(pluginSource)) {
-      if (!existsSync(pluginsDir)) mkdirSync(pluginsDir, { recursive: true });
-      try {
-        copyFileSync(pluginSource, pluginTarget);
-      } catch {
-        // Plugin copy failed but global binary and MCP entry are set up
-      }
-    }
-
-    return { success: true, message: `Engram global detectado en ${globalBin} — usando binario global. Plugin copiado a .opencode/plugins/` };
-  }
-
-  const engramToolDir = join(toolsDir ?? join(projectRoot, ".opencode", "tools"), "engram");
+  const location = resolveToolInstallLocation(toolsDir);
+  const { projectRoot } = location;
+  const engramToolDir = join(location.toolsDir, "engram");
   const engramBinDir = join(engramToolDir, "bin");
   if (!existsSync(engramBinDir)) mkdirSync(engramBinDir, { recursive: true });
-
-  const target = detectPlatformTarget();
-  if (!target) {
-    return {
-      success: false,
-      message: `Plataforma no soportada para descarga local: ${process.platform}/${process.arch}. Instalá Engram manualmente.`,
-    };
-  }
-
-  const localBin = join(engramBinDir, "engram" + (process.platform === "win32" ? ".exe" : ""));
+  const localBin = join(engramBinDir, getExecutableName("engram"));
+  let archivePromotion: DirectoryPromotion | null = null;
+  const failAfterExtraction = (message: string): { success: false; message: string } => {
+    try { archivePromotion?.rollback(); } catch {}
+    return { success: false, message };
+  };
 
   // Si ya está descargado localmente, lo usamos
   if (existsSync(localBin)) {
     try {
-      execSync(`"${localBin}" --version`, { stdio: "pipe", timeout: 10_000 });
+      runTool(localBin, ["--version"], projectRoot, 10_000);
     } catch {
       // Binario corrupto — re-descargar
       try { unlinkSync(localBin); } catch {}
@@ -254,6 +271,22 @@ export async function installEngram(toolsDir?: string): Promise<{ success: boole
 
   // Descargar el binario si no está o se corrompió
   if (!existsSync(localBin)) {
+    const globalBin = findExecutablePath("engram");
+    const useGlobalBinary = globalBin && (
+      process.platform !== "win32" || globalBin.toLowerCase().endsWith(".exe")
+    );
+    if (useGlobalBinary) {
+      try {
+        runTool(globalBin, ["--version"], projectRoot, 10_000);
+        mkdirSync(engramBinDir, { recursive: true });
+        copyFileSync(globalBin, localBin);
+      } catch {
+        try { unlinkSync(localBin); } catch {}
+      }
+    }
+  }
+
+  if (!existsSync(localBin)) {
     const tag = await fetchLatestReleaseTag("Gentleman-Programming/engram");
     if (!tag) {
       return {
@@ -261,72 +294,48 @@ export async function installEngram(toolsDir?: string): Promise<{ success: boole
         message: "No se pudo obtener la última versión de Engram desde GitHub.",
       };
     }
-    // Engram usa versiones sin 'v' en el nombre del asset: engram_1.20.0_linux_amd64.tar.gz
-    const versionNum = tag.replace(/^v/, "");
-    const [os, cpu] = target.split("-");
-    // Engram usa amd64 en vez de x64
-    const engramCpu = cpu === "x64" ? "amd64" : cpu;
-    const ext = process.platform === "win32" ? "zip" : "tar.gz";
-    const url = `https://github.com/Gentleman-Programming/engram/releases/download/${tag}/engram_${versionNum}_${os}_${engramCpu}.${ext}`;
+    const url = buildEngramDownloadUrl(tag);
+    if (!url) {
+      return {
+        success: false,
+        message: `Plataforma no soportada para descargar Engram: ${process.platform}/${process.arch}.`,
+      };
+    }
     try {
       // Extraer al directorio base (no bin/) — el tar.gz puede tener estructura plana
-      await downloadAndExtractWithRetry(url, engramToolDir, 0, 120_000, 2);
+      archivePromotion = await downloadAndExtractWithRetry(url, engramToolDir, 0, 120_000, 2);
     } catch (e) {
       return {
         success: false,
         message: `Error descargando Engram ${tag}: ${(e as Error).message}`,
       };
     }
-    // Buscar el binario extraído y moverlo a bin/
-    const extractedBin = join(engramToolDir, "engram" + (process.platform === "win32" ? ".exe" : ""));
-    if (existsSync(extractedBin) && extractedBin !== localBin) {
-      try {
-        copyFileSync(extractedBin, localBin);
-        unlinkSync(extractedBin);
-      } catch {}
+    mkdirSync(engramBinDir, { recursive: true });
+    const found = findBinaryInDir(engramToolDir, "engram");
+    if (!found) {
+      return failAfterExtraction(`Descarga de Engram ${tag} completada pero no se encontró el binario en ${localBin}.`);
     }
-    if (!existsSync(localBin)) {
-      // Puede estar en un subdirectorio — buscarlo
-      const found = findBinaryInDir(engramToolDir, "engram");
-      if (found && found !== localBin) {
-        try {
-          copyFileSync(found, localBin);
-          if (process.platform !== "win32") execSync(`chmod +x "${localBin}"`, { stdio: "pipe" });
-        } catch {}
-      }
-    }
-    if (!existsSync(localBin)) {
-      return {
-        success: false,
-        message: `Descarga de Engram ${tag} completada pero no se encontró el binario en ${localBin}.`,
-      };
+    try {
+      if (found !== localBin) copyFileSync(found, localBin);
+    } catch (error) {
+      return failAfterExtraction(`Engram fue descargado pero no se pudo materializar el binario local: ${(error as Error).message}`);
     }
     if (process.platform !== "win32") {
-      try { execSync(`chmod +x "${localBin}"`, { stdio: "pipe" }); } catch {}
+      try { chmodSync(localBin, 0o755); } catch {}
     }
   }
 
-  // Registrar el MCP server apuntando al binario local en bin/
-  setMcpEntry("engram", {
-    type: "local",
-    command: [`.opencode/tools/engram/bin/engram`, "mcp"],
-    enabled: true,
-  });
-
-  // Copiar el plugin de Engram de assets/ a .opencode/plugins/
-  const pluginSource = join(projectRoot, "assets", "plugins", "engram.ts");
-  const pluginsDir = join(projectRoot, ".opencode", "plugins");
-  const pluginTarget = join(pluginsDir, "engram.ts");
-  if (existsSync(pluginSource)) {
-    if (!existsSync(pluginsDir)) mkdirSync(pluginsDir, { recursive: true });
-    try {
-      copyFileSync(pluginSource, pluginTarget);
-    } catch {
-      // Plugin copy failed but binary and MCP entry are already set up
-    }
+  try {
+    runTool(localBin, ["--version"], projectRoot, 10_000);
+    copyEngramPlugin(projectRoot);
+    configureLocalTool(projectRoot, "engram", buildLocalMcpCommand(localBin, ["mcp"]));
+  } catch (error) {
+    return failAfterExtraction(`Engram fue instalado pero no se pudo verificar o configurar: ${(error as Error).message}`);
   }
 
-  return { success: true, message: "Engram instalado localmente en .opencode/tools/engram/bin/ y configurado para OpenCode (MCP + plugin)" };
+  archivePromotion?.commit();
+
+  return { success: true, message: "Engram instalado localmente y configurado para OpenCode (MCP + plugin)" };
 }
 
 /**
@@ -336,24 +345,33 @@ export async function installEngram(toolsDir?: string): Promise<{ success: boole
  * to install the local skill.
  */
 export function setupContext7(toolsDir?: string): { success: boolean; message: string } {
-  const projectRoot = findProjectRoot();
-  const ctx7ToolDir = join(toolsDir ?? join(projectRoot, ".opencode", "tools"), "context7");
+  const location = resolveToolInstallLocation(toolsDir);
+  const { projectRoot } = location;
+  const ctx7ToolDir = join(location.toolsDir, "context7");
   if (!existsSync(ctx7ToolDir)) mkdirSync(ctx7ToolDir, { recursive: true });
 
   // Registrar el MCP server remoto en opencode.jsonc
-  ensureMcpEntry("context7", {
-    type: "remote",
-    url: "https://mcp.context7.com/mcp",
-    enabled: true,
-  });
+  try {
+    ensureMcpEntryAtProjectRoot(projectRoot, "context7", {
+      type: "remote",
+      url: "https://mcp.context7.com/mcp",
+      enabled: true,
+    });
+  } catch (error) {
+    return { success: false, message: `No se pudo registrar Context7: ${(error as Error).message}` };
+  }
 
   // Intentar instalar el skill via ctx7 setup --opencode (no-fatal)
   // Usar bunx si bun está disponible, sino npx
-  const npxCmd = isCommandAvailable("bun") ? "bunx" : "npx --yes";
+  const useBun = isCommandAvailable("bun");
   try {
-    execSync(`${npxCmd} ctx7 setup --opencode`, {
+    const invocation = getCommandInvocation(useBun ? "bunx" : "npx", useBun
+      ? ["ctx7", "setup", "--opencode"]
+      : ["--yes", "ctx7", "setup", "--opencode"]);
+    execFileSync(invocation.command, invocation.args, {
       stdio: "pipe",
       timeout: 60_000,
+      cwd: projectRoot,
     });
     return { success: true, message: "Context7 configurado (MCP + skill instalado)" };
   } catch {
@@ -372,12 +390,13 @@ export function setupContext7(toolsDir?: string): { success: boolean; message: s
  * Async because CodeGraph and Engram download binaries.
  */
 export async function installStack(toolsDir?: string): Promise<StackResult> {
+  const { projectRoot } = resolveToolInstallLocation(toolsDir);
   return {
     codegraph: await installCodeGraph(toolsDir),
-    openspec: setupOpenSpec(),
+    openspec: setupOpenSpec(projectRoot),
     engram: await installEngram(toolsDir),
     context7: setupContext7(toolsDir),
-    config: patchOpenCodeConfig(),
+    config: patchOpenCodeConfig(projectRoot),
   };
 }
 
@@ -421,7 +440,7 @@ export function uninstallEngramConfig(): { success: boolean; message: string } {
  * Does NOT touch global binaries (codegraph, engram) or Engram data.
  */
 export function uninstallStackConfig(paths: OpenCodePaths): { success: boolean; message: string } {
-  const projectRoot = findProjectRoot();
+  const projectRoot = dirname(paths.root);
   const removed: string[] = [];
 
   // 1. Remover entradas MCP del stack de opencode.json

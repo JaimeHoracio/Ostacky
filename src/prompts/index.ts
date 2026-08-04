@@ -1,4 +1,5 @@
 import * as p from "@clack/prompts";
+import { dirname } from "path";
 import { ensureToolDirs } from "../fs.js";
 import { loadManifest, loadLatestManifest, printPostInstallSteps, resolveOpenCodePaths, onCancel } from "./helpers.js";
 import { doInstallAll, doInstallStack } from "./install.js";
@@ -37,9 +38,9 @@ export async function runInteractiveMenu() {
 
   switch (action as string) {
     case "all":
-      await doInstallAll(manifest, paths);
+      if (!(await doInstallAll(manifest, paths))) process.exitCode = 1;
       printPostInstallSteps();
-      p.outro("Listo.");
+      p.outro(process.exitCode ? "Instalación parcial." : "Listo.");
       break;
     case "agent":
       await doAddAgent(manifest, paths);
@@ -63,8 +64,9 @@ export async function runInteractiveMenu() {
       break;
     case "stack": {
       ensureToolDirs(paths.tools, ["codegraph", "engram", "context7"]);
-      await doInstallStack(paths.tools);
-      p.outro("Listo.");
+      const stackOk = await doInstallStack(paths.tools, dirname(paths.root));
+      if (!stackOk) process.exitCode = 1;
+      p.outro(stackOk ? "Listo." : "Instalación parcial.");
       break;
     }
     case "update": {
@@ -88,9 +90,9 @@ export async function runInstallCommand() {
   const manifest = await loadManifest();
   const paths = await resolveOpenCodePaths();
   if (!paths) { p.outro("Cancelado."); return; }
-  await doInstallAll(manifest, paths);
+  if (!(await doInstallAll(manifest, paths))) process.exitCode = 1;
   printPostInstallSteps();
-  p.outro("Instalación completada.");
+  p.outro(process.exitCode ? "Instalación parcial." : "Instalación completada.");
 }
 
 export async function runAddAgentCommand() {
@@ -138,8 +140,9 @@ export async function runInstallStackCommand() {
   const paths = await resolveOpenCodePaths();
   if (!paths) { p.outro("Cancelado."); return; }
   ensureToolDirs(paths.tools, ["codegraph", "engram", "context7"]);
-  await doInstallStack(paths.tools);
-  p.outro("Stack instalado.");
+  const stackOk = await doInstallStack(paths.tools, dirname(paths.root));
+  if (!stackOk) process.exitCode = 1;
+  p.outro(stackOk ? "Stack instalado." : "Stack instalado parcialmente.");
 }
 
 export async function runUninstallStackCommand() {
@@ -194,7 +197,7 @@ export async function runUninstallAgentCommand(name?: string) {
     const { readLockfile } = await import("../lockfile.js");
     const lockfile = readLockfile(paths.root);
     if (lockfile && Object.keys(lockfile.agents).length > 0) {
-      const { default: prompts } = await import("@clack/prompts");
+      const prompts = p;
       // Inline agent selection for single name
       const installed = Object.keys(lockfile.agents);
       const options = installed.map((n) => ({
@@ -228,7 +231,7 @@ export async function runUninstallCommandCommand(name?: string) {
     const { readLockfile } = await import("../lockfile.js");
     const lockfile = readLockfile(paths.root);
     if (lockfile && Object.keys(lockfile.commands).length > 0) {
-      const { default: prompts } = await import("@clack/prompts");
+      const prompts = p;
       const installed = Object.keys(lockfile.commands);
       const options = installed.map((n) => ({
         value: n,
@@ -261,7 +264,7 @@ export async function runUninstallSkillCommand(name?: string) {
     const { readLockfile } = await import("../lockfile.js");
     const lockfile = readLockfile(paths.root);
     if (lockfile && lockfile.skills && Object.keys(lockfile.skills).length > 0) {
-      const { default: prompts } = await import("@clack/prompts");
+      const prompts = p;
       const installed = Object.keys(lockfile.skills);
       const options = installed.map((n) => ({
         value: n,
@@ -294,7 +297,7 @@ export async function runUninstallMcpCommand(name?: string) {
     const { readLockfile } = await import("../lockfile.js");
     const lockfile = readLockfile(paths.root);
     if (lockfile && lockfile.mcpServers && Object.keys(lockfile.mcpServers).length > 0) {
-      const { default: prompts } = await import("@clack/prompts");
+      const prompts = p;
       const installed = Object.keys(lockfile.mcpServers);
       const options = installed.map((n) => ({
         value: n,

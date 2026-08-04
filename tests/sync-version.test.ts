@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { execSync } from "node:child_process";
+import { syncVersion } from "../scripts/sync-version.ts";
 
 const TEST_DIR = join(import.meta.dir, "../.test-temp");
 
@@ -15,17 +15,30 @@ describe("sync-version", () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
 
-  it("should sync version from package.json to manifest.json", () => {
-    // Create test files
+  it("syncs the package version, tag, and every manifest item", () => {
     const packageJson = { version: "1.2.3" };
-    const manifest = { version: "1.0.0", agents: [{ version: "1.0.0" }] };
+    const manifest = {
+      version: "1.0.0",
+      tag: "v1.0.0",
+      agents: [{ version: "1.0.0" }],
+      commands: [{ version: "1.0.0" }],
+      mcpServers: [{ version: "1.0.0" }],
+      skills: [{ version: "1.0.0" }],
+    };
 
     writeFileSync(join(TEST_DIR, "package.json"), JSON.stringify(packageJson));
     writeFileSync(join(TEST_DIR, "manifest.json"), JSON.stringify(manifest));
 
-    // Run sync (would need to mock paths)
-    // This is a simplified test - real implementation would need proper mocking
-    expect(true).toBe(true);
+    expect(syncVersion(TEST_DIR)).toBe(true);
+
+    expect(JSON.parse(readFileSync(join(TEST_DIR, "manifest.json"), "utf-8"))).toMatchObject({
+      version: "1.2.3",
+      tag: "v1.2.3",
+      agents: [{ version: "1.2.3" }],
+      commands: [{ version: "1.2.3" }],
+      mcpServers: [{ version: "1.2.3" }],
+      skills: [{ version: "1.2.3" }],
+    });
   });
 });
 

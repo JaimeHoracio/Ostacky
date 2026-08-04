@@ -22,7 +22,9 @@ CodeGraph se instala **localmente** en `.opencode/tools/codegraph/` — no se in
 Verificá si ya está descargado localmente:
 
 ```bash
+# Unix
 .opencode/tools/codegraph/bin/codegraph --version
+# Windows: ejecutar codegraph.cmd o codegraph.exe dentro de .opencode/tools/codegraph/bin/
 ```
 
 Si no está, descargalo manualmente desde [GitHub Releases](https://github.com/colbymchenry/codegraph/releases) y extraelo a `.opencode/tools/codegraph/` (el tar.gz tiene estructura `codegraph-{os}-{arch}/bin/codegraph`, `lib/`, `node`).
@@ -30,7 +32,9 @@ Si no está, descargalo manualmente desde [GitHub Releases](https://github.com/c
 Inicializa e indexa el proyecto actual:
 
 ```bash
+# Unix
 .opencode/tools/codegraph/bin/codegraph init -i
+# Windows: ejecutar el launcher instalado con `init -i`
 ```
 
 Verifica que el MCP server esté configurado en `opencode.json` apuntando al binario local:
@@ -86,7 +90,7 @@ El controller MCP se configura como server local en `opencode.json`. Si el contr
 - El controller nunca autoriza subagentes sin confirmación explícita del usuario.
 - Los MCP servers se copian como archivos autocontenidos (bundleados en `dist/mcp/` durante el build). No requieren `npm install` ni `bun install` — cada `index.js` es un único archivo autocontenido sin dependencias externas.
 - El installer maneja `opencode.jsonc` (con comentarios) correctamente — strippea comentarios antes de parsear y escribe JSON válido de vuelta.
-- Si CodeGraph crea un `AGENTS.md` en la raíz del proyecto, el installer lo mueve a `.opencode/tools/codegraph/AGENTS.md` automáticamente.
+- El installer registra el MCP directamente y **no mueve ni elimina** un `AGENTS.md` existente en la raíz del proyecto.
 
 ---
 
@@ -152,45 +156,21 @@ Leé `opencode.json` (o `opencode.jsonc`) en la raíz del proyecto.
 
 ---
 
-## Paso 4 — OpenSpec (MCP Server local)
+## Paso 4 — OpenSpec CLI
 
-OpenSpec se instala como MCP server local en `.opencode/mcp/openspec/`. El server provee tools para proposal, apply, archive y sync de cambios.
-
-### Verificar instalación
+OpenSpec se inicializa con su CLI oficial para OpenCode. Genera commands en `.opencode/commands/` y skills en `.opencode/skills/`; **no instala ni registra un MCP server local**.
 
 ```bash
-.opencode/mcp/openspec/index.js --version 2>/dev/null || echo "no-instalado"
+npx --yes openspec init --tools opencode --force
 ```
 
-### Configurar en opencode.json
-
-```json
-{
-    "mcp": {
-        "openspec": {
-            "type": "local",
-            "command": ["node", ".opencode/mcp/openspec/index.js"],
-            "enabled": true
-        }
-    }
-}
-```
-
-**Notas:**
-
-- OpenSpec MCP server es autocontenido — no requiere `npm install` ni `bun install`.
-- El server provee las tools: `openspec_propose`, `openspec_list`, `openspec_archive`, `openspec_get_change`.
-- Los changes se almacenan en `openspec/changes/` y se archivan en `openspec/archive/`.
+Los changes se almacenan en `openspec/changes/` y se archivan en `openspec/archive/`.
 
 ### Desinstalar OpenSpec
 
 ```bash
-# Remover el MCP server
-rm -rf .opencode/mcp/openspec/
-
-# Remover la entrada MCP de opencode.json (editar el archivo)
-
-# Remover cambios archivados (opcional)
+# Remover commands/skills generados por OpenSpec según corresponda
+# Remover changes archivados (opcional)
 rm -rf openspec/
 ```
 
@@ -404,15 +384,11 @@ Cada herramienta se instala en su propia carpeta dentro de `.opencode/` para man
 │   ├── opsx-archive.md       # Generado por OpenSpec
 │   ├── opsx-explore.md       # Generado por OpenSpec
 │   └── opsx-propose.md       # Generado por OpenSpec
-├── mcp/             # MCP servers bundleados (autocontenidos, sin dependencias externas)
+├── mcp/             # MCP servers bundleados
 │   ├── ostacky-controller/
 │   │   ├── index.js
 │   │   ├── package.json
-│   │   └── node_modules/
-│   └── openspec/            # NUEVO: MCP server local
-│       ├── index.js
-│       ├── package.json
-│       └── node_modules/
+│   │   └── node_modules/    # Solo fallback de desarrollo
 ├── skills/          # Skills bundleadas (15)
 │   ├── brainstorming/
 │   ├── writing-plans/
@@ -439,10 +415,10 @@ Cada herramienta se instala en su propia carpeta dentro de `.opencode/` para man
 **Notas sobre la estructura:**
 
 - `.codegraph/` (índice de CodeGraph) vive en la raíz del proyecto — CodeGraph lo espera ahí.
-- El binario de CodeGraph es **local al proyecto** en `.opencode/tools/codegraph/bin/codegraph` (con su runtime Node vendored en `.opencode/tools/codegraph/node`). No se instala globalmente.
-- El binario de Engram es **local al proyecto** en `.opencode/tools/engram/bin/engram`. No se instala globalmente.
+- El binario de CodeGraph es **local al proyecto** en `.opencode/tools/codegraph/bin/`; en Windows puede ser `codegraph.cmd`. No se instala globalmente.
+- El binario de Engram es **local al proyecto** en `.opencode/tools/engram/bin/engram` (o `engram.exe` en Windows). No se instala globalmente.
 - Context7 se registra como MCP remoto en `opencode.jsonc`. Su skill opcional se instala via `npx ctx7 setup --opencode` en `.opencode/skills/context7/`.
-- Los MCP servers bundleados son autocontenidos (un solo `index.js` sin dependencias externas).
+- El controller publicado se bundlea como un único `index.js`; durante desarrollo el installer instala sus dependencias en staging y valida el servidor antes de activarlo.
 
 ## Verificación final
 
@@ -450,16 +426,15 @@ Confirmá que:
 
 1. `.opencode/skills/` contiene las 15 skills curadas y opcionalmente `context7/` si se instaló con `npx ctx7 setup --opencode`
 2. `.opencode/commands/` contiene los commands bundleados por Ostacky (`install-stack`, `opsx-sync`) y los 4 commands generados por OpenSpec (`opsx-apply`, `opsx-archive`, `opsx-explore`, `opsx-propose`) si OpenSpec fue inicializado
-3. `opencode.json` (o `.jsonc`) tiene los bloques MCP: `codegraph`, `engram`, `context7`, `ostacky-controller`, `openspec` — sin campo `plugin`
+3. `opencode.json` (o `.jsonc`) tiene los bloques MCP: `codegraph`, `engram`, `context7`, `ostacky-controller` — sin campo `plugin`
 4. `.codegraph/` existe en la raíz del proyecto (índice local de CodeGraph)
-5. `.opencode/tools/codegraph/bin/codegraph --version` funciona (binario local)
-6. `.opencode/tools/engram/bin/engram --version` funciona (binario local)
+5. El launcher local de CodeGraph funciona (`codegraph.cmd --version` en Windows o `codegraph --version` en Unix)
+6. El binario local de Engram funciona (`engram.exe --version` en Windows o `engram --version` en Unix)
 7. Context7 configurado: `mcp.context7` presente en `opencode.jsonc` y/o `.opencode/skills/context7/SKILL.md` existe
-8. `.opencode/mcp/openspec/index.js` existe (MCP server local)
-9. Los MCP bundleados tienen sus dependencias instaladas en `.opencode/mcp/*/node_modules/`
-10. `.opencode/tools/` contiene subdirectorios para `codegraph/`, `engram/` y `context7/`
-11. **NO existen** archivos generados en `.claude/`, `.kiro/`, `.cursor/`, `.gemini/`, `.codex/` ni ningún directorio de otra plataforma
-12. **NO existe** `AGENTS.md` en la raíz del proyecto (si CodeGraph lo creó, el installer lo mueve a `.opencode/tools/codegraph/`)
+8. OpenSpec generó sus commands/skills para OpenCode mediante `openspec init --tools opencode`
+9. `.opencode/tools/` contiene subdirectorios para `codegraph/`, `engram/` y `context7/`
+10. **NO existen** archivos generados en `.claude/`, `.kiro/`, `.cursor/`, `.gemini/`, `.codex/` ni ningún directorio de otra plataforma
+11. Un `AGENTS.md` preexistente en la raíz del proyecto se preserva sin cambios
 
 Reportá el estado de cada componente con ✓ o ✗.
 
@@ -467,13 +442,12 @@ Reportá el estado de cada componente con ✓ o ✗.
 
 ### MCP Server no responde
 
-Si el controller o openspec MCP server no responde después de la instalación:
+Si el controller MCP no responde después de la instalación:
 
 1. **Verificar que el archivo existe:**
 
     ```bash
     ls -la .opencode/mcp/ostacky-controller/index.js
-    ls -la .opencode/mcp/openspec/index.js
     ```
 
 2. **Verificar que Node.js está disponible:**

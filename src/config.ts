@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { findProjectRoot } from "./fs.js";
 
@@ -68,7 +68,13 @@ export function readOpenCodeConfig(configPath: string): Record<string, unknown> 
  * Writes config as pretty-printed JSON with trailing newline.
  */
 export function writeOpenCodeConfig(configPath: string, config: Record<string, unknown>): void {
-  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  const tmpPath = `${configPath}.tmp.${process.pid}.${Date.now()}`;
+  try {
+    writeFileSync(tmpPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+    renameSync(tmpPath, configPath);
+  } finally {
+    if (existsSync(tmpPath)) rmSync(tmpPath, { force: true });
+  }
 }
 
 /**
@@ -107,10 +113,22 @@ export function findOpenCodeConfig(projectRoot: string): string | null {
  * entries that should be preserved.
  */
 export function setMcpEntry(name: string, entry: Record<string, unknown>): void {
-  const projectRoot = findProjectRoot();
+  setMcpEntryAtProjectRoot(findProjectRoot(), name, entry);
+}
+
+/**
+ * Sets an MCP entry at an explicit project root. Keeping the root explicit
+ * prevents installers that already resolved a target directory from silently
+ * writing configuration for a different process working directory.
+ */
+export function setMcpEntryAtProjectRoot(
+  projectRoot: string,
+  name: string,
+  entry: Record<string, unknown>
+): void {
   const configPath = ensureOpenCodeConfig(projectRoot);
   const config = readOpenCodeConfig(configPath);
-  if (!config) return;
+  if (!config) throw new Error(`Error parseando ${configPath}`);
   if (!config.mcp) config.mcp = {};
   (config.mcp as Record<string, unknown>)[name] = entry;
   writeOpenCodeConfig(configPath, config);
@@ -122,10 +140,18 @@ export function setMcpEntry(name: string, entry: Record<string, unknown>): void 
  * only adds the entry if it's missing. This is idempotent and preserves user config.
  */
 export function ensureMcpEntry(name: string, entry: Record<string, unknown>): void {
-  const projectRoot = findProjectRoot();
+  ensureMcpEntryAtProjectRoot(findProjectRoot(), name, entry);
+}
+
+/** Adds an MCP entry only when it is absent at the supplied project root. */
+export function ensureMcpEntryAtProjectRoot(
+  projectRoot: string,
+  name: string,
+  entry: Record<string, unknown>
+): void {
   const configPath = ensureOpenCodeConfig(projectRoot);
   const config = readOpenCodeConfig(configPath);
-  if (!config) return;
+  if (!config) throw new Error(`Error parseando ${configPath}`);
   if (!config.mcp) config.mcp = {};
   const mcp = config.mcp as Record<string, unknown>;
   if (!mcp[name]) {
@@ -138,8 +164,7 @@ export function ensureMcpEntry(name: string, entry: Record<string, unknown>): vo
  * Patches opencode.json to remove the legacy `plugin` field
  * (from the deprecated Superpowers era).
  */
-export function patchOpenCodeConfig(): { success: boolean; message: string } {
-  const projectRoot = findProjectRoot();
+export function patchOpenCodeConfig(projectRoot: string = findProjectRoot()): { success: boolean; message: string } {
   const configPath = findOpenCodeConfig(projectRoot);
 
   if (!configPath) {

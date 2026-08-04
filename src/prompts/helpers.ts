@@ -56,7 +56,7 @@ export async function loadLatestManifest(): Promise<Manifest> {
 export function printPostInstallSteps(): void {
   p.note(
     [
-      "Iniciá OpenCode (si no está corriendo):",
+      "Cerrá y reiniciá OpenCode si ya estaba corriendo (los MCP no recargan su config en caliente):",
       "  TUI → opencode",
       "  Web → opencode web --port 4096",
       "Escribí @Ostacky en el chat (TUI o web) para invocar al agente",

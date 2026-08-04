@@ -9,10 +9,11 @@ import {
   readFileSync,
   rmSync,
   createWriteStream,
+  renameSync,
 } from "fs";
 import { createHash } from "crypto";
-import { join, resolve, dirname, relative } from "path";
-import { execSync } from "child_process";
+import { join, resolve, dirname, relative, basename } from "path";
+import { execFileSync } from "child_process";
 import { sha256 } from "./security.js";
 import type { OpenCodePaths } from "./types.js";
 
@@ -152,11 +153,9 @@ function walkForHash(root: string, current: string, lines: string[]): void {
  */
 export function isCommandAvailable(cmd: string): boolean {
   try {
-    if (process.platform === "win32") {
-      execSync(`where ${cmd} >nul 2>&1`);
-    } else {
-      execSync(`which ${cmd} >/dev/null 2>&1`);
-    }
+    execFileSync(process.platform === "win32" ? "where" : "which", [cmd], {
+      stdio: "ignore",
+    });
     return true;
   } catch {
     return false;
@@ -169,11 +168,15 @@ export function isCommandAvailable(cmd: string): boolean {
  */
 export function findExecutablePath(cmd: string): string | null {
   try {
-    const result = execSync(
-      process.platform === "win32" ? `where ${cmd}` : `which ${cmd}`,
-      { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
-    ).trim();
-    return result || null;
+    const command = process.platform === "win32" ? "where" : "which";
+    const result = execFileSync(command, [cmd], {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    return result
+      .split(/\r?\n/)
+      .map((entry: string) => entry.trim())
+      .find(Boolean) ?? null;
   } catch {
     return null;
   }
@@ -223,7 +226,7 @@ export function checkBunAvailability(): {
     // Bun is available — try to get version
     let version: string | undefined;
     try {
-      version = execSync("bun --version", {
+      version = execFileSync(bunPath, ["--version"], {
         encoding: "utf-8",
         stdio: ["pipe", "pipe", "pipe"],
       }).trim();
@@ -246,9 +249,10 @@ export function checkBunAvailability(): {
  * Detects the platform target triple (os-arch) for downloading the correct binary.
  * Returns null if the platform is not supported.
  */
-export function detectPlatformTarget(): string | null {
-  const platform = process.platform;
-  const arch = process.arch;
+export function detectPlatformTarget(
+  platform: string = process.platform,
+  arch: string = process.arch
+): string | null {
   let os: string;
   let cpu: string;
   if (platform === "darwin") os = "darwin";
@@ -261,38 +265,144 @@ export function detectPlatformTarget(): string | null {
   return `${os}-${cpu}`;
 }
 
+/** Returns the executable filename expected by the current platform. */
+export function getExecutableName(name: string, platform: string = process.platform): string {
+  return platform === "win32" ? `${name}.exe` : name;
+}
+
+/**
+ * Returns all executable names supported by a bundled tool for a platform.
+ * CodeGraph packages a `.cmd` launcher on Windows; other tools use `.exe`.
+ */
+export function getExecutableNames(name: string, platform: string = process.platform): string[] {
+  if (platform !== "win32") return [name];
+  return name === "codegraph" ? [`${name}.exe`, `${name}.cmd`] : [`${name}.exe`];
+}
+
+export interface CommandInvocation {
+  command: string;
+  args: string[];
+}
+
+/**
+ * Converts Windows `.cmd` shims into an invocation that Node can spawn.
+ * `execFile` cannot directly execute npm/npx `.cmd` wrappers on Windows.
+ */
+export function getCommandInvocation(
+  command: string,
+  args: string[],
+  platform: string = process.platform
+): CommandInvocation {
+  const requiresCmd = platform === "win32" && (
+    command.toLowerCase().endsWith(".cmd") || command === "npm" || command === "npx"
+  );
+  if (!requiresCmd) return { command, args };
+
+  return {
+    command: "cmd.exe",
+    args: ["/d", "/c", "call", command, ...args],
+  };
+}
+
+/**
+ * Maps Node platform names to Engram's GitHub release naming convention.
+ * Engram uses "windows" and "amd64", unlike Node's "win32" and "x64".
+ */
+export function getEngramReleaseTarget(
+  platform: string = process.platform,
+  arch: string = process.arch
+): string | null {
+  const os = platform === "win32" ? "windows" : platform === "darwin" || platform === "linux" ? platform : null;
+  const cpu = arch === "x64" ? "amd64" : arch === "arm64" ? "arm64" : null;
+  return os && cpu ? `${os}-${cpu}` : null;
+}
+
+/** Returns whether an error is transient enough to justify a download retry. */
+export function shouldRetryDownload(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const status = message.match(/\bHTTP\s+(\d{3})\b/i)?.[1];
+  if (status) {
+    const code = Number(status);
+    return code === 408 || code === 425 || code === 429 || code >= 500;
+  }
+  return /abort|timeout|timed out|econnreset|econnrefused|eai_again|enotfound|fetch failed|network/i.test(message);
+}
+
+export interface DirectoryPromotion {
+  commit(): void;
+  rollback(): void;
+}
+
+/**
+ * Promotes a staged directory without deleting the previous installation until
+ * the caller explicitly commits. This lets callers validate binaries and
+ * configuration before an update becomes irreversible.
+ */
+export function promoteStagedDirectory(stagedDir: string, destinationDir: string): DirectoryPromotion {
+  const backupDir = `${destinationDir}.backup-${process.pid}-${Date.now()}`;
+  const hadDestination = existsSync(destinationDir);
+  if (hadDestination) renameSync(destinationDir, backupDir);
+  try {
+    mkdirSync(dirname(destinationDir), { recursive: true });
+    renameSync(stagedDir, destinationDir);
+  } catch (error) {
+    if (hadDestination && existsSync(backupDir)) renameSync(backupDir, destinationDir);
+    throw error;
+  }
+
+  let settled = false;
+  return {
+    commit() {
+      if (settled) return;
+      if (hadDestination && existsSync(backupDir)) rmSync(backupDir, { recursive: true, force: true });
+      settled = true;
+    },
+    rollback() {
+      if (settled) return;
+      if (existsSync(destinationDir)) rmSync(destinationDir, { recursive: true, force: true });
+      if (hadDestination && existsSync(backupDir)) renameSync(backupDir, destinationDir);
+      settled = true;
+    },
+  };
+}
+
 /**
  * Downloads a file from a URL to a local destination with a timeout.
  */
 export function downloadToFile(url: string, dest: string, timeoutMs: number = 180_000): Promise<void> {
   return new Promise((resolve, reject) => {
-    const file = createWriteStream(dest);
-    file.on("finish", () => resolve());
-    file.on("error", (err) => reject(err));
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     fetch(url, { signal: controller.signal, headers: { "User-Agent": USER_AGENT } })
       .then((res) => {
         if (!res.ok || !res.body) {
-          reject(new Error(`HTTP ${res.status} ${res.statusText} descargando ${url}`));
-          return;
+          throw new Error(`HTTP ${res.status} ${res.statusText} descargando ${url}`);
         }
+        const file = createWriteStream(dest);
+        const fail = (error: Error) => {
+          file.destroy();
+          try { unlinkSync(dest); } catch {}
+          reject(error);
+        };
+        file.once("error", fail);
+        file.once("finish", resolve);
         const writable = new WritableStream({
           write(chunk: Uint8Array) {
-            return new Promise<void>((ok, fail) => file.write(Buffer.from(chunk), (err) => err ? fail(err) : ok()));
+            return new Promise<void>((ok, failWrite) =>
+              file.write(Buffer.from(chunk), (err) => err ? failWrite(err) : ok())
+            );
           },
           close() {
             file.end();
           },
         });
-        return res.body.pipeTo(writable);
+        return res.body.pipeTo(writable).catch(fail);
       })
       .then(() => {
         clearTimeout(timer);
       })
       .catch((err) => {
         clearTimeout(timer);
-        file.destroy();
         try { unlinkSync(dest); } catch {}
         reject(err);
       });
@@ -319,7 +429,7 @@ export async function downloadWithRetry(
       return;
     } catch (err) {
       lastError = err as Error;
-      if (attempt < maxRetries) {
+      if (attempt < maxRetries && shouldRetryDownload(lastError)) {
         const delay = 1000 * Math.pow(2, attempt); // 1s, 2s, 4s...
         console.error(`[download] Intento ${attempt + 1} falló: ${lastError.message}. Reintentando en ${delay}ms...`);
         await new Promise((r) => setTimeout(r, delay));
@@ -331,33 +441,42 @@ export async function downloadWithRetry(
 
 /**
  * Downloads and extracts a tar.gz or zip archive from GitHub Releases to a destination directory.
- * Uses tar (POSIX) or powershell tar (Windows) for tar.gz.
- * Uses Expand-Archive for zip on Windows.
+ * Uses the platform tar implementation for both tar.gz and zip archives.
+ * Archives are staged outside the live destination and promoted only after
+ * successful extraction, so a failed update preserves the prior installation.
  */
 export async function downloadAndExtract(
   url: string,
   destDir: string,
   stripComponents: number = 1,
   timeoutMs: number = 180_000
-): Promise<void> {
-  const tmp = join(destDir, `.download-${Date.now()}`);
+): Promise<DirectoryPromotion> {
+  const tmp = join(dirname(destDir), `.${basename(destDir)}.download-${Date.now()}`);
   if (!existsSync(tmp)) mkdirSync(tmp, { recursive: true });
   const archivePath = join(tmp, url.endsWith(".zip") ? "archive.zip" : "archive.tar.gz");
+  const extractedDir = join(tmp, "extracted");
   try {
     await downloadToFile(url, archivePath, timeoutMs);
-    if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true });
-    if (process.platform === "win32" && url.endsWith(".zip")) {
-      execSync(
-        `powershell -NoProfile -Command "Expand-Archive -Path '${archivePath}' -DestinationPath '${destDir}' -Force"`,
-        { stdio: "pipe", timeout: 60_000 }
-      );
-    } else {
-      const stripArg = stripComponents > 0 ? `--strip-components=${stripComponents}` : "";
-      execSync(`tar -xzf "${archivePath}" -C "${destDir}" ${stripArg}`, {
-        stdio: "pipe",
-        timeout: 60_000,
-      });
+    mkdirSync(extractedDir, { recursive: true });
+    const args = url.endsWith(".zip")
+      ? ["-xf", archivePath, "-C", extractedDir]
+      : ["-xzf", archivePath, "-C", extractedDir];
+    execFileSync("tar", args, { stdio: "pipe", timeout: 60_000 });
+
+    let stagedDir = extractedDir;
+    for (let component = 0; component < stripComponents; component++) {
+      const entries = readdirSync(stagedDir);
+      if (entries.length !== 1) {
+        throw new Error(`No se puede remover ${stripComponents} componente(s) del archive: estructura inesperada.`);
+      }
+      const next = join(stagedDir, entries[0]);
+      if (!statSync(next).isDirectory()) {
+        throw new Error(`No se puede remover ${stripComponents} componente(s) del archive: falta directorio raíz.`);
+      }
+      stagedDir = next;
     }
+
+    return promoteStagedDirectory(stagedDir, destDir);
   } finally {
     try { rmSync(tmp, { recursive: true, force: true }); } catch {}
   }
@@ -377,15 +496,14 @@ export async function downloadAndExtractWithRetry(
   stripComponents: number = 1,
   timeoutMs: number = 180_000,
   maxRetries: number = 2
-): Promise<void> {
+): Promise<DirectoryPromotion> {
   let lastError: Error | null = null;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      await downloadAndExtract(url, destDir, stripComponents, timeoutMs);
-      return;
+      return await downloadAndExtract(url, destDir, stripComponents, timeoutMs);
     } catch (err) {
       lastError = err as Error;
-      if (attempt < maxRetries) {
+      if (attempt < maxRetries && shouldRetryDownload(lastError)) {
         const delay = 1000 * Math.pow(2, attempt); // 1s, 2s, 4s...
         console.error(`[download] Intento ${attempt + 1} falló: ${lastError.message}. Reintentando en ${delay}ms...`);
         await new Promise((r) => setTimeout(r, delay));
@@ -407,7 +525,7 @@ export function findBinaryInDir(dir: string, name: string): string | null {
     if (stat.isDirectory()) {
       const found = findBinaryInDir(full, name);
       if (found) return found;
-    } else if (entry === name || entry === name + ".exe") {
+    } else if (getExecutableNames(name).includes(entry)) {
       return full;
     }
   }

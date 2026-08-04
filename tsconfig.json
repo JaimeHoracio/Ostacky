@@ -10,5 +10,5 @@
     "outDir": "./dist",
     "rootDir": "."
   },
-  "include": ["src/**/*", "scripts/**/*"]
+  "include": ["src/**/*", "scripts/**/*", "tests/cache.test.ts", "tests/controller-source.test.ts", "tests/fs.test.ts", "tests/config.test.ts", "tests/installer.test.ts", "tests/lockfile.test.ts", "tests/security.test.ts", "tests/stack.test.ts"]
 }

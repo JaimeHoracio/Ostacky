@@ -1,5 +1,5 @@
 import * as p from "@clack/prompts";
-import { join } from "path";
+import { dirname, join } from "path";
 import { existsSync } from "fs";
 import type { Manifest } from "../github.js";
 import {
@@ -15,12 +15,13 @@ import {
   installEngram,
   setupContext7,
 } from "../stack.js";
-import { ensureToolDirs } from "../fs.js";
+import { ensureToolDirs, findBinaryInDir } from "../fs.js";
 import { onCancel } from "./helpers.js";
 
-export async function doInstallStack(toolsDir?: string) {
+export async function doInstallStack(toolsDir?: string, projectRoot?: string): Promise<boolean> {
   const spin = p.spinner();
   let allOk = true;
+  const resolvedProjectRoot = projectRoot ?? dirname(dirname(toolsDir ?? join(process.cwd(), ".opencode", "tools")));
 
   // 1. CodeGraph
   spin.start("Instalando CodeGraph...");
@@ -30,7 +31,7 @@ export async function doInstallStack(toolsDir?: string) {
 
   // 2. OpenSpec
   spin.start("Configurando OpenSpec...");
-  const os = setupOpenSpec();
+  const os = setupOpenSpec(resolvedProjectRoot);
   spin.stop(os.success ? `✓ ${os.message}` : `✗ ${os.message}`);
   if (!os.success) allOk = false;
 
@@ -49,16 +50,17 @@ export async function doInstallStack(toolsDir?: string) {
   // 5. Config
   spin.start("Verificando configuración...");
   const { patchOpenCodeConfig } = await import("../config.js");
-  const cfg = patchOpenCodeConfig();
+  const cfg = patchOpenCodeConfig(resolvedProjectRoot);
   spin.stop(cfg.success ? `✓ ${cfg.message}` : `✗ ${cfg.message}`);
   if (!cfg.success) allOk = false;
 
   if (!allOk) {
     p.log.warn("Algunos componentes requieren atención. Revisá los mensajes de error arriba.");
   }
+  return allOk;
 }
 
-export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths) {
+export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths): Promise<boolean> {
   const spin = p.spinner();
   let errors = 0;
 
@@ -109,13 +111,14 @@ export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths) {
   }
 
   p.log.info("Instalando stack de herramientas...");
-  await doInstallStack(paths.tools);
+  const stackOk = await doInstallStack(paths.tools, dirname(paths.root));
+  if (!stackOk) errors++;
 
   const missingTools: string[] = [];
-  const codegraphBin = join(paths.tools, "codegraph", "bin", "codegraph");
-  const engramBin = join(paths.tools, "engram", "bin", "engram");
-  if (!existsSync(codegraphBin)) missingTools.push("CodeGraph");
-  if (!existsSync(engramBin)) missingTools.push("Engram");
+  const codegraphDir = join(paths.tools, "codegraph");
+  const engramDir = join(paths.tools, "engram");
+  if (!existsSync(codegraphDir) || !findBinaryInDir(codegraphDir, "codegraph")) missingTools.push("CodeGraph");
+  if (!existsSync(engramDir) || !findBinaryInDir(engramDir, "engram")) missingTools.push("Engram");
 
   if (missingTools.length > 0) {
     p.log.warn(
@@ -124,9 +127,11 @@ export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths) {
     );
   }
 
-  if (errors === 0) {
+  if (errors === 0 && stackOk && missingTools.length === 0) {
     p.log.success("Todo instalado correctamente.");
   } else {
-    p.log.warn(`Completado con ${errors} error(es).`);
+    p.log.warn(`Instalación parcial: ${errors} componente(s) requieren atención.`);
   }
+
+  return errors === 0 && stackOk && missingTools.length === 0;
 }
