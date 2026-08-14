@@ -12,7 +12,7 @@ export function getCacheRoot(projectRoot: string): string {
 
 /**
  * Generates the absolute path for a cached file.
- * Example: <projectRoot>/.opencode/cache/ostacky/v0.7.0/assets/agents/ostacky.md
+ * Example: <projectRoot>/.opencode/cache/ostacky/v0.7.1/assets/agents/ostacky.md
  */
 function cacheKey(projectRoot: string, repo: string, tag: string, filePath: string): string {
     const repoSlug = repo.replace('/', '__');

@@ -83,13 +83,44 @@ function validateMcpModule(nodeExecutable: string, serverPath: string, cwd: stri
     }
 }
 
-/** Starts an MCP server and verifies initialize, tools/list, and a state-writing tool call. */
+/**
+ * Per-MCP probe options.
+ *
+ * Different MCP servers expose different tool surfaces, so the probe must be
+ * tailored per server. The default (`{ requiredTools: ['ping', 'start_request'], exerciseWrite: true }`)
+ * matches the ostacky-controller contract. Other MCPs should pass narrower
+ * requirements (e.g. `{ requiredTools: [], exerciseWrite: false }`) for
+ * handshake-only validation — we verify that the MCP completes the JSON-RPC
+ * handshake (initialize + notifications/initialized + tools/list without
+ * errors) without hardcoding its tool names.
+ */
+export interface McpProbeOptions {
+    /** Tool names that must be present in `tools/list`. Default: `['ping', 'start_request']`. */
+    requiredTools?: string[];
+    /**
+     * If true, after `tools/list` succeeds the probe also calls `start_request`
+     * to exercise a state-writing tool end-to-end. Only valid for MCPs that
+     * accept such a call (currently only ostacky-controller). Default: derived
+     * from `requiredTools` — true if it includes `'start_request'`.
+     */
+    exerciseWrite?: boolean;
+}
+
+const DEFAULT_PROBE_OPTIONS: Required<McpProbeOptions> = {
+    requiredTools: ['ping', 'start_request'],
+    exerciseWrite: true,
+};
+
+/** Starts an MCP server and verifies initialize, tools/list, and (optionally) a state-writing tool call. */
 export async function probeMcpServer(
     nodeExecutable: string,
     serverPath: string,
     cwd: string,
-    statePath?: string
+    statePath?: string,
+    options: McpProbeOptions = {}
 ): Promise<void> {
+    const requiredTools = options.requiredTools ?? DEFAULT_PROBE_OPTIONS.requiredTools;
+    const exerciseWrite = options.exerciseWrite ?? requiredTools.includes('start_request');
     try {
         await new Promise<void>((resolve, reject) => {
             const child = spawn(nodeExecutable, [serverPath], {
@@ -154,20 +185,22 @@ export async function probeMcpServer(
                     }
                     if (message.id === 2) {
                         const tools = (message.result as { tools?: Array<{ name?: string }> } | undefined)?.tools ?? [];
-                        if (
-                            !tools.some((tool) => tool.name === 'ping') ||
-                            !tools.some((tool) => tool.name === 'start_request')
-                        ) {
-                            fail('El MCP inició pero no expuso las tools requeridas');
+                        const missing = requiredTools.filter((name) => !tools.some((tool) => tool.name === name));
+                        if (missing.length > 0) {
+                            fail(`El MCP inició pero no expuso las tools requeridas: ${missing.join(', ')}`);
                             return;
                         }
-                        send({
-                            jsonrpc: '2.0',
-                            id: 3,
-                            method: 'tools/call',
-                            params: { name: 'start_request', arguments: { requestId: 'installer-probe' } },
-                        });
-                        continue;
+                        if (exerciseWrite) {
+                            send({
+                                jsonrpc: '2.0',
+                                id: 3,
+                                method: 'tools/call',
+                                params: { name: 'start_request', arguments: { requestId: 'installer-probe' } },
+                            });
+                            continue;
+                        }
+                        finish();
+                        return;
                     }
                     if (message.id === 3) {
                         const result = message.result as { isError?: boolean } | undefined;
@@ -186,7 +219,7 @@ export async function probeMcpServer(
                 params: {
                     protocolVersion: '2025-03-26',
                     capabilities: {},
-                    clientInfo: { name: 'ostacky-installer', version: '0.7.0' },
+                    clientInfo: { name: 'ostacky-installer', version: '0.7.1' },
                 },
             });
         });
@@ -434,11 +467,21 @@ export async function installMcpServer(item: ManifestItem, manifest: Manifest, p
             throw new Error(`El MCP ${item.name} no contiene index.js después de instalarse.`);
         }
         validateMcpModule(nodeExecutable, stagedServerPath, staging);
+        // Per-MCP probe contract: only ostacky-controller owns `ping`+`start_request`
+        // and can exercise a state-writing call. Other MCPs (e.g. openspec) have
+        // their own tool surfaces we don't want to hardcode; we just verify the
+        // handshake (initialize + notifications/initialized + tools/list without
+        // errors). See McpProbeOptions for details.
+        const isController = item.name === 'ostacky-controller';
+        const probeOptions: McpProbeOptions = isController
+            ? { requiredTools: ['ping', 'start_request'], exerciseWrite: true }
+            : { requiredTools: [], exerciseWrite: false };
         await probeMcpServer(
             nodeExecutable,
             stagedServerPath,
             staging,
-            item.name === 'ostacky-controller' ? join(staging, '.probe-state.json') : undefined
+            isController ? join(staging, '.probe-state.json') : undefined,
+            probeOptions
         );
 
         const configPath = findOpenCodeConfig(projectRoot) ?? join(projectRoot, 'opencode.json');

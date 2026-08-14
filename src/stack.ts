@@ -219,25 +219,83 @@ export async function installCodeGraph(toolsDir?: string): Promise<{ success: bo
 /**
  * Configura OpenSpec para el proyecto via npx/bunx (sin requerir instalación global).
  * Usa bunx si bun está disponible, sino npx.
+ *
+ * Importante: el package real es `@fission-ai/openspec` (bin: `openspec`).
+ * El nombre sin scope `openspec` está squatteado por un stub sin binario,
+ * por eso `bunx openspec init` falla con `could not determine executable`.
  */
+export const OPENSPEC_NPM_PACKAGE = "@fission-ai/openspec";
+
 export function setupOpenSpec(projectRoot: string = findProjectRoot()): { success: boolean; message: string } {
   const useBun = isCommandAvailable("bun");
-  try {
-    const invocation = getCommandInvocation(useBun ? "bunx" : "npx", useBun
-      ? ["openspec", "init", "--tools", "opencode", "--force"]
-      : ["--yes", "openspec", "init", "--tools", "opencode", "--force"]);
-    execFileSync(invocation.command, invocation.args, {
-      stdio: "pipe",
-      timeout: 120_000,
-      cwd: projectRoot,
-    });
+  const fail = (msg: string): { success: false; message: string } => ({ success: false, message: msg });
+
+  // Intento 1: bunx/npx con nombre scoped (caso normal, sin side effects).
+  const tryDirect = (): boolean => {
+    try {
+      const invocation = getCommandInvocation(useBun ? "bunx" : "npx", useBun
+        ? [OPENSPEC_NPM_PACKAGE, "init", "--tools", "opencode", "--force"]
+        : ["--yes", OPENSPEC_NPM_PACKAGE, "init", "--tools", "opencode", "--force"]);
+      execFileSync(invocation.command, invocation.args, {
+        stdio: "pipe",
+        timeout: 120_000,
+        cwd: projectRoot,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // Intento 2: instalar OpenSpec globalmente y ejecutar el binario directo.
+  // Side effect: mutación del sistema (install -g). Solo se ejecuta si el intento 1 falló.
+  const tryInstallGlobal = (): { ok: boolean; error?: string } => {
+    if (!useBun && !isCommandAvailable("npm")) {
+      return { ok: false, error: "Ni bun ni npm están disponibles para instalar OpenSpec globalmente" };
+    }
+    const pkgManager = useBun ? "bun" : "npm";
+    const installArgs = useBun
+      ? ["add", "-g", OPENSPEC_NPM_PACKAGE]
+      : ["install", "-g", OPENSPEC_NPM_PACKAGE];
+    try {
+      const invocation = getCommandInvocation(pkgManager, installArgs);
+      execFileSync(invocation.command, invocation.args, { stdio: "pipe", timeout: 120_000 });
+    } catch (installErr) {
+      return { ok: false, error: `Instalación global falló: ${(installErr as Error).message}` };
+    }
+    try {
+      const retryInvocation = getCommandInvocation("openspec", ["init", "--tools", "opencode", "--force"]);
+      execFileSync(retryInvocation.command, retryInvocation.args, {
+        stdio: "pipe",
+        timeout: 120_000,
+        cwd: projectRoot,
+      });
+      return { ok: true };
+    } catch (retryErr) {
+      return { ok: false, error: `Reintento con binario global falló: ${(retryErr as Error).message}` };
+    }
+  };
+
+  if (tryDirect()) {
     return { success: true, message: "OpenSpec configurado para OpenCode" };
-  } catch (e) {
+  }
+
+  const fallback = tryInstallGlobal();
+  if (fallback.ok) {
     return {
-      success: false,
-      message: `Error configurando OpenSpec: ${(e as Error).message}`,
+      success: true,
+      message: `OpenSpec configurado para OpenCode (binario instalado globalmente con ${useBun ? "bun" : "npm"})`,
     };
   }
+
+  const manualCmd = useBun
+    ? `bun add -g ${OPENSPEC_NPM_PACKAGE}`
+    : `npm install -g ${OPENSPEC_NPM_PACKAGE}`;
+  return fail(
+    `Error configurando OpenSpec: ni bunx/npx ni la instalación global resolvieron el binario. `
+    + `Solución manual: ejecuta \`${manualCmd}\` y luego corré /install-stack de nuevo. `
+    + `Detalle: ${fallback.error}`
+  );
 }
 
 /**

@@ -415,7 +415,9 @@ class OstackyController {
             this.#consecutiveFailures++;
             log('error:persist_failed', { consecutive: this.#consecutiveFailures, error: err.message });
             if (this.#consecutiveFailures >= DEGRADED_THRESHOLD && !this.#degraded) {
-                this.#enterDegradedMode(`persistence_failures: ${this.#consecutiveFailures} consecutive persists: ${err.message}`);
+                this.#enterDegradedMode(
+                    `persistence_failures: ${this.#consecutiveFailures} consecutive persists: ${err.message}`
+                );
             }
             throw err;
         } finally {
@@ -559,7 +561,11 @@ class OstackyController {
     async requestClarification({ question } = {}) {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'request_clarification');
-        if (!to) return this.#makeError(`Cannot request clarification from state ${this.#state.state}`, 'request_clarification');
+        if (!to)
+            return this.#makeError(
+                `Cannot request clarification from state ${this.#state.state}`,
+                'request_clarification'
+            );
         this.#transition(to, { error: question ? `Clarification: ${question}` : null });
         this.#audit('CLARIFICATION_PENDING', 'request_clarification', question || 'no question');
         return { state: this.#state.state, revision: this.#state.revision };
@@ -568,7 +574,11 @@ class OstackyController {
     async recordClarification() {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'record_clarification');
-        if (!to) return this.#makeError(`Cannot record clarification from state ${this.#state.state}`, 'record_clarification');
+        if (!to)
+            return this.#makeError(
+                `Cannot record clarification from state ${this.#state.state}`,
+                'record_clarification'
+            );
         this.#transition(to, { error: null });
         this.#audit('DISCOVERY', 'record_clarification');
         return { state: this.#state.state, revision: this.#state.revision };
@@ -600,7 +610,9 @@ class OstackyController {
         if (!to) return this.#makeError(`Cannot record discovery from state ${this.#state.state}`, 'record_discovery');
 
         // O3: Compress snapshot before persisting
-        const compressedSnapshot = snapshot ? this.#compressCodegraphSnapshot(snapshot) : this.#state.snapshots.codegraph;
+        const compressedSnapshot = snapshot
+            ? this.#compressCodegraphSnapshot(snapshot)
+            : this.#state.snapshots.codegraph;
         const snapshotJson = compressedSnapshot ? safeJsonStringify(compressedSnapshot) : '';
         if (snapshotJson.length > MAX_SNAPSHOT_JSON_LENGTH) {
             return this.#makeError(
@@ -647,11 +659,16 @@ class OstackyController {
     async consumeRouteDecision({ decisionId, choice } = {}) {
         this.#load();
         if (this.#state.state !== 'ROUTE_DECISION_PENDING') {
-            return this.#makeError(`Cannot consume route decision from state ${this.#state.state}`, 'consume_route_decision');
+            return this.#makeError(
+                `Cannot consume route decision from state ${this.#state.state}`,
+                'consume_route_decision'
+            );
         }
-        if (this.#state.routeDecisionId !== decisionId) return this.#makeError('Decision ID mismatch', 'consume_route_decision');
+        if (this.#state.routeDecisionId !== decisionId)
+            return this.#makeError('Decision ID mismatch', 'consume_route_decision');
         const to = this.#isAllowedTransition(this.#state.state, 'consume_route_decision', choice);
-        if (!to) return this.#makeError(`Route ${choice} not allowed from ${this.#state.state}`, 'consume_route_decision');
+        if (!to)
+            return this.#makeError(`Route ${choice} not allowed from ${this.#state.state}`, 'consume_route_decision');
         this.#transition(to, { routeChoice: choice });
         this.#audit(to, 'consume_route_decision', `choice=${choice}`);
         return { state: this.#state.state, revision: this.#state.revision, routeChoice: choice };
@@ -669,7 +686,11 @@ class OstackyController {
     async recordExecutionAnalysis({ executionDecisionId, snapshot } = {}) {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'record_execution_analysis');
-        if (!to) return this.#makeError(`Cannot record execution analysis from state ${this.#state.state}`, 'record_execution_analysis');
+        if (!to)
+            return this.#makeError(
+                `Cannot record execution analysis from state ${this.#state.state}`,
+                'record_execution_analysis'
+            );
         if (snapshot && safeJsonStringify(snapshot).length > MAX_SNAPSHOT_JSON_LENGTH) {
             return this.#makeError(
                 `Snapshot exceeds maximum size of ${MAX_SNAPSHOT_JSON_LENGTH} bytes`,
@@ -692,11 +713,16 @@ class OstackyController {
     async consumeExecutionDecision({ decisionId, mode } = {}) {
         this.#load();
         if (this.#state.state !== 'EXECUTION_DECISION_PENDING') {
-            return this.#makeError(`Cannot consume execution decision from state ${this.#state.state}`, 'consume_execution_decision');
+            return this.#makeError(
+                `Cannot consume execution decision from state ${this.#state.state}`,
+                'consume_execution_decision'
+            );
         }
-        if (this.#state.executionDecisionId !== decisionId) return this.#makeError('Decision ID mismatch', 'consume_execution_decision');
+        if (this.#state.executionDecisionId !== decisionId)
+            return this.#makeError('Decision ID mismatch', 'consume_execution_decision');
         const to = this.#isAllowedTransition(this.#state.state, 'consume_execution_decision', mode);
-        if (!to) return this.#makeError(`Mode ${mode} not allowed from ${this.#state.state}`, 'consume_execution_decision');
+        if (!to)
+            return this.#makeError(`Mode ${mode} not allowed from ${this.#state.state}`, 'consume_execution_decision');
         this.#transition(to, { executionMode: mode });
         this.#audit(to, 'consume_execution_decision', `mode=${mode}`);
         return { state: this.#state.state, revision: this.#state.revision, executionMode: mode };
@@ -705,7 +731,11 @@ class OstackyController {
     async implementationComplete() {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'implementation_complete');
-        if (!to) return this.#makeError(`Cannot complete implementation from state ${this.#state.state}`, 'implementation_complete');
+        if (!to)
+            return this.#makeError(
+                `Cannot complete implementation from state ${this.#state.state}`,
+                'implementation_complete'
+            );
         this.#transition(to);
         this.#audit('SYNC', 'implementation_complete');
         return { state: this.#state.state, revision: this.#state.revision };
@@ -917,7 +947,7 @@ function safeHandler(fn) {
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.7.0',
+    version: '0.7.1',
 });
 
 server.registerTool(
@@ -939,7 +969,8 @@ server.registerTool(
 server.registerTool(
     'request_clarification',
     {
-        description: 'Pause execution to ask the user for clarification. Use when the request is too vague to classify. Transitions to CLARIFICATION_PENDING — you MUST stop and wait for user response.',
+        description:
+            'Pause execution to ask the user for clarification. Use when the request is too vague to classify. Transitions to CLARIFICATION_PENDING — you MUST stop and wait for user response.',
         inputSchema: z.object({
             question: z.string().optional().describe('The clarification question'),
         }),
@@ -1091,7 +1122,8 @@ server.registerTool(
 server.registerTool(
     'proceed_to_route',
     {
-        description: 'Proceed from LEVEL_RESOLVED to ROUTE_DECISION_PENDING after discovery is confirmed. Only valid from LEVEL_RESOLVED — call this after asking the user about the route decision.',
+        description:
+            'Proceed from LEVEL_RESOLVED to ROUTE_DECISION_PENDING after discovery is confirmed. Only valid from LEVEL_RESOLVED — call this after asking the user about the route decision.',
         inputSchema: z.object({}),
     },
     safeHandler(async () => {
@@ -1170,7 +1202,8 @@ server.registerTool(
 server.registerTool(
     'set_handoff',
     {
-        description: 'Save handoff context for the next session. Call at session end if interrupted or before a context switch. Persists to controller state.',
+        description:
+            'Save handoff context for the next session. Call at session end if interrupted or before a context switch. Persists to controller state.',
         inputSchema: z.object({
             summary: z.string().describe('What we were working on (1-3 sentences)'),
             nextSteps: z.array(z.string()).optional().describe('Concrete next actions'),
@@ -1278,7 +1311,10 @@ server.registerTool(
         inputSchema: z.object({
             taskId: z.string().describe('The task ID to mark as completed.'),
             filePath: z.string().optional().describe('Optional file path that was modified.'),
-            fileHash: z.string().optional().describe('Optional SHA-256 or fast fingerprint of the file after modification.'),
+            fileHash: z
+                .string()
+                .optional()
+                .describe('Optional SHA-256 or fast fingerprint of the file after modification.'),
         }),
     },
     safeHandler(async ({ taskId, filePath, fileHash }) => {
@@ -1318,7 +1354,7 @@ function setupGracefulShutdown(ctrl) {
 }
 
 async function main() {
-    log('Starting ostacky-controller MCP v0.7.0...');
+    log('Starting ostacky-controller MCP v0.7.1...');
     log('State path:', { path: statePath });
     // Clean up stale tmp/lock files from previous runs
     cleanupTmpFiles(statePath);

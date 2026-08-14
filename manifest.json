@@ -1,13 +1,13 @@
 {
-  "version": "0.7.0",
+  "version": "0.7.1",
   "repo": "JaimeHoracio/Ostacky",
-  "tag": "v0.7.0",
+  "tag": "v0.7.1",
   "agents": [
     {
       "name": "ostacky",
       "file": "assets/agents/ostacky.md",
-      "description": "Orquestador con recuperación automática (nunca se congela), ruteo por nivel de impacto, controller MCP con SDK oficial, edición segura con fallback inline, y delegación en OpenSpec + Superpowers. v0.7.0: prune de skills obsoletas, lastHandoff, getAvailableTransitions, consecutiveFailures real, mem_session_summary automático al cierre.",
-      "version": "0.7.0",
+      "description": "Orquestador con recuperación automática (nunca se congela), ruteo por nivel de impacto, controller MCP con SDK oficial, edición segura con fallback inline, y delegación en OpenSpec + Superpowers. v0.7.1: prune de skills obsoletas, lastHandoff, getAvailableTransitions, consecutiveFailures real, mem_session_summary automático al cierre.",
+      "version": "0.7.1",
       "sha256": "f833e69b6eaa3dfe24de9addf6455b3da55f829b51cba3c7c90c65c69cda34c2"
     }
   ],
@@ -15,15 +15,15 @@
     {
       "name": "install-stack",
       "file": "assets/commands/install-stack.md",
-      "description": "Instala el stack tecnológico del proyecto (CodeGraph, skills, OpenSpec, Engram, Context7, controller MCP con SDK oficial). v0.7.0: Paso 1.5 controller expandido con verificación post-instalación y troubleshooting.",
-      "version": "0.7.0",
-      "sha256": "c957627dfafabfdb9da2717546b996d1d8856f08a6e4c48caf72c562363b566b"
+      "description": "Instala el stack tecnológico del proyecto (CodeGraph, skills, OpenSpec, Engram, Context7, controller MCP con SDK oficial). v0.7.1: Paso 1.5 controller expandido con verificación post-instalación y troubleshooting.",
+      "version": "0.7.1",
+      "sha256": "ef4244855cf733dfe50a2a8e7c436c5741f92574cc50f0fca49faed60480e013"
     },
     {
       "name": "opsx-sync",
       "file": "assets/commands/opsx-sync.md",
       "description": "Sincroniza delta specs del change activo sin inicializar CodeGraph si ya existe índice",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "sha256": "fe0158478f2ca63b315037a85fc1632b77868532e319af6c7384285441767d64"
     }
   ],
@@ -31,15 +31,15 @@
     {
       "name": "ostacky-controller",
       "file": "assets/mcp/ostacky-controller/",
-      "description": "Máquina de estados persistida con @modelcontextprotocol/server SDK. v0.7.0: 22 tools (incluye set_handoff, get_handoff, clear_handoff, get_available_transitions funcional). Bugfixes: consecutiveFailures real, lastHandoff state, defaultChoice persistido. Robustez: degraded mode automático tras 3 fallos, persistence condicional para Nivel 0, prune de skills obsoletas.",
-      "version": "0.7.0",
-      "sha256": "0ec6fa0fc2900c78b884258168309653dea4b77ded3596bb56866f689ec2404c"
+      "description": "Máquina de estados persistida con @modelcontextprotocol/server SDK. v0.7.1: 22 tools (incluye set_handoff, get_handoff, clear_handoff, get_available_transitions funcional). Bugfixes: consecutiveFailures real, lastHandoff state, defaultChoice persistido. Robustez: degraded mode automático tras 3 fallos, persistence condicional para Nivel 0, prune de skills obsoletas.",
+      "version": "0.7.1",
+      "sha256": "0e639fb1d5bedf8b93b4e259782b9b7de68cd4bb89875e2c546279d17131b7b7"
     },
     {
       "name": "openspec",
       "file": "assets/mcp/openspec/",
       "description": "MCP server local para OpenSpec - proposal, apply, archive, sync de cambios",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "sha256": "fa4be28bfc1e75db8f1a037e2580f04a60066c80e8e5934e90e1041020d04609"
     }
   ],
@@ -48,105 +48,105 @@
       "name": "brainstorming",
       "file": "assets/skills/brainstorming/SKILL.md",
       "description": "Skill unificado de pensamiento con dos modos: creative-design (producción de diseño → transición a implementación directa o openspec-propose) y open-exploration (exploración libre)",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "sha256": "333810ca63450e8ab795e8c5a58e645101e788d79210ca8ac36e10d11be39585"
     },
     {
       "name": "execution-mode-evaluation",
       "file": "assets/skills/execution-mode-evaluation/SKILL.md",
       "description": "Skill de análisis de modo de ejecución — output reconciliado con controller snapshot contract (recommendation field)",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "sha256": "edf6fca0af52cce83f8fd08e7db9b3d79cc130b53fca505e90d3fbaf4909338b"
     },
     {
       "name": "tdd",
       "file": "assets/skills/tdd/SKILL.md",
       "description": "Skill de test-driven development (Superpowers)",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "sha256": "aa412298980b7826165c211145c1b8e9135f68f36247bb3cb96d0a0eae274486"
     },
     {
       "name": "subagent-driven-development",
       "file": "assets/skills/subagent-driven-development/SKILL.md",
       "description": "Skill de ejecución con subagentes (Superpowers) — ejecuta solo después de confirmación del coordinador Ostacky",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "sha256": "1a42d714a9a13faf05f0bf7b580e8d837c2e77a5633839542ccce603023419e8"
     },
     {
       "name": "dispatching-parallel-agents",
       "file": "assets/skills/dispatching-parallel-agents/SKILL.md",
       "description": "Skill de dispatch paralelo de agentes (Superpowers)",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "sha256": "3c8a66d51ae2e719e877d02c3dac32bd804722c3bb9227c258ecae78252a20ab"
     },
     {
       "name": "review",
       "file": "assets/skills/review/SKILL.md",
       "description": "Skill de revisión de código (Superpowers)",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "sha256": "b19650ed4d1d4d9857a4dd5b7e08e91328a1a1fc9c45bcc2fb600fa9d0213279"
     },
     {
       "name": "receiving-code-review",
       "file": "assets/skills/receiving-code-review/SKILL.md",
       "description": "Skill de recibir y procesar feedback de code review",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "sha256": "d761e884e71d8d3476ac734d287cae403a4024506a7d12e7361a448217c0a831"
     },
     {
       "name": "openspec-propose",
       "file": "assets/skills/openspec-propose/SKILL.md",
       "description": "Skill de generación de proposal (OpenSpec)",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "sha256": "bb59100b9fd3c9f9a1ec6509fa975ec55bf7fc737df4fe73bb3e9bbc217b83f7"
     },
     {
       "name": "openspec-apply-change",
       "file": "assets/skills/openspec-apply-change/SKILL.md",
       "description": "Skill de aplicación de change (OpenSpec)",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "sha256": "dfc823bf89fc7505e91ab6dee9c1f004be38a410bd3d88fb67b211b1b6cbb1d0"
     },
     {
       "name": "openspec-archive-change",
       "file": "assets/skills/openspec-archive-change/SKILL.md",
       "description": "Skill de archivo de change (OpenSpec)",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "sha256": "16e4b561de7747283663fed602e506abf502452c49a8d4b86d7a5539c40f0195"
     },
     {
       "name": "openspec-explore",
       "file": "assets/skills/openspec-explore/SKILL.md",
       "description": "Modo explore para OpenSpec — thinking partner para explorar ideas, investigar problemas y clarificar requisitos antes/durante un cambio",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "sha256": "37ae4aaf17ea71a395bab6dc4d9d61b9a49d7910f6692535ae8553244c46880b"
     },
     {
       "name": "using-git-worktrees",
       "file": "assets/skills/using-git-worktrees/SKILL.md",
       "description": "Skill de uso de git worktrees para aislamiento de trabajo",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "sha256": "11afa9123828fc5caa22137aff907cd99c751e99027fbd4c020751110a949281"
     },
     {
       "name": "using-superpowers",
       "file": "assets/skills/using-superpowers/SKILL.md",
       "description": "Skill de orquestación de Superpowers skills",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "sha256": "7e54536f96d2a379185a10bfc1e970850caa2561b6d8aca7080f0defea0381a4"
     },
     {
       "name": "writing-skills",
       "file": "assets/skills/writing-skills/SKILL.md",
       "description": "Skill de creación y edición de skills",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "sha256": "3d76b906cee518a2b809febb70db95697a35b9f368986bb504b4120c3bfb437a"
     },
     {
       "name": "graceful-degradation",
       "file": "assets/skills/graceful-degradation/SKILL.md",
       "description": "Skill de degradación graceful cuando múltiples tools están indisponibles",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "sha256": "e5090e475729f21871bb25bce738000f3616955ed3edb3ba926dd740d3298948"
     }
   ]
