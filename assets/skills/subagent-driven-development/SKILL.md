@@ -5,14 +5,14 @@ description: Use when Ostacky has confirmed subagent-driven execution mode and d
 
 # Subagent-Driven Development
 
-**IMPORTANT:** Engram is an **MCP server**, not a skill. Tools `mem_save`, `mem_search`, `mem_context` are MCP tools. Do NOT use `skill("engram")` — it doesn't exist.
+**IMPORTANT:** Engram is an **MCP server**, not a skill. Tools `engram_mem_save`, `engram_mem_search`, `engram_mem_context` are MCP tools. Do NOT use `skill("engram")` — it doesn't exist.
 
 **Prerequisite:** This skill runs AFTER the coordinator (Ostacky) has:
 1. Performed execution analysis (via `execution-mode-evaluation` skill)
 2. Presented evidence and recommendation to the user
 3. Received explicit user confirmation for subagent-driven mode
-4. Called `controller.consumeExecutionDecision({ mode: "SUBAGENT_DRIVEN" })`
-5. Checked Engram (`mem_search`) for past subagent execution patterns on similar changes — if a previous approach failed, avoid repeating it
+4. Called `ostacky-controller_consume_execution_decision({ mode: "SUBAGENT_DRIVEN" })`
+5. Checked Engram (`engram_mem_search`) for past subagent execution patterns on similar changes — if a previous approach failed, avoid repeating it
 
 Subagents are execution-only. They never create routing decisions, re-analyze execution mode, or duplicate discovery that the coordinator already resolved.
 
@@ -32,7 +32,7 @@ digraph when_to_use {
     "Tasks mostly independent?" [shape=diamond];
     "Stay in this session?" [shape=diamond];
     "subagent-driven-development" [shape=box];
-    "executing-plans" [shape=box];
+    "Inline execution" [shape=box];
     "Manual execution or brainstorm first" [shape=box];
 
     "Have implementation plan?" -> "Tasks mostly independent?" [label="yes"];
@@ -40,11 +40,11 @@ digraph when_to_use {
     "Tasks mostly independent?" -> "Stay in this session?" [label="yes"];
     "Tasks mostly independent?" -> "Manual execution or brainstorm first" [label="no - tightly coupled"];
     "Stay in this session?" -> "subagent-driven-development" [label="yes"];
-    "Stay in this session?" -> "executing-plans" [label="no - parallel session"];
+    "Stay in this session?" -> "Inline execution" [label="no - parallel session"];
 }
 ```
 
-**vs. Executing Plans (parallel session):**
+**vs. Inline execution (parallel session):**
 - Same session (no context switch)
 - Fresh subagent per task (no context pollution)
 - Two-stage review after each task: spec compliance first, then code quality
@@ -56,7 +56,7 @@ digraph when_to_use {
 
 When constructing the context package for each subagent:
 
-1. Use `codegraph_explore` to get the verbatim source of relevant symbols, their call paths, and blast radius — in ONE call.
+1. Use `codegraph_codegraph_explore` to get the verbatim source of relevant symbols, their call paths, and blast radius — in ONE call.
 2. Only use `Read` for files or details CodeGraph didn't cover.
 3. Include the CodeGraph output in the subagent's context package so they have structural understanding without needing to re-explore.
 
@@ -292,7 +292,7 @@ Done!
 
 **Related workflow skills:**
 - **using-git-worktrees** - Ensures isolated workspace (creates one or verifies existing)
-- **writing-plans** - Creates the plan this skill executes
+- **brainstorming** - Produces design that feeds into implementation (DIRECT) or OpenSpec (SPEC)
 - **review** - Code review template for reviewer subagents
 
 **Subagents should use:**

@@ -1,0 +1,27 @@
+{
+  "state": "INTERPRETATION_PENDING",
+  "revision": 1,
+  "requestId": "installer-probe",
+  "changeId": null,
+  "routeDecisionId": null,
+  "routeChoice": null,
+  "level": null,
+  "executionDecisionId": null,
+  "executionMode": null,
+  "snapshots": {
+    "codegraph": null,
+    "execution": null
+  },
+  "tasks": {},
+  "fileFingerprints": {},
+  "error": null,
+  "lastHandoff": null,
+  "audit": [
+    {
+      "ts": 1786668047586,
+      "phase": "INTERPRETATION_PENDING",
+      "decision": "start_request",
+      "reasoning": "requestId=installer-probe"
+    }
+  ]
+}

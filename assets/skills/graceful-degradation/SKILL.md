@@ -9,7 +9,7 @@ When critical tools are unavailable, this skill provides a systematic approach t
 
 **Follow Core Instructions** — `ostacky.md` Core Instructions section for CodeGraph and Engram usage patterns.
 
-**IMPORTANT:** Engram is an **MCP server**, not a skill. Tools `mem_save`, `mem_search`, `mem_context` are MCP tools. Do NOT use `skill("engram")` — it doesn't exist.
+**IMPORTANT:** Engram is an **MCP server**, not a skill. Tools `engram_mem_save`, `engram_mem_search`, `engram_mem_context` are MCP tools. Do NOT use `skill("engram")` — it doesn't exist.
 
 ---
 
@@ -45,7 +45,7 @@ Switch to basic mode with manual workflows.
 
 **Workflow:**
 ```
-1. mem_search for related analysis (if Engram available)
+1. engram_mem_search for related analysis (if Engram available)
 2. Use Glob to find relevant files: **/*.ts, src/**/*.ts
 3. Read files manually to understand structure
 4. Proceed with caution — no blast radius analysis
@@ -209,7 +209,7 @@ Voy a usar Engram para buscar análisis previos y luego leer archivos manualment
 
 User: Sí
 
-Agent: [Uses mem_search to find related analysis]
+Agent: [Uses engram_mem_search to find related analysis]
        [Uses Glob to find relevant files]
        [Reads files manually]
        [Proceeds with task]

@@ -9,7 +9,7 @@ A thinking partner that adapts to what the user needs: structured design when th
 
 **Follow Core Instructions** — `ostacky.md` Core Instructions section for CodeGraph and Engram usage patterns.
 
-**IMPORTANT:** Engram is an **MCP server**, not a skill. Tools `mem_save`, `mem_search`, `mem_context` are MCP tools. Do NOT use `skill("engram")` — it doesn't exist.
+**IMPORTANT:** Engram is an **MCP server**, not a skill. Tools `engram_mem_save`, `engram_mem_search`, `engram_mem_context` are MCP tools. Do NOT use `skill("engram")` — it doesn't exist.
 
 ---
 
@@ -35,29 +35,29 @@ Do NOT invoke any implementation skill, write any code, or scaffold any project 
 
 ### Process
 
-1. **Check Engram** — `mem_search` with keywords from the user's idea. Surface any prior design decisions or similar proposals.
-2. **Explore via CodeGraph** — `codegraph_explore` on the affected area. Only `Read` files CodeGraph didn't cover.
+1. **Check Engram** — `engram_mem_search` with keywords from the user's idea. Surface any prior design decisions or similar proposals.
+2. **Explore via CodeGraph** — `codegraph_codegraph_explore` on the affected area. Only `Read` files CodeGraph didn't cover.
 3. **Ask clarifying questions** — one at a time, understand purpose/constraints/success criteria
 4. **Propose 2-3 approaches** — with trade-offs and your recommendation
 5. **Present design** — in sections scaled to complexity, get user approval after each section
 6. **Write design doc** — save to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` and commit
 7. **Spec self-review** — check for placeholders, contradictions, ambiguity, scope
 8. **User reviews spec** — ask user to review before proceeding
-9. **Save to Engram** — `mem_save` with the design decision and tradeoffs
+9. **Save to Engram** — `engram_mem_save` with the design decision and tradeoffs
 10. **Transition** — based on routing decision (see Transition Rules below)
 
 ### Transition Rules
 
 The next step depends on how the change was routed by Ostacky:
 
-| Routing | Next Skill | When |
-|---------|------------|------|
-| **DIRECT** (Level 0/0+1) | `writing-plans` | Small changes, no OpenSpec |
+| Routing | Next Step | When |
+|---------|-----------|------|
+| **DIRECT** (Level 0/0+1) | **Implementación directa** (con gate de confirmación del usuario) | Small changes, no OpenSpec |
 | **SPEC** (Level 1+) | `openspec-propose` | Complex changes requiring OpenSpec artifacts |
 
 If you're unsure about routing, ask Ostacky or check the controller state.
 
-**Terminal state:** Invoke the appropriate next skill. Do NOT invoke implementation skills directly.
+**Terminal state:** For DIRECT, present the design and get user approval before proceeding to implementation. For SPEC, invoke `openspec-propose`. Do NOT invoke implementation skills directly.
 
 ### Design Principles
 

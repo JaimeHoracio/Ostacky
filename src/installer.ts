@@ -186,7 +186,7 @@ export async function probeMcpServer(
                 params: {
                     protocolVersion: '2025-03-26',
                     capabilities: {},
-                    clientInfo: { name: 'ostacky-installer', version: '0.6.3' },
+                    clientInfo: { name: 'ostacky-installer', version: '0.7.0' },
                 },
             });
         });
@@ -326,6 +326,38 @@ export async function installSkill(item: ManifestItem, manifest: Manifest, paths
     copyDirRecursive(src, dest);
 
     upsertLockfile(paths, 'skills', item, manifest, treeHash);
+}
+
+/**
+ * B3: Removes skill directories that are installed but no longer in the manifest.
+ * Keeps lockfile consistent with filesystem. Returns list of pruned skill names.
+ *
+ * Use after upgrades to avoid orphaned skills from previous installations.
+ */
+export function pruneStaleSkills(paths: OpenCodePaths, manifest: Manifest): string[] {
+    const expected = new Set<string>(manifest.skills.map((s) => s.name));
+    const removed: string[] = [];
+    if (!existsSync(paths.skills)) return removed;
+
+    for (const entry of readdirSync(paths.skills)) {
+        const dir = join(paths.skills, entry);
+        try {
+            if (!statSync(dir).isDirectory()) continue;
+        } catch {
+            continue;
+        }
+        if (!expected.has(entry)) {
+            // Skill instalada que ya no está en el manifest → prune
+            try {
+                rmSync(dir, { recursive: true, force: true });
+                removeFromLockfile(paths.root, 'skills', entry);
+                removed.push(entry);
+            } catch {
+                /* best-effort */
+            }
+        }
+    }
+    return removed;
 }
 
 /**

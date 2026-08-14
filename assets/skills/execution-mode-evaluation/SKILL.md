@@ -8,7 +8,7 @@ metadata:
   version: "2.0"
 ---
 
-**IMPORTANT:** Engram is an **MCP server**, not a skill. Tools `mem_save`, `mem_search`, `mem_context` are MCP tools. Do NOT use `skill("engram")` — it doesn't exist.
+**IMPORTANT:** Engram is an **MCP server**, not a skill. Tools `engram_mem_save`, `engram_mem_search`, `engram_mem_context` are MCP tools. Do NOT use `skill("engram")` — it doesn't exist.
 
 # Skill: execution-mode-evaluation
 
@@ -19,19 +19,19 @@ Determinar el modo de ejecución óptimo entre **inline** y **subagent-driven** 
 | Dato | Fuente | Obligatorio |
 |------|--------|-------------|
 | Tasks del change | `tasks.md` del cambio activo | ✅ |
-| Archivos que modifica cada task | `codegraph_explore` o lectura directa | ✅ |
-| Blast radius por símbolo | `codegraph_impact` | Para alta precisión |
+| Archivos que modifica cada task | `codegraph_codegraph_explore` o lectura directa | ✅ |
+| Blast radius por símbolo | `codegraph_codegraph_impact` | Para alta precisión |
 | Contratos entre tasks | `design.md` | Para evaluar dependencias |
 
 ## Procedimiento
 
 ### Paso 0: Verificar datos existentes en contexto
 
-Si ya tenés output de `codegraph_explore` para el área del cambio **Y** ese output distingue archivos por task → **saltá al Paso 0.5**. Si no, ejecutá el Paso 1.
+Si ya tenés output de `codegraph_codegraph_explore` para el área del cambio **Y** ese output distingue archivos por task → **saltá al Paso 0.5**. Si no, ejecutá el Paso 1.
 
 ### Paso 0.1: Consultar Engram por decisiones previas
 
-`mem_search` con keywords del cambio (nombre del módulo, área afectada). Si existe una decisión de modo de ejecución anterior para un cambio similar, considerarla como referencia — no como vinculante. Las condiciones pueden haber cambiado.
+`engram_mem_search` con keywords del cambio (nombre del módulo, área afectada). Si existe una decisión de modo de ejecución anterior para un cambio similar, considerarla como referencia — no como vinculante. Las condiciones pueden haber cambiado.
 
 ### Paso 0.5: Early exit para cambios pequeños
 
@@ -51,7 +51,7 @@ Si el change tiene **≤2 tasks** Y **no comparten archivos entre sí** → devo
 ### Paso 1: Obtener datos de CodeGraph
 
 ```
-codegraph_explore con query: "<área del cambio>"
+codegraph_codegraph_explore con query: "<área del cambio>"
 ```
 
 Si el output es muy general → `codegraph_impact` sobre símbolos centrales para blast radius preciso.
@@ -110,7 +110,7 @@ Para cada fase de `tasks.md`, evaluar intra-fase:
 {
   "recommendation": "INLINE" | "SUBAGENT_DRIVEN",
   "reasons": ["razón principal", "razón secundaria"],
-  "codegraphUsed": ["codegraph_explore"],
+  "codegraphUsed": ["codegraph_codegraph_explore"],
   "taskCount": <N>,
   "sharedFiles": { "src/archivo.ts": ["task1", "task2"] },
   "fileClusters": [["task1", "task2"], ["task3"]],
@@ -178,7 +178,7 @@ Para cada fase de `tasks.md`, evaluar intra-fase:
 
 ## Checklist
 
-- [ ] Ejecuté `codegraph_explore` (o verifiqué datos existentes)?
+- [ ] Ejecuté `codegraph_codegraph_explore` (o verifiqué datos existentes)?
 - [ ] Construí mapa de dependencias con `fileClusters`?
 - [ ] Identifiqué clusters (componentes conectados)?
 - [ ] Verifiqué deps ENTRE clusters (no solo intra)?

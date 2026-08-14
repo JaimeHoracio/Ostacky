@@ -198,7 +198,6 @@ Tras instalar, el proyecto queda así:
 │   └── opsx-sync.md
 ├── skills/
 │   ├── brainstorming/
-│   ├── writing-plans/
 │   ├── tdd/
 │   ├── review/
 │   ├── execution-mode-evaluation/
@@ -219,33 +218,33 @@ Tras instalar, el proyecto queda así:
 
 ```json
 {
-    "version": "0.6.3",
+    "version": "0.7.0",
     "lockedAt": "2025-01-01T00:00:00.000Z",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.6.3",
+    "tag": "v0.7.0",
     "agents": {
         "ostacky": {
-            "version": "0.6.3",
+            "version": "0.7.0",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "abc123..."
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.6.3",
+            "version": "0.7.0",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "def456..."
         },
         "opsx-sync": {
-            "version": "0.6.3",
+            "version": "0.7.0",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "ghi789..."
         }
     },
     "skills": {
-        "brainstorming": { "version": "0.6.3", ... },
-        "execution-mode-evaluation": { "version": "0.6.3", ... },
-        "openspec-propose": { "version": "0.6.3", ... }
+        "brainstorming": { "version": "0.7.0", ... },
+        "execution-mode-evaluation": { "version": "0.7.0", ... },
+        "openspec-propose": { "version": "0.7.0", ... }
     }
 }
 ```
@@ -275,7 +274,7 @@ Es opcional y solo necesario si algo falló durante la instalación o si querés
 ## Seguridad
 
 - `opencode.jsonc` se versiona en el repo para compartir permisos y MCP de forma reproducible.
-- Las URLs de descarga usan **tags de GitHub** (ej. `v0.6.3`), nunca `main` — instalaciones reproducibles
+- Las URLs de descarga usan **tags de GitHub** (ej. `v0.7.0`), nunca `main` — instalaciones reproducibles
 - Cada path de archivo descargado es validado para prevenir **path traversal**
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
 - El cache local (`.opencode/cache/`) también valida integridad al servir archivos cacheados

@@ -52,8 +52,8 @@ After obtaining the diff, if it is empty, inform the user that there are no chan
 
 Before analyzing the diff:
 
-1. **Follow Core Instructions** — `ostacky.md` Core Instructions section for CodeGraph usage patterns. Use `codegraph_explore` to understand the code structure before reading files directly.
-2. **Use CodeGraph for code understanding** — `codegraph_explore` on the changed symbols gives you call paths, blast radius, and related code in ONE call. Only `Read` files for details CodeGraph didn't cover.
+1. **Follow Core Instructions** — `ostacky.md` Core Instructions section for CodeGraph usage patterns. Use `codegraph_codegraph_explore` to understand the code structure before reading files directly.
+2. **Use CodeGraph for code understanding** — `codegraph_codegraph_explore` on the changed symbols gives you call paths, blast radius, and related code in ONE call. Only `Read` files for details CodeGraph didn't cover.
 3. **Read changed files for full context** — After CodeGraph exploration, read each modified file to understand the surrounding code, imports, types, and control flow.
 4. **Identify the tech stack** — Note languages, frameworks, and libraries in use. This affects what patterns are risky.
 5. **Check for related test files** — For each changed source file, look for corresponding test files. Note whether tests were updated alongside the changes.

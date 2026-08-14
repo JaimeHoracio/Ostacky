@@ -7,6 +7,7 @@ import {
   installCommand,
   installSkill,
   installMcpServer,
+  pruneStaleSkills,
   type OpenCodePaths,
 } from "../installer.js";
 import {
@@ -97,6 +98,12 @@ export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths): Pr
       spin.stop(`Error en ${skill.name}: ${(e as Error).message}`);
       errors++;
     }
+  }
+
+  // B3: prune skills obsoletas que quedaron de instalaciones previas
+  const pruned = pruneStaleSkills(paths, manifest);
+  if (pruned.length > 0) {
+    p.log.info(`Skills obsoletas removidas: ${pruned.join(", ")}`);
   }
 
   for (const mcp of manifest.mcpServers ?? []) {

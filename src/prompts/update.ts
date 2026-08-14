@@ -5,6 +5,7 @@ import {
   installCommand,
   installSkill,
   installMcpServer,
+  pruneStaleSkills,
   type OpenCodePaths,
 } from "../installer.js";
 import { removeFromLockfile } from "../lockfile.js";
@@ -87,4 +88,10 @@ export async function doUpdate(manifest: Manifest, paths: OpenCodePaths) {
   }
 
   p.log.success(`${updated} recurso(s) actualizado(s).`);
+
+  // B3: prune skills obsoletas del filesystem (lockfile ya fue limpiado arriba)
+  const pruned = pruneStaleSkills(paths, manifest);
+  if (pruned.length > 0) {
+    p.log.info(`Skills obsoletas removidas del filesystem: ${pruned.join(", ")}`);
+  }
 }

@@ -9,7 +9,7 @@ metadata:
   generatedBy: "1.3.1"
 ---
 
-**IMPORTANT:** Engram is an **MCP server**, not a skill. Tools `mem_save`, `mem_search`, `mem_context` are MCP tools. Do NOT use `skill("engram")` — it doesn't exist.
+**IMPORTANT:** Engram is an **MCP server**, not a skill. Tools `engram_mem_save`, `engram_mem_search`, `engram_mem_context` are MCP tools. Do NOT use `skill("engram")` — it doesn't exist.
 
 Propose a new change - create the change and generate all artifacts in one step.
 
@@ -26,7 +26,7 @@ When ready to implement, run /opsx-apply
 
 **Steps**
 
-1. **Check Engram for similar changes** — `mem_search` with keywords from the user's description. If a similar change was proposed or implemented before, surface it to the user. They may want to extend the existing work instead of starting fresh.
+1. **Check Engram for similar changes** — `engram_mem_search` with keywords from the user's description. If a similar change was proposed or implemented before, surface it to the user. They may want to extend the existing work instead of starting fresh.
 
 2. **If no clear input provided, ask what they want to build**
 

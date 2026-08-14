@@ -15,13 +15,16 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import * as z from 'zod/v4';
-import { readFileSync, writeFileSync, renameSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, mkdirSync, readdirSync, unlinkSync, statSync } from 'node:fs';
 import { dirname, basename, join, resolve } from 'node:path';
 
-const MAX_TASKS = 50;
-const MAX_SNAPSHOT_JSON_LENGTH = 100 * 1024;
-const MAX_STATE_FILE_SIZE = 1024 * 1024;
+// --- Constants (Fase 5.5 — headroom generoso) ---
+const MAX_TASKS = 100;
+const MAX_SNAPSHOT_JSON_LENGTH = 50 * 1024;
+const MAX_STATE_FILE_SIZE = 2 * 1024 * 1024;
+const DEGRADED_THRESHOLD = 3; // consecutive failures before auto-degraded mode
 
+// --- Transition table ---
 const TRANSITIONS = {
     INTERPRETATION_PENDING: [
         { via: 'request_clarification', to: 'CLARIFICATION_PENDING' },
@@ -55,7 +58,7 @@ const TRANSITIONS = {
         { via: 'abandon', to: 'BLOCKED' },
     ],
     EXECUTION_ANALYSIS: [
-        { via: 'analysis_complete', to: 'EXECUTION_DECISION_PENDING' },
+        { via: 'record_execution_analysis', to: 'EXECUTION_DECISION_PENDING' },
         { via: 'block', to: 'BLOCKED' },
         { via: 'abandon', to: 'BLOCKED' },
     ],
@@ -84,8 +87,25 @@ const TRANSITIONS = {
     DONE: [],
 };
 
+// --- O4: Pre-computed transition cache (O(1) lookup) ---
+const ALLOWED_TRANSITIONS = Object.freeze(
+    Object.fromEntries(
+        Object.entries(TRANSITIONS).map(([state, transitions]) => [
+            state,
+            new Map(transitions.map((t) => [`${t.via}:${t.choice || t.mode || ''}`, t.to])),
+        ])
+    )
+);
+
 /**
  * Safe JSON.stringify that won't throw on circular references.
+ *
+ * Uses WeakSet (not Map/Set) so:
+ * - Object references are tracked without preventing GC
+ * - Nested non-cyclic objects are still serialized fully
+ * - Symbol keys are silently dropped (JSON limitation, not a bug)
+ * - Functions are dropped (JSON limitation)
+ * - Returns "[Unstringifiable: ...]" on hard failures (BigInt, etc.)
  */
 function safeJsonStringify(obj, pretty = false) {
     const seen = new WeakSet();
@@ -113,7 +133,7 @@ function log(event, data) {
 }
 
 /**
- * Cleans up stale .tmp.* files from a previous crash.
+ * Cleans up stale .tmp.* and .lock.* files from a previous crash.
  */
 function cleanupTmpFiles(statePath) {
     if (!statePath) return;
@@ -121,7 +141,7 @@ function cleanupTmpFiles(statePath) {
     const name = basename(statePath);
     try {
         for (const entry of readdirSync(dir)) {
-            if (entry.startsWith(name + '.tmp.')) {
+            if (entry.startsWith(name + '.tmp.') || entry.startsWith(name + '.lock')) {
                 try {
                     unlinkSync(join(dir, entry));
                 } catch {
@@ -131,6 +151,16 @@ function cleanupTmpFiles(statePath) {
         }
     } catch {
         /* directory may not exist yet */
+    }
+}
+
+// --- O6: Fast fingerprint (mtime + size) ---
+function fastFingerprint(filePath) {
+    try {
+        const stat = statSync(filePath);
+        return `${stat.mtimeMs}-${stat.size}`;
+    } catch {
+        return null;
     }
 }
 
@@ -157,21 +187,36 @@ const DEFAULT_STATE = Object.freeze({
     changeId: null,
     routeDecisionId: null,
     routeChoice: null,
+    level: null,
     executionDecisionId: null,
     executionMode: null,
     snapshots: { codegraph: null, execution: null },
     tasks: {},
     fileFingerprints: {},
     error: null,
+    lastHandoff: null, // B2: { ts, summary, nextSteps, pendingTasks } | null
 });
 
 class OstackyController {
     #statePath;
     #state;
     #loaded;
+    #degraded = false;
+    #consecutiveFailures = 0;
+    #auditBuffer = [];
+    #lockPath;
+    #lockPidPath;
+    #lockHeartbeatPath;
+    #lockMaxAttempts = 10; // overridable via opts for fast tests
 
     constructor(opts = {}) {
         this.#statePath = opts.statePath;
+        this.#lockPath = opts.statePath ? opts.statePath + '.lock' : null;
+        this.#lockPidPath = opts.statePath ? opts.statePath + '.lock.pid' : null;
+        this.#lockHeartbeatPath = opts.statePath ? opts.statePath + '.lock.timestamp' : null;
+        if (typeof opts.lockMaxAttempts === 'number' && opts.lockMaxAttempts > 0) {
+            this.#lockMaxAttempts = opts.lockMaxAttempts;
+        }
         if (opts.initialState) {
             this.#state = { ...DEFAULT_STATE, ...opts.initialState };
             this.#loaded = true;
@@ -179,6 +224,13 @@ class OstackyController {
             this.#state = null;
             this.#loaded = false;
         }
+    }
+
+    /**
+     * Returns whether the controller is in degraded mode.
+     */
+    get degraded() {
+        return this.#degraded;
     }
 
     /**
@@ -192,6 +244,77 @@ class OstackyController {
         if (typeof parsed.revision !== 'number') return 'Missing or invalid "revision" field';
         if (parsed.revision < 0) return `Invalid revision: ${parsed.revision}`;
         return null; // valid
+    }
+
+    // --- 3.4: State file locking ---
+    #acquireLock() {
+        if (!this.#lockPath) return true;
+        // Allow tests to shorten retry loops via opts.lockMaxAttempts
+        const maxAttempts = this.#lockMaxAttempts;
+        const lockTimeout = 5000;
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            try {
+                writeFileSync(this.#lockPidPath, String(process.pid), 'utf8');
+                writeFileSync(this.#lockHeartbeatPath, String(Date.now()), 'utf8');
+                // Check if lock is stale (>30s without heartbeat)
+                try {
+                    const lockContent = readFileSync(this.#lockHeartbeatPath, 'utf8');
+                    const lockAge = Date.now() - parseInt(lockContent, 10);
+                    if (lockAge > 30000) {
+                        const lockPid = readFileSync(this.#lockPidPath, 'utf8').trim();
+                        try {
+                            process.kill(parseInt(lockPid, 10), 0); // check if PID alive
+                            // PID exists but lock is stale — wait briefly then force
+                            const waitStart = Date.now();
+                            while (Date.now() - waitStart < 10000) {
+                                /* spin wait */
+                            }
+                        } catch {
+                            // PID doesn't exist — force release
+                        }
+                        this.#releaseLock();
+                        continue;
+                    }
+                } catch {
+                    // Can't read heartbeat — assume stale
+                    this.#releaseLock();
+                    continue;
+                }
+                return true;
+            } catch {
+                // Lock held by another process — wait and retry
+                const waitMs = Math.min(lockTimeout, 100 * Math.pow(2, attempt));
+                const waitStart = Date.now();
+                while (Date.now() - waitStart < waitMs) {
+                    /* spin wait */
+                }
+            }
+        }
+        log('warn:lock_acquire_failed', { attempts: maxAttempts });
+        return false;
+    }
+
+    #releaseLock() {
+        if (!this.#lockPath) return;
+        try {
+            unlinkSync(this.#lockPidPath);
+        } catch {
+            /* best-effort */
+        }
+        try {
+            unlinkSync(this.#lockHeartbeatPath);
+        } catch {
+            /* best-effort */
+        }
+    }
+
+    #heartbeatLock() {
+        if (!this.#lockHeartbeatPath) return;
+        try {
+            writeFileSync(this.#lockHeartbeatPath, String(Date.now()), 'utf8');
+        } catch {
+            /* best-effort */
+        }
     }
 
     #load() {
@@ -239,35 +362,75 @@ class OstackyController {
 
     #persist() {
         if (!this.#statePath) return;
+
         const dir = dirname(this.#statePath);
-        mkdirSync(dir, { recursive: true });
-        let serialized = safeJsonStringify(this.#state, true);
-        if (serialized.length > MAX_STATE_FILE_SIZE) {
-            log('warn:state_oversized', { size: serialized.length });
-            const trimmed = { ...this.#state, snapshots: { codegraph: null, execution: null } };
-            serialized = safeJsonStringify(trimmed, true);
-            if (serialized.length > MAX_STATE_FILE_SIZE) {
-                log('error:state_too_large_even_after_trim');
-                return;
-            }
-            this.#state.snapshots = { codegraph: null, execution: null };
-        }
-        const tmp = this.#statePath + '.tmp.' + process.pid;
-        writeFileSync(tmp, serialized, 'utf8');
-        renameSync(tmp, this.#statePath);
         try {
-            const backupTmp = this.#statePath + '.backup.tmp.' + process.pid;
-            writeFileSync(backupTmp, serialized, 'utf8');
-            renameSync(backupTmp, this.#statePath + '.backup');
-        } catch {
-            /* backup is best-effort */
+            mkdirSync(dir, { recursive: true });
+        } catch (err) {
+            // mkdir failures also count toward degraded mode
+            this.#consecutiveFailures++;
+            log('error:persist_mkdir_failed', { consecutive: this.#consecutiveFailures, error: err.message });
+            if (this.#consecutiveFailures >= DEGRADED_THRESHOLD && !this.#degraded) {
+                this.#enterDegradedMode(`mkdir_failures: ${this.#consecutiveFailures} consecutive: ${err.message}`);
+            }
+            throw err;
+        }
+
+        try {
+            // 3.4: Acquire lock before writing
+            const lockAcquired = this.#acquireLock();
+            if (!lockAcquired) {
+                log('warn:persist_skipped_lock', { state: this.#state.state });
+                throw new Error('Could not acquire state file lock');
+            }
+
+            let serialized = safeJsonStringify(this.#state, true);
+            if (serialized.length > MAX_STATE_FILE_SIZE) {
+                log('warn:state_oversized', { size: serialized.length });
+                const trimmed = { ...this.#state, snapshots: { codegraph: null, execution: null } };
+                serialized = safeJsonStringify(trimmed, true);
+                if (serialized.length > MAX_STATE_FILE_SIZE) {
+                    log('error:state_too_large_even_after_trim');
+                    return;
+                }
+                this.#state.snapshots = { codegraph: null, execution: null };
+            }
+            const tmp = this.#statePath + '.tmp.' + process.pid;
+            writeFileSync(tmp, serialized, 'utf8');
+            renameSync(tmp, this.#statePath);
+            try {
+                const backupTmp = this.#statePath + '.backup.tmp.' + process.pid;
+                writeFileSync(backupTmp, serialized, 'utf8');
+                renameSync(backupTmp, this.#statePath + '.backup');
+            } catch {
+                /* backup is best-effort */
+            }
+            // B1: persist success → reset failure counter
+            if (this.#consecutiveFailures > 0) {
+                log('info:persist_recovered', { after: this.#consecutiveFailures });
+            }
+            this.#consecutiveFailures = 0;
+        } catch (err) {
+            // B1: persist failure → increment counter, auto-degrade if threshold reached
+            this.#consecutiveFailures++;
+            log('error:persist_failed', { consecutive: this.#consecutiveFailures, error: err.message });
+            if (this.#consecutiveFailures >= DEGRADED_THRESHOLD && !this.#degraded) {
+                this.#enterDegradedMode(`persistence_failures: ${this.#consecutiveFailures} consecutive persists: ${err.message}`);
+            }
+            throw err;
+        } finally {
+            this.#releaseLock();
         }
     }
 
     /**
      * Trims old completed tasks when we exceed MAX_TASKS.
-     * Keeps the most recent MAX_TASKS entries.
+     *
+     * Invariant: entries in `state.tasks` are kept sorted by `completedAt` descending
+     * (most recent first) as a side-effect of insertion order. We slice(0, MAX_TASKS)
+     * to keep the newest MAX_TASKS entries and discard older ones.
      */
+
     #trimTasks() {
         if (!this.#state.tasks) return;
         const entries = Object.entries(this.#state.tasks);
@@ -290,16 +453,87 @@ class OstackyController {
         this.#persist();
     }
 
+    // --- O4: O(1) transition lookup via pre-computed cache ---
     #isAllowedTransition(from, via, choiceOrMode) {
-        const transitions = TRANSITIONS[from] || [];
-        for (const t of transitions) {
-            if (t.via !== via) continue;
-            if (t.choice !== undefined && t.choice !== choiceOrMode) continue;
-            if (t.mode !== undefined && t.mode !== choiceOrMode) continue;
-            return t.to;
-        }
-        return null;
+        const key = `${via}:${choiceOrMode || ''}`;
+        return ALLOWED_TRANSITIONS[from]?.get(key) || null;
     }
+
+    // --- O5: Batched audit trail ---
+    #audit(phase, decision, reasoning) {
+        this.#auditBuffer.push({ ts: Date.now(), phase, decision, reasoning });
+        if (this.#auditBuffer.length >= 10 || phase === 'DONE') {
+            this.#flushAudit();
+        }
+    }
+
+    #flushAudit() {
+        if (this.#auditBuffer.length === 0) return;
+        if (!this.#state.audit) this.#state.audit = [];
+        this.#state.audit.push(...this.#auditBuffer);
+        if (this.#state.audit.length > 100) {
+            this.#state.audit = this.#state.audit.slice(-100);
+        }
+        this.#auditBuffer = [];
+        // O1: Skip persist for trivial Level 0 requests (non-terminal states).
+        // Final persist still happens via #transition() and on DONE/BLOCKED via setupGracefulShutdown.
+        if (this.#state.level === '0' && this.#state.state !== 'DONE' && this.#state.state !== 'BLOCKED') {
+            return;
+        }
+        this.#persist();
+    }
+
+    // --- 3.5: Enriched error with available transitions ---
+    #makeError(message, attemptedTransition) {
+        const available = (TRANSITIONS[this.#state?.state] || []).map((t) => {
+            let desc = t.via;
+            if (t.choice) desc += ` (choice=${t.choice})`;
+            if (t.mode) desc += ` (mode=${t.mode})`;
+            return desc;
+        });
+        return {
+            error: message,
+            current_state: this.#state?.state || 'UNKNOWN',
+            attempted_transition: attemptedTransition || null,
+            available_transitions: available,
+            suggestion: this.#suggestRecovery(this.#state?.state, attemptedTransition),
+            timestamp: new Date().toISOString(),
+        };
+    }
+
+    #suggestRecovery(state, transition) {
+        const suggestions = {
+            INTERPRETATION_PENDING: 'Call start_request or proceed_to_discovery first.',
+            CLARIFICATION_PENDING: 'Answer the clarification question, then call record_clarification.',
+            DISCOVERY: 'Call record_discovery with a level classification.',
+            LEVEL_RESOLVED: 'Call proceed_to_route to move to route decision.',
+            ROUTE_DECISION_PENDING: 'Call consume_route_decision with SPEC or DIRECT.',
+            SPECIFICATION: 'Call spec_complete when specification is done.',
+            EXECUTION_ANALYSIS: 'Call record_execution_analysis with a snapshot.',
+            EXECUTION_DECISION_PENDING: 'Call consume_execution_decision with INLINE or SUBAGENT_DRIVEN.',
+            EXECUTING_INLINE: 'Call implementation_complete when done.',
+            EXECUTING_SUBAGENTS: 'Call implementation_complete when done.',
+            BLOCKED: 'Call replan to restart, or abandon to stop.',
+            SYNC: 'Call sync_complete to finish.',
+            DONE: 'Session complete. Call start_request for a new session.',
+        };
+        return suggestions[state] || `Unexpected state: ${state}`;
+    }
+
+    // --- 3.3: Degraded mode ---
+    #enterDegradedMode(reason) {
+        this.#degraded = true;
+        log('degraded_mode_activated', { reason, state: this.#state?.state });
+    }
+
+    #exitDegradedMode() {
+        if (!this.#degraded) return;
+        this.#degraded = false;
+        this.#consecutiveFailures = 0;
+        log('degraded_mode_exited', { state: this.#state?.state });
+    }
+
+    // --- Core transitions ---
 
     async startRequest({ requestId, changeId } = {}) {
         this.#load();
@@ -318,38 +552,71 @@ class OstackyController {
             fileFingerprints: {},
             error: null,
         });
+        this.#audit('INTERPRETATION_PENDING', 'start_request', `requestId=${this.#state.requestId}`);
         return { state: this.#state.state, revision: this.#state.revision, requestId: this.#state.requestId };
     }
 
     async requestClarification({ question } = {}) {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'request_clarification');
-        if (!to) return { error: `Cannot request clarification from state ${this.#state.state}` };
+        if (!to) return this.#makeError(`Cannot request clarification from state ${this.#state.state}`, 'request_clarification');
         this.#transition(to, { error: question ? `Clarification: ${question}` : null });
+        this.#audit('CLARIFICATION_PENDING', 'request_clarification', question || 'no question');
         return { state: this.#state.state, revision: this.#state.revision };
     }
 
     async recordClarification() {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'record_clarification');
-        if (!to) return { error: `Cannot record clarification from state ${this.#state.state}` };
+        if (!to) return this.#makeError(`Cannot record clarification from state ${this.#state.state}`, 'record_clarification');
         this.#transition(to, { error: null });
+        this.#audit('DISCOVERY', 'record_clarification');
         return { state: this.#state.state, revision: this.#state.revision };
+    }
+
+    // --- O3: Compressed CodeGraph snapshots ---
+    #compressCodegraphSnapshot(fullResult) {
+        if (!fullResult || typeof fullResult !== 'object') return fullResult;
+        // If it's already compressed (has our marker), return as-is
+        if (fullResult._compressed) return fullResult;
+        return {
+            _compressed: true,
+            symbols: (fullResult.symbols || []).map((s) => ({
+                name: s.name,
+                kind: s.kind,
+                file: s.file,
+            })),
+            blastRadius: fullResult.blastRadius || null,
+            fileCount: (fullResult.files || []).length,
+            callPaths: fullResult.callPaths?.map((p) => p.map((s) => s.name || s)) || null,
+            timestamp: Date.now(),
+            // Intentionally NOT including: fullResult.source (too large)
+        };
     }
 
     async recordDiscovery({ level, routeDecisionId, snapshot } = {}) {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'record_discovery');
-        if (!to) return { error: `Cannot record discovery from state ${this.#state.state}` };
-        if (snapshot && safeJsonStringify(snapshot).length > MAX_SNAPSHOT_JSON_LENGTH) {
-            return { error: `Snapshot exceeds maximum size of ${MAX_SNAPSHOT_JSON_LENGTH} bytes` };
+        if (!to) return this.#makeError(`Cannot record discovery from state ${this.#state.state}`, 'record_discovery');
+
+        // O3: Compress snapshot before persisting
+        const compressedSnapshot = snapshot ? this.#compressCodegraphSnapshot(snapshot) : this.#state.snapshots.codegraph;
+        const snapshotJson = compressedSnapshot ? safeJsonStringify(compressedSnapshot) : '';
+        if (snapshotJson.length > MAX_SNAPSHOT_JSON_LENGTH) {
+            return this.#makeError(
+                `Snapshot exceeds maximum size of ${MAX_SNAPSHOT_JSON_LENGTH} bytes (compressed: ${snapshotJson.length})`,
+                'record_discovery'
+            );
         }
+
+        const defaultChoice = level === '1+' ? 'SPEC' : 'DIRECT';
         this.#transition(to, {
             routeDecisionId: routeDecisionId || 'route-' + Date.now(),
-            routeChoice: null,
-            snapshots: { ...this.#state.snapshots, codegraph: snapshot || this.#state.snapshots.codegraph },
+            routeChoice: defaultChoice, // O2: persist default suggested choice
+            level, // O1: persist level for conditional persistence
+            snapshots: { ...this.#state.snapshots, codegraph: compressedSnapshot },
         });
-        const defaultChoice = level === '1+' ? 'SPEC' : 'DIRECT';
+        this.#audit('LEVEL_RESOLVED', 'record_discovery', `level=${level}, default=${defaultChoice}`);
         return {
             state: this.#state.state,
             revision: this.#state.revision,
@@ -362,51 +629,59 @@ class OstackyController {
     async proceedToRoute() {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'proceed_to_route');
-        if (!to) return { error: `Cannot proceed to route from state ${this.#state.state}` };
+        if (!to) return this.#makeError(`Cannot proceed to route from state ${this.#state.state}`, 'proceed_to_route');
         this.#transition(to);
+        this.#audit('ROUTE_DECISION_PENDING', 'proceed_to_route');
         return { state: this.#state.state, revision: this.#state.revision };
     }
 
     async abandon({ reason } = {}) {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'abandon');
-        if (!to) return { error: `Cannot abandon from state ${this.#state.state}` };
+        if (!to) return this.#makeError(`Cannot abandon from state ${this.#state.state}`, 'abandon');
         this.#transition(to, { error: reason || 'Abandoned' });
+        this.#audit('BLOCKED/DONE', 'abandon', reason || 'no reason');
         return { state: this.#state.state, revision: this.#state.revision };
     }
 
     async consumeRouteDecision({ decisionId, choice } = {}) {
         this.#load();
         if (this.#state.state !== 'ROUTE_DECISION_PENDING') {
-            return { error: `Cannot consume route decision from state ${this.#state.state}` };
+            return this.#makeError(`Cannot consume route decision from state ${this.#state.state}`, 'consume_route_decision');
         }
-        if (this.#state.routeDecisionId !== decisionId) return { error: `Decision ID mismatch` };
+        if (this.#state.routeDecisionId !== decisionId) return this.#makeError('Decision ID mismatch', 'consume_route_decision');
         const to = this.#isAllowedTransition(this.#state.state, 'consume_route_decision', choice);
-        if (!to) return { error: `Route ${choice} not allowed from ${this.#state.state}` };
+        if (!to) return this.#makeError(`Route ${choice} not allowed from ${this.#state.state}`, 'consume_route_decision');
         this.#transition(to, { routeChoice: choice });
+        this.#audit(to, 'consume_route_decision', `choice=${choice}`);
         return { state: this.#state.state, revision: this.#state.revision, routeChoice: choice };
     }
 
     async specComplete() {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'spec_complete');
-        if (!to) return { error: `Cannot complete spec from state ${this.#state.state}` };
+        if (!to) return this.#makeError(`Cannot complete spec from state ${this.#state.state}`, 'spec_complete');
         this.#transition(to);
+        this.#audit('EXECUTION_ANALYSIS', 'spec_complete');
         return { state: this.#state.state, revision: this.#state.revision };
     }
 
     async recordExecutionAnalysis({ executionDecisionId, snapshot } = {}) {
         this.#load();
-        const to = this.#isAllowedTransition(this.#state.state, 'analysis_complete');
-        if (!to) return { error: `Cannot record execution analysis from state ${this.#state.state}` };
+        const to = this.#isAllowedTransition(this.#state.state, 'record_execution_analysis');
+        if (!to) return this.#makeError(`Cannot record execution analysis from state ${this.#state.state}`, 'record_execution_analysis');
         if (snapshot && safeJsonStringify(snapshot).length > MAX_SNAPSHOT_JSON_LENGTH) {
-            return { error: `Snapshot exceeds maximum size of ${MAX_SNAPSHOT_JSON_LENGTH} bytes` };
+            return this.#makeError(
+                `Snapshot exceeds maximum size of ${MAX_SNAPSHOT_JSON_LENGTH} bytes`,
+                'record_execution_analysis'
+            );
         }
         this.#transition(to, {
             executionDecisionId: executionDecisionId || 'exec-' + Date.now(),
             executionMode: null,
             snapshots: { ...this.#state.snapshots, execution: snapshot || null },
         });
+        this.#audit('EXECUTION_DECISION_PENDING', 'record_execution_analysis');
         return {
             state: this.#state.state,
             revision: this.#state.revision,
@@ -417,43 +692,49 @@ class OstackyController {
     async consumeExecutionDecision({ decisionId, mode } = {}) {
         this.#load();
         if (this.#state.state !== 'EXECUTION_DECISION_PENDING') {
-            return { error: `Cannot consume execution decision from state ${this.#state.state}` };
+            return this.#makeError(`Cannot consume execution decision from state ${this.#state.state}`, 'consume_execution_decision');
         }
-        if (this.#state.executionDecisionId !== decisionId) return { error: `Decision ID mismatch` };
+        if (this.#state.executionDecisionId !== decisionId) return this.#makeError('Decision ID mismatch', 'consume_execution_decision');
         const to = this.#isAllowedTransition(this.#state.state, 'consume_execution_decision', mode);
-        if (!to) return { error: `Mode ${mode} not allowed from ${this.#state.state}` };
+        if (!to) return this.#makeError(`Mode ${mode} not allowed from ${this.#state.state}`, 'consume_execution_decision');
         this.#transition(to, { executionMode: mode });
+        this.#audit(to, 'consume_execution_decision', `mode=${mode}`);
         return { state: this.#state.state, revision: this.#state.revision, executionMode: mode };
     }
 
     async implementationComplete() {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'implementation_complete');
-        if (!to) return { error: `Cannot complete implementation from state ${this.#state.state}` };
+        if (!to) return this.#makeError(`Cannot complete implementation from state ${this.#state.state}`, 'implementation_complete');
         this.#transition(to);
+        this.#audit('SYNC', 'implementation_complete');
         return { state: this.#state.state, revision: this.#state.revision };
     }
 
     async syncComplete() {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'sync_complete');
-        if (!to) return { error: `Cannot complete sync from state ${this.#state.state}` };
+        if (!to) return this.#makeError(`Cannot complete sync from state ${this.#state.state}`, 'sync_complete');
         this.#transition(to);
+        this.#audit('DONE', 'sync_complete');
+        // Flush remaining audit entries
+        this.#flushAudit();
         return { state: this.#state.state, revision: this.#state.revision };
     }
 
     async block({ reason } = {}) {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'block');
-        if (!to) return { error: `Cannot block from state ${this.#state.state}` };
+        if (!to) return this.#makeError(`Cannot block from state ${this.#state.state}`, 'block');
         this.#transition(to, { error: reason || 'Blocked' });
+        this.#audit('BLOCKED', 'block', reason || 'no reason');
         return { state: this.#state.state, revision: this.#state.revision };
     }
 
     async replan({ reason } = {}) {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'replan');
-        if (!to) return { error: `Cannot replan from state ${this.#state.state}` };
+        if (!to) return this.#makeError(`Cannot replan from state ${this.#state.state}`, 'replan');
         this.#transition(to, {
             error: reason || null,
             routeDecisionId: null,
@@ -464,7 +745,39 @@ class OstackyController {
             tasks: {},
             fileFingerprints: {},
         });
+        this.#audit('INTERPRETATION_PENDING', 'replan', reason || 'no reason');
         return { state: this.#state.state, revision: this.#state.revision };
+    }
+
+    // --- B2: Handoff persistence for cross-session continuity ---
+    async setHandoff({ summary, nextSteps, pendingTasks } = {}) {
+        this.#load();
+        if (!summary || typeof summary !== 'string') {
+            return this.#makeError('summary is required and must be a string', 'set_handoff');
+        }
+        this.#state.lastHandoff = {
+            ts: Date.now(),
+            summary,
+            nextSteps: Array.isArray(nextSteps) ? nextSteps : [],
+            pendingTasks: Array.isArray(pendingTasks) ? pendingTasks : [],
+        };
+        this.#audit('HANDOFF', 'set_handoff', summary.slice(0, 100));
+        this.#persist();
+        return { ok: true, lastHandoff: this.#state.lastHandoff };
+    }
+
+    async getHandoff() {
+        this.#load();
+        return this.#state.lastHandoff;
+    }
+
+    async clearHandoff() {
+        this.#load();
+        const prev = this.#state.lastHandoff;
+        this.#state.lastHandoff = null;
+        this.#audit('HANDOFF', 'clear_handoff', prev?.summary?.slice(0, 100) || 'none');
+        this.#persist();
+        return { ok: true, cleared: prev };
     }
 
     async getState() {
@@ -485,13 +798,7 @@ class OstackyController {
         };
     }
 
-    /**
-     * Validates an edit against the current file content.
-     * Returns one of: EDITABLE, ALREADY_APPLIED, CONFLICT.
-     * - EDITABLE: oldString found exactly once, safe to replace.
-     * - ALREADY_APPLIED: newString already present in content (idempotent skip).
-     * - CONFLICT: oldString not found, or found multiple times.
-     */
+    // --- O6: Validate edit with fast fingerprint ---
     async validateEdit({ oldString, newString, content, taskId } = {}) {
         this.#load();
         if (this.#state.state !== 'EXECUTING_INLINE' && this.#state.state !== 'EXECUTING_SUBAGENTS') {
@@ -542,22 +849,27 @@ class OstackyController {
     async completeTask({ taskId, filePath, fileHash } = {}) {
         this.#load();
         if (this.#state.state !== 'EXECUTING_INLINE' && this.#state.state !== 'EXECUTING_SUBAGENTS') {
-            return { error: `Cannot complete task from state ${this.#state.state}` };
+            return this.#makeError(`Cannot complete task from state ${this.#state.state}`, 'complete_task');
         }
         if (!taskId) return { error: 'taskId is required' };
         if (!this.#state.tasks) this.#state.tasks = {};
+
+        // O6: Use fast fingerprint if no hash provided
+        const effectiveHash = fileHash || (filePath ? fastFingerprint(filePath) : null);
+
         this.#state.tasks[taskId] = {
             status: 'COMPLETED',
             completedAt: new Date().toISOString(),
             filePath: filePath || null,
-            fileHash: fileHash || null,
+            fileHash: effectiveHash,
         };
-        if (filePath && fileHash) {
+        if (filePath && effectiveHash) {
             if (!this.#state.fileFingerprints) this.#state.fileFingerprints = {};
-            this.#state.fileFingerprints[filePath] = fileHash;
+            this.#state.fileFingerprints[filePath] = effectiveHash;
         }
         this.#trimTasks();
         this.#persist();
+        this.#audit('EXECUTING', 'complete_task', `taskId=${taskId}`);
         return {
             taskId,
             status: 'COMPLETED',
@@ -571,6 +883,7 @@ class OstackyController {
      * Used by graceful shutdown (private fields not accessible from outside).
      */
     flush() {
+        this.#flushAudit();
         this.#persist();
     }
 }
@@ -604,7 +917,7 @@ function safeHandler(fn) {
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.6.3',
+    version: '0.7.0',
 });
 
 server.registerTool(
@@ -626,7 +939,7 @@ server.registerTool(
 server.registerTool(
     'request_clarification',
     {
-        description: 'Record that clarification was requested. Transitions to CLARIFICATION_PENDING.',
+        description: 'Pause execution to ask the user for clarification. Use when the request is too vague to classify. Transitions to CLARIFICATION_PENDING — you MUST stop and wait for user response.',
         inputSchema: z.object({
             question: z.string().optional().describe('The clarification question'),
         }),
@@ -657,7 +970,7 @@ server.registerTool(
         inputSchema: z.object({
             level: z.enum(['0', '0+1', '1+']).describe('Impact level'),
             routeDecisionId: z.string().optional().describe('Unique route decision ID'),
-            snapshot: z.any().optional().describe('Optional CodeGraph snapshot'),
+            snapshot: z.any().optional().describe('Optional CodeGraph snapshot (auto-compressed)'),
         }),
     },
     safeHandler(async ({ level, routeDecisionId, snapshot }) => {
@@ -778,7 +1091,7 @@ server.registerTool(
 server.registerTool(
     'proceed_to_route',
     {
-        description: 'Proceed from LEVEL_RESOLVED to ROUTE_DECISION_PENDING after discovery is confirmed.',
+        description: 'Proceed from LEVEL_RESOLVED to ROUTE_DECISION_PENDING after discovery is confirmed. Only valid from LEVEL_RESOLVED — call this after asking the user about the route decision.',
         inputSchema: z.object({}),
     },
     safeHandler(async () => {
@@ -811,6 +1124,7 @@ server.registerTool(
     safeHandler(async () => {
         return {
             pong: true,
+            degraded: controller.degraded,
             state: await controller.getState().then((s) => ({
                 state: s.state,
                 revision: s.revision,
@@ -854,6 +1168,43 @@ server.registerTool(
 );
 
 server.registerTool(
+    'set_handoff',
+    {
+        description: 'Save handoff context for the next session. Call at session end if interrupted or before a context switch. Persists to controller state.',
+        inputSchema: z.object({
+            summary: z.string().describe('What we were working on (1-3 sentences)'),
+            nextSteps: z.array(z.string()).optional().describe('Concrete next actions'),
+            pendingTasks: z.array(z.string()).optional().describe('Task IDs or descriptions of pending work'),
+        }),
+    },
+    safeHandler(async ({ summary, nextSteps, pendingTasks }) => {
+        return await controller.setHandoff({ summary, nextSteps, pendingTasks });
+    })
+);
+
+server.registerTool(
+    'get_handoff',
+    {
+        description: 'Read pending handoff from previous session. Call at start of new request to recover context.',
+        inputSchema: z.object({}),
+    },
+    safeHandler(async () => {
+        return await controller.getHandoff();
+    })
+);
+
+server.registerTool(
+    'clear_handoff',
+    {
+        description: 'Mark handoff as consumed after the agent has loaded the context.',
+        inputSchema: z.object({}),
+    },
+    safeHandler(async () => {
+        return await controller.clearHandoff();
+    })
+);
+
+server.registerTool(
     'check_pending_state',
     {
         description:
@@ -873,9 +1224,10 @@ server.registerTool(
                 state: state.state,
                 revision: state.revision,
                 reason: `Cannot execute tools while in ${state.state}. Wait for user response first.`,
+                degraded: controller.degraded,
             };
         }
-        return { status: 'ALLOW', state: state.state, revision: state.revision };
+        return { status: 'ALLOW', state: state.state, revision: state.revision, degraded: controller.degraded };
     })
 );
 
@@ -926,7 +1278,7 @@ server.registerTool(
         inputSchema: z.object({
             taskId: z.string().describe('The task ID to mark as completed.'),
             filePath: z.string().optional().describe('Optional file path that was modified.'),
-            fileHash: z.string().optional().describe('Optional SHA-256 hash of the file after modification.'),
+            fileHash: z.string().optional().describe('Optional SHA-256 or fast fingerprint of the file after modification.'),
         }),
     },
     safeHandler(async ({ taskId, filePath, fileHash }) => {
@@ -936,7 +1288,7 @@ server.registerTool(
 );
 
 /**
- * Graceful shutdown: clean up tmp files and flush state.
+ * Graceful shutdown: clean up tmp/lock files and flush state.
  */
 function setupGracefulShutdown(ctrl) {
     const shutdown = (signal) => {
@@ -947,7 +1299,7 @@ function setupGracefulShutdown(ctrl) {
         } catch {
             /* best-effort */
         }
-        // Clean up own tmp files
+        // Clean up own tmp and lock files
         try {
             cleanupTmpFiles(statePath);
         } catch {
@@ -966,9 +1318,9 @@ function setupGracefulShutdown(ctrl) {
 }
 
 async function main() {
-    log('Starting ostacky-controller MCP...');
+    log('Starting ostacky-controller MCP v0.7.0...');
     log('State path:', { path: statePath });
-    // Clean up stale tmp files from previous runs
+    // Clean up stale tmp/lock files from previous runs
     cleanupTmpFiles(statePath);
     setupGracefulShutdown(controller);
     const transport = new StdioServerTransport();

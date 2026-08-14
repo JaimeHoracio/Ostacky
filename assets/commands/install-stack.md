@@ -5,7 +5,7 @@ agent: build
 
 Instala el stack tecnológico de desarrollo para OpenCode. **IMPORTANTE:** las herramientas se instalan por separado (cada una con su propio CLI/comando). `npx ostacky install` solo instala el agente y commands de Ostacky en `.opencode/`. Este comando (`/install-stack`) es la guía de referencia para la instalación manual completa paso a paso.
 
-**Nota:** A partir de v0.6.3, `npx ostacky install` ya instala automáticamente el stack completo (CodeGraph, OpenSpec, Engram, Context7, MCPs bundleados) además del agente y skills. Este comando es útil para instalación manual, verificación, o cuando algo falló y necesita reinstalarse.
+**Nota:** A partir de v0.7.0, `npx ostacky install` ya instala automáticamente el stack completo (CodeGraph, OpenSpec, Engram, Context7, MCPs bundleados) además del agente y skills. Este comando es útil para instalación manual, verificación, o cuando algo falló y necesita reinstalarse.
 
 **RESTRICCIÓN ABSOLUTA:** instalar ÚNICAMENTE para OpenCode. Está terminantemente prohibido crear o modificar archivos en `.claude/`, `.kiro/`, `.cursor/`, `.gemini/`, `.codex/`, `.antigravity/`, `.windsurf/` o cualquier otro directorio de plataformas externas.
 
@@ -15,7 +15,13 @@ Instala el stack tecnológico de desarrollo para OpenCode. **IMPORTANTE:** las h
 
 ## Paso 1 — CodeGraph
 
-CodeGraph se instala **localmente** en `.opencode/tools/codegraph/` — no se instala nada globalmente. El binario se descarga desde GitHub Releases para tu plataforma (linux/darwin x64/arm64, win32).
+CodeGraph se instala **localmente** en `.opencode/tools/codegraph/` — no se instala nada globalmente. Desde **v1.5.0+ es un bundle completo** que incluye:
+
+- `bin/codegraph` — ejecutable launcher
+- `lib/kernel/codegraph-kernel.node` — kernel nativo (Rust)
+- `lib/dist/` — JS runtime
+- `lib/node_modules/` — tree-sitter, jsonc-parser, etc.
+- `node` — runtime Node empaquetado
 
 `npx ostacky install` (o `npx ostacky install-stack`) hace esto automáticamente. Para instalación manual:
 
@@ -27,7 +33,7 @@ Verificá si ya está descargado localmente:
 # Windows: ejecutar codegraph.cmd o codegraph.exe dentro de .opencode/tools/codegraph/bin/
 ```
 
-Si no está, descargalo manualmente desde [GitHub Releases](https://github.com/colbymchenry/codegraph/releases) y extraelo a `.opencode/tools/codegraph/` (el tar.gz tiene estructura `codegraph-{os}-{arch}/bin/codegraph`, `lib/`, `node`).
+Si no está, descargalo manualmente desde [GitHub Releases](https://github.com/colbymchenry/codegraph/releases) y extrae el **tar.gz completo** a `.opencode/tools/codegraph/` (estructura: `bin/`, `lib/`, `node`).
 
 Inicializa e indexa el proyecto actual:
 
@@ -92,6 +98,49 @@ El controller MCP se configura como server local en `opencode.json`. Si el contr
 - El installer maneja `opencode.jsonc` (con comentarios) correctamente — strippea comentarios antes de parsear y escribe JSON válido de vuelta.
 - El installer registra el MCP directamente y **no mueve ni elimina** un `AGENTS.md` existente en la raíz del proyecto.
 
+### Verificación post-instalación
+
+Después de instalar, verificá que el controller responde:
+
+```bash
+# Desde el prompt de OpenCode con el agente @ostacky activo:
+ostacky-controller_ping
+```
+
+✅ Respuesta esperada: `{ pong: true, degraded: false, state: { state: 'INTERPRETATION_PENDING', revision: 0, ... } }`
+
+❌ Si no responde o devuelve `pong: false`:
+
+- Verificá que `node` está en PATH (`node --version`)
+- Verificá permisos de lectura en `index.js`: `ls -la .opencode/mcp/ostacky-controller/index.js`
+- Verificá que `.opencode/ostacky-state.json` no esté corrupto: `cat .opencode/ostacky-state.json | head -5`
+- Si está corrupto: `rm .opencode/ostacky-state.json .opencode/ostacky-state.json.backup` y reiniciar OpenCode (el controller recrea el state file).
+
+### Logs del controller
+
+- Errores se loggean en **stderr** con formato `[timestamp] [event] {data}`.
+- Archivos persistentes: `.opencode/ostacky-state.json` (state activo) + `.opencode/ostacky-state.json.backup` (último backup válido).
+- Lock files: `.opencode/ostacky-state.json.lock*` (temporales durante writes; se limpian automáticamente).
+- Eventos importantes: `state_persisted`, `state_restored_from_backup`, `state_reset`, `degraded_mode_activated`, `degraded_mode_exited`, `persist_failed`, `tasks_trimmed`.
+
+### Desinstalar Controller
+
+```bash
+# 1. Remover bundle MCP
+rm -rf .opencode/mcp/ostacky-controller/
+
+# 2. Remover state files
+rm -f .opencode/ostacky-state.json
+rm -f .opencode/ostacky-state.json.backup
+
+# 3. Remover lock files
+rm -f .opencode/ostacky-state.json.lock*
+
+# 4. Editar opencode.json / opencode.jsonc para remover la entrada "ostacky-controller"
+```
+
+Ostacky automáticamente detecta la ausencia del controller y opera en modo degraded (sin validación de transiciones, sin persistencia de estado, pero con todas las reglas de comportamiento en lenguaje natural).
+
 ---
 
 ## Paso 2 — Skills curadas (bundleadas)
@@ -108,7 +157,16 @@ cp -r assets/skills/brainstorming/* .opencode/skills/brainstorming/
 
 **Set curado (15 skills, referenciado en `assets/agents/ostacky.md`):**
 
-`brainstorming`, `writing-plans`, `tdd`, `review`, `execution-mode-evaluation`, `subagent-driven-development`, `dispatching-parallel-agents`, `openspec-propose`, `openspec-apply-change`, `openspec-archive-change`, `receiving-code-review`, `using-git-worktrees`, `using-superpowers`, `writing-skills`, `graceful-degradation`
+`brainstorming`, `tdd`, `review`, `execution-mode-evaluation`, `subagent-driven-development`, `dispatching-parallel-agents`, `openspec-propose`, `openspec-apply-change`, `openspec-archive-change`, `receiving-code-review`, `using-git-worktrees`, `using-superpowers`, `writing-skills`, `graceful-degradation`
+
+**Fuente de las 5 skills de Superpowers:**
+Las skills `review`, `execution-mode-evaluation`, `subagent-driven-development`, `dispatching-parallel-agents`, `using-superpowers` provienen de `obra/superpowers`:
+
+```
+https://github.com/obra/superpowers/tree/main/skills/<nombre>/SKILL.md
+```
+
+Se copian a `.opencode/skills/<nombre>/` durante la instalación del bundle.
 
 **NO se requiere** el plugin `superpowers@git+...` en `opencode.json`. Las skills viven en `.opencode/skills/` y OpenCode las descubre automáticamente desde ahí.
 
@@ -391,7 +449,6 @@ Cada herramienta se instala en su propia carpeta dentro de `.opencode/` para man
 │   │   └── node_modules/    # Solo fallback de desarrollo
 ├── skills/          # Skills bundleadas (15)
 │   ├── brainstorming/
-│   ├── writing-plans/
 │   ├── tdd/
 │   ├── review/
 │   ├── execution-mode-evaluation/

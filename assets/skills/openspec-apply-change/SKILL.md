@@ -9,7 +9,7 @@ metadata:
   generatedBy: "1.3.1"
 ---
 
-**IMPORTANT:** Engram is an **MCP server**, not a skill. Tools `mem_save`, `mem_search`, `mem_context` are MCP tools. Do NOT use `skill("engram")` — it doesn't exist.
+**IMPORTANT:** Engram is an **MCP server**, not a skill. Tools `engram_mem_save`, `engram_mem_search`, `engram_mem_context` are MCP tools. Do NOT use `skill("engram")` — it doesn't exist.
 
 Implement tasks from an OpenSpec change.
 
@@ -19,7 +19,7 @@ Implement tasks from an OpenSpec change.
 
 1. **Check Engram for past implementation patterns**
 
-   Before implementing, `mem_search` with keywords from the change name and affected modules. Look for:
+   Before implementing, `engram_mem_search` with keywords from the change name and affected modules. Look for:
    - Similar changes implemented before (approaches that worked or failed)
    - Known gotchas or edge cases in related areas
    - Model selection patterns for similar task complexity
@@ -62,7 +62,7 @@ Implement tasks from an OpenSpec change.
 
 5. **Read context files**
 
-   Use **CodeGraph** (`codegraph_explore`) to understand the code structure before reading files directly. Then read every file path listed under `contextFiles` from the apply instructions output.
+   Use **CodeGraph** (`codegraph_codegraph_explore`) to understand the code structure before reading files directly. Then read every file path listed under `contextFiles` from the apply instructions output.
    The files depend on the schema being used:
    - **spec-driven**: proposal, specs, design, tasks
    - Other schemas: follow the contextFiles from CLI output
