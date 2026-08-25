@@ -15,12 +15,26 @@
  */
 
 import type { Plugin } from "@opencode-ai/plugin"
+import { join, dirname, basename } from "path"
+import { readFileSync, writeFileSync, renameSync, mkdirSync } from "fs"
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
 const ENGRAM_PORT = parseInt(process.env.ENGRAM_PORT ?? "7437")
 const ENGRAM_URL = `http://127.0.0.1:${ENGRAM_PORT}`
-const ENGRAM_BIN = process.env.ENGRAM_BIN ?? Bun.which("engram") ?? ".opencode/tools/engram/bin/engram"
+// C3/H2 fix: resolve ENGRAM_BIN per ctx.directory with win32 .exe and absolute fallback
+function resolveEngramBin(directory: string): string {
+  if (process.env.ENGRAM_BIN) {
+    const p = process.env.ENGRAM_BIN
+    const isAbs = p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p)
+    return isAbs ? p : join(directory, p)
+  }
+  const which = Bun.which("engram")
+  if (which) return which
+  const suffix = process.platform === "win32" ? ".exe" : ""
+  return join(directory, ".opencode", "tools", "engram", "bin", `engram${suffix}`)
+}
+// ENGRAM_BIN eliminado: reemplazado por resolveEngramBin(ctx.directory) que maneja .exe+absolutización correctamente
 
 // Engram's own MCP tools — don't count these as "tool calls" for session stats
 const ENGRAM_TOOLS = new Set([
@@ -171,12 +185,12 @@ function extractProjectName(directory: string): string {
     const result = Bun.spawnSync(["git", "-C", directory, "rev-parse", "--show-toplevel"])
     if (result.exitCode === 0) {
       const root = result.stdout?.toString().trim()
-      if (root) return root.split("/").pop() ?? "unknown"
+      if (root) return basename(root.replace(/\\/g, "/")) ?? "unknown"
     }
   } catch {}
 
-  // Final fallback: cwd basename
-  return directory.split("/").pop() ?? "unknown"
+  // Final fallback: cwd basename (cross-platform)
+  return basename(directory.replace(/\\/g, "/")) ?? "unknown"
 }
 
 function truncate(str: string, max: number): string {
@@ -197,7 +211,8 @@ function stripPrivateTags(str: string): string {
 // ─── Plugin Export ───────────────────────────────────────────────────────────
 
 export const Engram: Plugin = async (ctx) => {
-  const oldProject = ctx.directory.split("/").pop() ?? "unknown"
+  // T4: basename multiplataforma — split("/") producía keys basura con backslashes en Windows nativo
+  const oldProject = basename(ctx.directory.replace(/\\/g, "/")) ?? "unknown"
   const project = extractProjectName(ctx.directory)
 
   // Track tool counts per session (in-memory only, not critical)
@@ -236,11 +251,12 @@ export const Engram: Plugin = async (ctx) => {
     })
   }
 
-  // Try to start engram server if not running
+  // Try to start engram server if not running — use per-directory resolved bin (win32 .exe + absolute)
+  const engramBin = resolveEngramBin(ctx.directory)
   const running = await isEngramRunning()
   if (!running) {
     try {
-      Bun.spawn([ENGRAM_BIN, "serve"], {
+      Bun.spawn([engramBin, "serve"], {
         stdout: "ignore",
         stderr: "ignore",
         stdin: "ignore",
@@ -268,7 +284,7 @@ export const Engram: Plugin = async (ctx) => {
     const manifestFile = `${ctx.directory}/.engram/manifest.json`
     const file = Bun.file(manifestFile)
     if (await file.exists()) {
-      Bun.spawn([ENGRAM_BIN, "sync", "--import"], {
+      Bun.spawn([engramBin, "sync", "--import"], {
         cwd: ctx.directory,
         stdout: "ignore",
         stderr: "ignore",
@@ -511,6 +527,64 @@ export const Engram: Plugin = async (ctx) => {
     "experimental.session.compacting": async (input, output) => {
       if (input.sessionID) {
         await ensureSession(input.sessionID)
+      }
+
+      // C3: Compaction fallback file — write directly to same anchor as controller's get_handoff
+      // Resolves statePath from opencode.json (local) or global config, default .opencode/ostacky-state.json
+      try {
+        let statePath: string | null = null
+        // 1) env var if set
+        if (process.env.OSTACKY_STATE_PATH) {
+          statePath = process.env.OSTACKY_STATE_PATH
+        }
+        // 2) try local opencode.json / jsonc in project
+        if (!statePath) {
+          const candidates = [join(ctx.directory, "opencode.json"), join(ctx.directory, "opencode.jsonc")]
+          // also try global config (XDG / APPDATA)
+          try {
+            const home = process.env.HOME ?? process.env.USERPROFILE ?? ""
+            if (home) {
+              const xdg = process.env.XDG_CONFIG_HOME ?? join(home, ".config")
+              candidates.push(join(xdg, "opencode", "opencode.json"))
+              candidates.push(join(xdg, "opencode", "opencode.jsonc"))
+              if (process.platform === "win32" && process.env.APPDATA) {
+                candidates.push(join(process.env.APPDATA, "opencode", "opencode.json"))
+                candidates.push(join(process.env.APPDATA, "opencode", "opencode.jsonc"))
+              }
+            }
+          } catch {}
+          for (const cand of candidates) {
+            try {
+              const raw = readFileSync(cand, "utf-8")
+              // strip // and /* */ comments for jsonc
+              let j = raw
+                .replace(/\/\/.*$/gm, "")
+                .replace(/\/\*[\s\S]*?\*\//g, "")
+                .replace(/,\s*([}\]])/g, "$1")
+              const cfg = JSON.parse(j)
+              const envPath = (cfg as any)?.mcp?.["ostacky-controller"]?.environment?.OSTACKY_STATE_PATH
+              if (typeof envPath === "string" && envPath) {
+                statePath = envPath
+                break
+              }
+            } catch {}
+          }
+        }
+        if (!statePath) statePath = join(ctx.directory, ".opencode", "ostacky-state.json")
+        const fallbackPath = join(dirname(statePath), ".ostacky-handoff-compaction.json")
+        try { mkdirSync(dirname(fallbackPath), { recursive: true }) } catch {}
+        const payload = {
+          summary: `Compaction fallback for session ${input.sessionID ?? "unknown"} — project ${project}`,
+          nextSteps: [] as string[],
+          pendingTasks: [] as string[],
+          ts: Date.now(),
+          contextSnippet: output.context?.slice(0, 2).join("\n\n").slice(0, 1000) ?? "",
+        }
+        const tmp = `${fallbackPath}.tmp.${process.pid}`
+        writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf-8")
+        renameSync(tmp, fallbackPath)
+      } catch {
+        // fallback is best-effort — never crash compacting
       }
 
       // Inject context from previous sessions

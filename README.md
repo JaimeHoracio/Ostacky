@@ -112,10 +112,13 @@ Detecta automáticamente el directorio `.opencode/` del proyecto (o lo crea) y m
 ### Instalar todo
 
 ```bash
-npx ostacky install
+npx ostacky install                 # local por defecto (pregunta si querés global)
+npx ostacky install --scope local   # <proyecto>/.opencode
+npx ostacky install --scope global  # ~/.config/opencode (XDG/APPDATA en Windows)
+npx ostacky install --scope auto    # local si existe .opencode/.git, si no global
 ```
 
-Descarga todos los agentes y commands definidos en el manifest y los escribe en `.opencode/`.
+Descarga todos los agentes y commands definidos en el manifest y los escribe en `.opencode/` (scope `local`) o en `~/.config/opencode` (`global`). Herramientas (`tools/`) siempre quedan en `<proyecto>/.opencode/tools`.
 
 ### Agregar agentes o commands individualmente
 
@@ -218,33 +221,33 @@ Tras instalar, el proyecto queda así:
 
 ```json
 {
-    "version": "0.7.1",
+    "version": "0.7.2",
     "lockedAt": "2025-01-01T00:00:00.000Z",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.7.1",
+    "tag": "v0.7.2",
     "agents": {
         "ostacky": {
-            "version": "0.7.1",
+            "version": "0.7.2",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "abc123..."
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.7.1",
+            "version": "0.7.2",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "def456..."
         },
         "opsx-sync": {
-            "version": "0.7.1",
+            "version": "0.7.2",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "ghi789..."
         }
     },
     "skills": {
-        "brainstorming": { "version": "0.7.1", ... },
-        "execution-mode-evaluation": { "version": "0.7.1", ... },
-        "openspec-propose": { "version": "0.7.1", ... }
+        "brainstorming": { "version": "0.7.2", ... },
+        "execution-mode-evaluation": { "version": "0.7.2", ... },
+        "openspec-propose": { "version": "0.7.2", ... }
     }
 }
 ```
@@ -274,7 +277,7 @@ Es opcional y solo necesario si algo falló durante la instalación o si querés
 ## Seguridad
 
 - `opencode.jsonc` se versiona en el repo para compartir permisos y MCP de forma reproducible.
-- Las URLs de descarga usan **tags de GitHub** (ej. `v0.7.1`), nunca `main` — instalaciones reproducibles
+- Las URLs de descarga usan **tags de GitHub** (ej. `v0.7.2`), nunca `main` — instalaciones reproducibles
 - Cada path de archivo descargado es validado para prevenir **path traversal**
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
 - El cache local (`.opencode/cache/`) también valida integridad al servir archivos cacheados

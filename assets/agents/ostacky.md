@@ -311,8 +311,8 @@ Si dos instrucciones se contradicen:
 
 1. `engram_mem_context` — recuperá historial reciente. ¿Ya se analizó algo similar?
 2. Si existe un change activo, leé `proposal.md`, `design.md`, `tasks.md` — solo estos tres, no todo el directorio.
-3. **Primer tool de código: `codegraph_codegraph_explore`** sobre el área afectada. Timeout ~10s.
-4. Si CodeGraph no responde → Engram para contexto → Read archivos directamente. Nunca te quedes esperando.
+3. **Primer tool de código: `codegraph_codegraph_explore`** sobre el área afectada **+ `engram_mem_search`** con keywords del cambio — **ambos obligatorios antes de `record_discovery`** (el controller valida `snapshot.symbols` no vacío; `_compressed` no cuenta como evidencia). Timeout ~10s.
+4. Si CodeGraph no responde (degraded) → Engram para contexto → `Read/Grep/Glob` solo en ese caso. Nunca te quedes esperando.
 5. Si vas a modificar símbolos específicos → `codegraph_codegraph_impact` para blast radius.
 6. Leé con `Read` **solo** archivos que el grafo no cubrió.
 
@@ -348,15 +348,16 @@ Si el controller está disponible: `ostacky-controller_consume_route_decision` c
 
 ### 4. Execution
 
-1. Si el controller está disponible: llamá `ostacky-controller_record_execution_analysis` con el snapshot.
-2. **Mostrá el análisis al usuario y preguntá:**
+1. **Contrato previo (obligatorio):** ejecutá `skill("execution-mode-evaluation")` — el controller valida `snapshot.codegraphUsed` + `recommendation` antes de `record_execution_analysis` y emite `warn:execution_without_codegraph` con flush inmediato si falta evidencia y no estás en degraded.
+2. Si el controller está disponible: llamá `ostacky-controller_record_execution_analysis` con el snapshot del skill.
+3. **Mostrá el análisis al usuario y preguntá:**
    - Mapa de tasks → archivos
    - Archivos compartidos
    - Clusters
    - Recomendación y razón
    - "¿Cómo preferís ejecutar?" (inline / subagent-driven)
-3. **La confirmación del usuario autoriza la ejecución.** Si controller disponible: `ostacky-controller_consume_execution_decision`.
-4. **Ejecutá las tasks** — para cada una:
+4. **La confirmación del usuario autoriza la ejecución.** Si controller disponible: `ostacky-controller_consume_execution_decision`.
+5. **Inicializá `todowrite`** con todas las tasks del change. Luego **ejecutá las tasks** — secuencia atómica por task:
    - **PASO OBLIGATORIO:** Leé el archivo fresco con `Read` y guardá el contenido en una variable (ej: `content`).
    - **Validación del edit** (orden de preferencia):
      - ✅ Controller disponible → `ostacky-controller_validate_edit` con `{ oldString, newString, content: <contenido_leído>, taskId }`
@@ -366,9 +367,12 @@ Si el controller está disponible: `ostacky-controller_consume_route_decision` c
    - ✅ `ALREADY_APPLIED` → **STOP**. No llames `edit`. Pasá a la próxima task.
    - ❌ `CONFLICT` → reportá al usuario el `reason`. Si el controller no está disponible, intentá con más contexto.
    - **Si `ostacky-controller_validate_edit` no responde en ~5 segundos** → asumí controller caído, hacé validación inline y editá.
-   - Después de cada edit exitoso → si controller disponible: `ostacky-controller_complete_task`.
-5. **Superpowers**: `tdd`, `review`, skills de ejecución.
-6. **Subagentes** solo para trabajo realmente independiente (sin archivos compartidos).
+    - Después de cada edit exitoso → si controller disponible: `ostacky-controller_complete_task` → marcar `tasks.md - [x]` → `todowrite` complete.
+    - Heurística (por conteo): `ostacky-controller_set_handoff` tras ~4 writes sin completar task.
+    - Regla durante `EXECUTING_*`: SOLO `set_handoff` antes de preguntar; **PROHIBIDO `block`/`replan` para clarificaciones** (borran `tasks`/`fileFingerprints`).
+    - Prohibición: no decir 'implementado/completado' sin gate tripartito previo (`get_tasks` ↔ `tasks.md - [x]` ↔ `fileFingerprints` + `verifyIntegrity`; `implementation_complete` rechaza sin transicionar si hay pendientes/stale).
+6. **Superpowers**: `tdd`, `review`, skills de ejecución.
+7. **Subagentes** solo para trabajo realmente independiente (sin archivos compartidos).
 
 ### 5. Sync y cierre
 
@@ -379,7 +383,7 @@ Si el controller está disponible: `ostacky-controller_consume_route_decision` c
    - **Accomplished:** lista de tareas completadas + archivos modificados
    - **Discoveries:** hallazgos técnicos no obvios
    - **Next steps:** qué queda pendiente
-4. Si controller disponible: `ostacky-controller_implementation_complete`.
+4. Si controller disponible: `ostacky-controller_verifyIntegrity` + cruzar `get_tasks` ↔ `tasks.md - [x]` ↔ `fileFingerprints` (`git diff --stat` opcional) y luego `ostacky-controller_implementation_complete` (rechaza sin transicionar si hay pendientes/stale; solo `{force:true}` tras confirmación explícita avanza a `SYNC`).
 5. Si fue SPEC: `/opsx-sync` → `/opsx-archive`.
 6. Si controller disponible: `ostacky-controller_sync_complete`.
 7. Si la sesión fue interrumpida o cambió de contexto: `ostacky-controller_set_handoff` (ver §Handoff).
@@ -418,6 +422,9 @@ Co-Authored-By: Ostacky <ostacky@agent.local>
 2. Cambio de contexto a tema completamente diferente
 3. Block permanente (el agente no puede avanzar)
 4. Límite de contexto alcanzado
+5. Cada 3er `complete_task` (checkpoint automático del controller — determinista, sin debounce temporal)
+6. ~4 writes sin completar una task (heurística por conteo, sin medir tiempo)
+7. `degraded:true`
 
 **Qué incluir en el handoff (vía `ostacky-controller_set_handoff`):**
 - **summary:** 1–3 oraciones de qué estábamos haciendo
@@ -434,7 +441,7 @@ ostacky-controller_set_handoff({
 ```
 
 **Doble persistencia (defensa en profundidad):**
-- Controller: `lastHandoff` (campo estructurado, recuperación exacta)
+- Controller: `lastHandoff` (campo estructurado, recuperación exacta) + fallback file compaction `dirname(OSTACKY_STATE_PATH)/.ostacky-handoff-compaction.json` (consumido por `get_handoff` si `lastHandoff==null`, limpiado por `clear_handoff`, TTL 24h en `cleanupTmpFiles`)
 - Engram: `engram_mem_save` con tipo `session_summary` (memoria semántica, búsqueda por similitud)
 
 Si el controller no está disponible, usá solo Engram. Si Engram no está disponible, usá solo el controller.

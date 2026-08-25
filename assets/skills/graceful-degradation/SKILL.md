@@ -157,6 +157,10 @@ Modo básico: sin validación de edits, sin memoria persistente, sin análisis e
 ¿Continuar o cancelar?
 ```
 
+## Handoff Fallback (compaction)
+
+Si el controller hizo `set_handoff` o el plugin escribió el fallback `dirname(OSTACKY_STATE_PATH)/.ostacky-handoff-compaction.json` antes de compaction, el próximo agente **debe** llamar `get_handoff` al inicio. `get_handoff` primero chequea `lastHandoff` en memoria y si es `null` lee el archivo fallback (mismo ancla que el writer). `clear_handoff` borra ambos. `cleanupTmpFiles` solo borra ese archivo si `ts >24h`. Ver `assets/plugins/engram.ts:experimental.session.compacting` y `assets/mcp/ostacky-controller/index.js:get_handoff`.
+
 ## Recovery After Degradation
 
 When a tool becomes available again during the session:

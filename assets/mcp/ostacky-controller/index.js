@@ -15,8 +15,21 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import * as z from 'zod/v4';
-import { readFileSync, writeFileSync, renameSync, mkdirSync, readdirSync, unlinkSync, statSync } from 'node:fs';
+import {
+    readFileSync,
+    writeFileSync,
+    renameSync,
+    mkdirSync,
+    readdirSync,
+    unlinkSync,
+    statSync,
+    existsSync,
+} from 'node:fs';
 import { dirname, basename, join, resolve } from 'node:path';
+import { writeFile as writeFileAsync, rename as renameAsync, mkdir as mkdirAsync } from 'node:fs/promises';
+
+// T1: non-blocking wait — replaces busy-wait spins that froze the event loop
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // --- Constants (Fase 5.5 — headroom generoso) ---
 const MAX_TASKS = 100;
@@ -133,20 +146,58 @@ function log(event, data) {
 }
 
 /**
- * Cleans up stale .tmp.* and .lock.* files from a previous crash.
+ * Cleans up stale .tmp.* and .lock.* files from a previous crash — C3 fix: never delete active locks of another process.
+ * Also handles orphaned .ostacky-handoff-compaction.json (only if ts>24h).
  */
 function cleanupTmpFiles(statePath) {
     if (!statePath) return;
     const dir = dirname(statePath);
     const name = basename(statePath);
+    const staleWindow = 15000;
+    const handoffTtl = 24 * 60 * 60 * 1000;
     try {
         for (const entry of readdirSync(dir)) {
-            if (entry.startsWith(name + '.tmp.') || entry.startsWith(name + '.lock')) {
+            const isTmp = entry.startsWith(name + '.tmp.');
+            const isLock = entry.startsWith(name + '.lock');
+            const isHandoff = entry === '.ostacky-handoff-compaction.json';
+            if (!isTmp && !isLock && !isHandoff) continue;
+            // C3: don't delete active lock of another process
+            if (isLock) {
                 try {
-                    unlinkSync(join(dir, entry));
+                    const pidPath = join(dir, name + '.lock.pid');
+                    const tsPath = join(dir, name + '.lock.timestamp');
+                    // If we are checking a lock file, verify liveness
+                    let lockPid = null;
+                    let lockTs = null;
+                    try {
+                        lockPid = readFileSync(pidPath, 'utf8').trim();
+                    } catch {}
+                    try {
+                        lockTs = parseInt(readFileSync(tsPath, 'utf8').trim(), 10);
+                    } catch {}
+                    if (lockPid && lockTs && !Number.isNaN(lockTs)) {
+                        const age = Date.now() - lockTs;
+                        if (age < staleWindow && String(lockPid) !== String(process.pid)) {
+                            continue; // active lock of another process — skip
+                        }
+                    }
+                } catch {}
+            }
+            if (isHandoff) {
+                try {
+                    const handoffPath = join(dir, entry);
+                    const raw = readFileSync(handoffPath, 'utf8');
+                    const data = JSON.parse(raw);
+                    const ts = data?.ts ?? data?.timestamp ?? 0;
+                    if (ts && Date.now() - ts < handoffTtl) continue; // keep recent handoff
                 } catch {
-                    /* best-effort */
+                    // If unreadable, treat as stale and delete
                 }
+            }
+            try {
+                unlinkSync(join(dir, entry));
+            } catch {
+                /* best-effort */
             }
         }
     } catch {
@@ -195,6 +246,9 @@ const DEFAULT_STATE = Object.freeze({
     fileFingerprints: {},
     error: null,
     lastHandoff: null, // B2: { ts, summary, nextSteps, pendingTasks } | null
+    expectedTasks: null, // C2: array of taskIds expected for this run (set via record_execution_analysis or set_expected_tasks)
+    expectedTaskCount: null, // C2: count fallback when IDs not available
+    auditSeq: 0, // C1: persistent seq for audit IDs
 });
 
 class OstackyController {
@@ -207,7 +261,7 @@ class OstackyController {
     #lockPath;
     #lockPidPath;
     #lockHeartbeatPath;
-    #lockMaxAttempts = 10; // overridable via opts for fast tests
+    #lockMaxAttempts = 5; // C1: 10→5 with jitter, overridable via opts for fast tests
 
     constructor(opts = {}) {
         this.#statePath = opts.statePath;
@@ -246,48 +300,60 @@ class OstackyController {
         return null; // valid
     }
 
-    // --- 3.4: State file locking ---
-    #acquireLock() {
+    // --- 3.4: State file locking (C1 fix: check stale BEFORE write, atomic wx, jitter, 15s stale, 1s timeout) ---
+    async #acquireLock() {
         if (!this.#lockPath) return true;
-        // Allow tests to shorten retry loops via opts.lockMaxAttempts
         const maxAttempts = this.#lockMaxAttempts;
-        const lockTimeout = 5000;
+        const lockTimeout = 1000;
+        const staleWindow = 15000;
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
             try {
-                writeFileSync(this.#lockPidPath, String(process.pid), 'utf8');
-                writeFileSync(this.#lockHeartbeatPath, String(Date.now()), 'utf8');
-                // Check if lock is stale (>30s without heartbeat)
+                // Check existing lock BEFORE overwriting — corrects mutual-exclusion bug
                 try {
                     const lockContent = readFileSync(this.#lockHeartbeatPath, 'utf8');
                     const lockAge = Date.now() - parseInt(lockContent, 10);
-                    if (lockAge > 30000) {
-                        const lockPid = readFileSync(this.#lockPidPath, 'utf8').trim();
-                        try {
-                            process.kill(parseInt(lockPid, 10), 0); // check if PID alive
-                            // PID exists but lock is stale — wait briefly then force
-                            const waitStart = Date.now();
-                            while (Date.now() - waitStart < 10000) {
-                                /* spin wait */
-                            }
-                        } catch {
-                            // PID doesn't exist — force release
-                        }
-                        this.#releaseLock();
+                    if (!Number.isNaN(lockAge) && lockAge < staleWindow) {
+                        const base = Math.min(lockTimeout, 100 * Math.pow(2, attempt));
+                        const jitter = Math.floor(Math.random() * 200) - 100;
+                        const waitMs = Math.max(0, base + jitter);
+                        if (waitMs > 0) await sleep(waitMs);
                         continue;
                     }
+                    if (!Number.isNaN(lockAge) && lockAge >= staleWindow) {
+                        try {
+                            const lockPid = readFileSync(this.#lockPidPath, 'utf8').trim();
+                            try {
+                                process.kill(parseInt(lockPid, 10), 0);
+                                // PID alive but stale beyond window — force release
+                            } catch {
+                                // PID dead — force release
+                            }
+                        } catch {}
+                        this.#releaseLock();
+                    }
                 } catch {
-                    // Can't read heartbeat — assume stale
-                    this.#releaseLock();
-                    continue;
+                    // No heartbeat file — try to acquire
                 }
+                // Atomic acquire with wx — fails if another process won the race
+                try {
+                    writeFileSync(this.#lockPidPath, String(process.pid), { encoding: 'utf8', flag: 'wx' });
+                } catch (e) {
+                    if (e && e.code === 'EEXIST') {
+                        const base = Math.min(lockTimeout, 100 * Math.pow(2, attempt));
+                        const jitter = Math.floor(Math.random() * 200) - 100;
+                        const waitMs = Math.max(0, base + jitter);
+                        if (waitMs > 0) await sleep(waitMs);
+                        continue;
+                    }
+                    throw e;
+                }
+                writeFileSync(this.#lockHeartbeatPath, String(Date.now()), 'utf8');
                 return true;
             } catch {
-                // Lock held by another process — wait and retry
-                const waitMs = Math.min(lockTimeout, 100 * Math.pow(2, attempt));
-                const waitStart = Date.now();
-                while (Date.now() - waitStart < waitMs) {
-                    /* spin wait */
-                }
+                const base = Math.min(lockTimeout, 100 * Math.pow(2, attempt));
+                const jitter = Math.floor(Math.random() * 200) - 100;
+                const waitMs = Math.max(0, base + jitter);
+                if (waitMs > 0) await sleep(waitMs);
             }
         }
         log('warn:lock_acquire_failed', { attempts: maxAttempts });
@@ -360,12 +426,12 @@ class OstackyController {
         this.#loaded = true;
     }
 
-    #persist() {
+    async #persist() {
         if (!this.#statePath) return;
 
         const dir = dirname(this.#statePath);
         try {
-            mkdirSync(dir, { recursive: true });
+            await mkdirAsync(dir, { recursive: true });
         } catch (err) {
             // mkdir failures also count toward degraded mode
             this.#consecutiveFailures++;
@@ -378,7 +444,7 @@ class OstackyController {
 
         try {
             // 3.4: Acquire lock before writing
-            const lockAcquired = this.#acquireLock();
+            const lockAcquired = await this.#acquireLock();
             if (!lockAcquired) {
                 log('warn:persist_skipped_lock', { state: this.#state.state });
                 throw new Error('Could not acquire state file lock');
@@ -396,12 +462,12 @@ class OstackyController {
                 this.#state.snapshots = { codegraph: null, execution: null };
             }
             const tmp = this.#statePath + '.tmp.' + process.pid;
-            writeFileSync(tmp, serialized, 'utf8');
-            renameSync(tmp, this.#statePath);
+            await writeFileAsync(tmp, serialized, 'utf8');
+            await renameAsync(tmp, this.#statePath);
             try {
                 const backupTmp = this.#statePath + '.backup.tmp.' + process.pid;
-                writeFileSync(backupTmp, serialized, 'utf8');
-                renameSync(backupTmp, this.#statePath + '.backup');
+                await writeFileAsync(backupTmp, serialized, 'utf8');
+                await renameAsync(backupTmp, this.#statePath + '.backup');
             } catch {
                 /* backup is best-effort */
             }
@@ -448,11 +514,11 @@ class OstackyController {
         log('warn:tasks_trimmed', { before: entries.length, after: MAX_TASKS });
     }
 
-    #transition(to, changes = {}) {
+    async #transition(to, changes = {}) {
         this.#state.revision++;
         this.#state.state = to;
         Object.assign(this.#state, changes);
-        this.#persist();
+        await this.#persist();
     }
 
     // --- O4: O(1) transition lookup via pre-computed cache ---
@@ -461,28 +527,44 @@ class OstackyController {
         return ALLOWED_TRANSITIONS[from]?.get(key) || null;
     }
 
-    // --- O5: Batched audit trail ---
-    #audit(phase, decision, reasoning) {
-        this.#auditBuffer.push({ ts: Date.now(), phase, decision, reasoning });
-        if (this.#auditBuffer.length >= 10 || phase === 'DONE') {
-            this.#flushAudit();
+    // --- O5: Batched audit trail (C1: persistent ids + WARN force-flush) ---
+    async #audit(phase, decision, reasoning) {
+        const id = `aud-${Date.now()}-${this.#state.auditSeq++}`;
+        this.#auditBuffer.push({
+            id,
+            ts: Date.now(),
+            phase,
+            decision,
+            reasoning: reasoning ? String(reasoning).slice(0, 300) : undefined,
+        });
+        const isWarn = phase === 'WARN';
+        if (this.#auditBuffer.length >= 10 || phase === 'DONE' || isWarn) {
+            await this.#flushAudit(isWarn);
         }
     }
 
-    #flushAudit() {
+    async #flushAudit(forcePersist = false) {
         if (this.#auditBuffer.length === 0) return;
         if (!this.#state.audit) this.#state.audit = [];
+        for (const e of this.#auditBuffer) {
+            if (!e.id) e.id = `aud-${e.ts}-${this.#state.auditSeq++}`;
+            if (e.reasoning && e.reasoning.length > 300) e.reasoning = e.reasoning.slice(0, 300);
+        }
         this.#state.audit.push(...this.#auditBuffer);
         if (this.#state.audit.length > 100) {
             this.#state.audit = this.#state.audit.slice(-100);
         }
         this.#auditBuffer = [];
-        // O1: Skip persist for trivial Level 0 requests (non-terminal states).
-        // Final persist still happens via #transition() and on DONE/BLOCKED via setupGracefulShutdown.
-        if (this.#state.level === '0' && this.#state.state !== 'DONE' && this.#state.state !== 'BLOCKED') {
+        // O1: Skip persist for trivial Level 0, but WARN always persists (forcePersist)
+        if (
+            !forcePersist &&
+            this.#state.level === '0' &&
+            this.#state.state !== 'DONE' &&
+            this.#state.state !== 'BLOCKED'
+        ) {
             return;
         }
-        this.#persist();
+        await this.#persist();
     }
 
     // --- 3.5: Enriched error with available transitions ---
@@ -542,7 +624,7 @@ class OstackyController {
         if (this.#state.state === 'INTERPRETATION_PENDING' && !requestId) {
             return { state: this.#state.state, revision: this.#state.revision, requestId: this.#state.requestId };
         }
-        this.#transition('INTERPRETATION_PENDING', {
+        await this.#transition('INTERPRETATION_PENDING', {
             requestId: requestId || 'req-' + Date.now(),
             changeId: changeId || null,
             routeDecisionId: null,
@@ -552,9 +634,11 @@ class OstackyController {
             snapshots: { codegraph: null, execution: null },
             tasks: {},
             fileFingerprints: {},
+            expectedTasks: null,
+            expectedTaskCount: null,
             error: null,
         });
-        this.#audit('INTERPRETATION_PENDING', 'start_request', `requestId=${this.#state.requestId}`);
+        await this.#audit('INTERPRETATION_PENDING', 'start_request', `requestId=${this.#state.requestId}`);
         return { state: this.#state.state, revision: this.#state.revision, requestId: this.#state.requestId };
     }
 
@@ -566,8 +650,8 @@ class OstackyController {
                 `Cannot request clarification from state ${this.#state.state}`,
                 'request_clarification'
             );
-        this.#transition(to, { error: question ? `Clarification: ${question}` : null });
-        this.#audit('CLARIFICATION_PENDING', 'request_clarification', question || 'no question');
+        await this.#transition(to, { error: question ? `Clarification: ${question}` : null });
+        await this.#audit('CLARIFICATION_PENDING', 'request_clarification', question || 'no question');
         return { state: this.#state.state, revision: this.#state.revision };
     }
 
@@ -579,8 +663,8 @@ class OstackyController {
                 `Cannot record clarification from state ${this.#state.state}`,
                 'record_clarification'
             );
-        this.#transition(to, { error: null });
-        this.#audit('DISCOVERY', 'record_clarification');
+        await this.#transition(to, { error: null });
+        await this.#audit('DISCOVERY', 'record_clarification');
         return { state: this.#state.state, revision: this.#state.revision };
     }
 
@@ -609,6 +693,11 @@ class OstackyController {
         const to = this.#isAllowedTransition(this.#state.state, 'record_discovery');
         if (!to) return this.#makeError(`Cannot record discovery from state ${this.#state.state}`, 'record_discovery');
 
+        // C2/H3: validate evidence BEFORE compress — _compressed is NOT valid evidence
+        const hasEvidence =
+            snapshot && !snapshot._compressed && Array.isArray(snapshot.symbols) && snapshot.symbols.length > 0;
+        const isTrivial = level === '0';
+
         // O3: Compress snapshot before persisting
         const compressedSnapshot = snapshot
             ? this.#compressCodegraphSnapshot(snapshot)
@@ -622,13 +711,30 @@ class OstackyController {
         }
 
         const defaultChoice = level === '1+' ? 'SPEC' : 'DIRECT';
-        this.#transition(to, {
+        await this.#transition(to, {
             routeDecisionId: routeDecisionId || 'route-' + Date.now(),
             routeChoice: defaultChoice, // O2: persist default suggested choice
             level, // O1: persist level for conditional persistence
             snapshots: { ...this.#state.snapshots, codegraph: compressedSnapshot },
         });
-        this.#audit('LEVEL_RESOLVED', 'record_discovery', `level=${level}, default=${defaultChoice}`);
+        await this.#audit('LEVEL_RESOLVED', 'record_discovery', `level=${level}, default=${defaultChoice}`);
+        // C2: warning if no evidence and not degraded and not trivial
+        if (!hasEvidence && !this.#degraded && !isTrivial) {
+            const auditId = `aud-${Date.now()}-${this.#state.auditSeq}`;
+            log('warn:discovery_without_codegraph', { level, auditId });
+            await this.#audit('WARN', 'discovery_without_codegraph', `level=${level} symbols missing`);
+            // auditId is the last pushed id
+            const lastAudit = this.#state.audit?.[this.#state.audit.length - 1];
+            return {
+                state: this.#state.state,
+                revision: this.#state.revision,
+                level,
+                routeDecisionId: this.#state.routeDecisionId,
+                defaultChoice,
+                warning: 'discovery without codegraph evidence',
+                auditId: lastAudit?.id || auditId,
+            };
+        }
         return {
             state: this.#state.state,
             revision: this.#state.revision,
@@ -642,8 +748,8 @@ class OstackyController {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'proceed_to_route');
         if (!to) return this.#makeError(`Cannot proceed to route from state ${this.#state.state}`, 'proceed_to_route');
-        this.#transition(to);
-        this.#audit('ROUTE_DECISION_PENDING', 'proceed_to_route');
+        await this.#transition(to);
+        await this.#audit('ROUTE_DECISION_PENDING', 'proceed_to_route');
         return { state: this.#state.state, revision: this.#state.revision };
     }
 
@@ -651,8 +757,8 @@ class OstackyController {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'abandon');
         if (!to) return this.#makeError(`Cannot abandon from state ${this.#state.state}`, 'abandon');
-        this.#transition(to, { error: reason || 'Abandoned' });
-        this.#audit('BLOCKED/DONE', 'abandon', reason || 'no reason');
+        await this.#transition(to, { error: reason || 'Abandoned' });
+        await this.#audit('BLOCKED/DONE', 'abandon', reason || 'no reason');
         return { state: this.#state.state, revision: this.#state.revision };
     }
 
@@ -669,8 +775,8 @@ class OstackyController {
         const to = this.#isAllowedTransition(this.#state.state, 'consume_route_decision', choice);
         if (!to)
             return this.#makeError(`Route ${choice} not allowed from ${this.#state.state}`, 'consume_route_decision');
-        this.#transition(to, { routeChoice: choice });
-        this.#audit(to, 'consume_route_decision', `choice=${choice}`);
+        await this.#transition(to, { routeChoice: choice });
+        await this.#audit(to, 'consume_route_decision', `choice=${choice}`);
         return { state: this.#state.state, revision: this.#state.revision, routeChoice: choice };
     }
 
@@ -678,8 +784,8 @@ class OstackyController {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'spec_complete');
         if (!to) return this.#makeError(`Cannot complete spec from state ${this.#state.state}`, 'spec_complete');
-        this.#transition(to);
-        this.#audit('EXECUTION_ANALYSIS', 'spec_complete');
+        await this.#transition(to);
+        await this.#audit('EXECUTION_ANALYSIS', 'spec_complete');
         return { state: this.#state.state, revision: this.#state.revision };
     }
 
@@ -697,12 +803,40 @@ class OstackyController {
                 'record_execution_analysis'
             );
         }
-        this.#transition(to, {
+        // C2: strict contract — recommendation + reasons required
+        if (snapshot && (!snapshot.recommendation || !snapshot.reasons)) {
+            return this.#makeError('Snapshot missing recommendation/reasons', 'record_execution_analysis');
+        }
+        // C2: capture expected tasks for gate
+        const expectedTasks = snapshot?.expectedTaskIds || snapshot?.taskIds || null;
+        const expectedTaskCount = snapshot?.taskCount ?? (Array.isArray(expectedTasks) ? expectedTasks.length : null);
+        await this.#transition(to, {
             executionDecisionId: executionDecisionId || 'exec-' + Date.now(),
             executionMode: null,
             snapshots: { ...this.#state.snapshots, execution: snapshot || null },
+            expectedTasks: Array.isArray(expectedTasks) ? expectedTasks : null,
+            expectedTaskCount: typeof expectedTaskCount === 'number' ? expectedTaskCount : null,
         });
-        this.#audit('EXECUTION_DECISION_PENDING', 'record_execution_analysis');
+        await this.#audit('EXECUTION_DECISION_PENDING', 'record_execution_analysis');
+        // C2: warning if missing codegraphUsed+recommendation and not degraded
+        const hasEvidence =
+            snapshot &&
+            Array.isArray(snapshot.codegraphUsed) &&
+            snapshot.codegraphUsed.length > 0 &&
+            snapshot.recommendation != null;
+        if (snapshot && !hasEvidence && !this.#degraded) {
+            const auditId = `aud-${Date.now()}-${this.#state.auditSeq}`;
+            log('warn:execution_without_codegraph', { auditId });
+            await this.#audit('WARN', 'execution_without_codegraph', 'codegraphUsed/recommendation missing');
+            const lastAudit = this.#state.audit?.[this.#state.audit.length - 1];
+            return {
+                state: this.#state.state,
+                revision: this.#state.revision,
+                executionDecisionId: this.#state.executionDecisionId,
+                warning: 'execution analysis without execution-mode-evaluation',
+                auditId: lastAudit?.id || auditId,
+            };
+        }
         return {
             state: this.#state.state,
             revision: this.#state.revision,
@@ -723,12 +857,12 @@ class OstackyController {
         const to = this.#isAllowedTransition(this.#state.state, 'consume_execution_decision', mode);
         if (!to)
             return this.#makeError(`Mode ${mode} not allowed from ${this.#state.state}`, 'consume_execution_decision');
-        this.#transition(to, { executionMode: mode });
-        this.#audit(to, 'consume_execution_decision', `mode=${mode}`);
+        await this.#transition(to, { executionMode: mode });
+        await this.#audit(to, 'consume_execution_decision', `mode=${mode}`);
         return { state: this.#state.state, revision: this.#state.revision, executionMode: mode };
     }
 
-    async implementationComplete() {
+    async implementationComplete({ force } = {}) {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'implementation_complete');
         if (!to)
@@ -736,19 +870,67 @@ class OstackyController {
                 `Cannot complete implementation from state ${this.#state.state}`,
                 'implementation_complete'
             );
-        this.#transition(to);
-        this.#audit('SYNC', 'implementation_complete');
-        return { state: this.#state.state, revision: this.#state.revision };
+        // C2 gate: check expectedTasks vs completed — do NOT transition if pending and not forced
+        let pending = [];
+        if (Array.isArray(this.#state.expectedTasks) && this.#state.expectedTasks.length > 0) {
+            pending = this.#state.expectedTasks.filter(
+                (id) => !this.#state.tasks[id] || this.#state.tasks[id].status !== 'COMPLETED'
+            );
+        } else if (typeof this.#state.expectedTaskCount === 'number') {
+            const completed = Object.values(this.#state.tasks).filter((t) => t.status === 'COMPLETED').length;
+            if (completed < this.#state.expectedTaskCount)
+                pending = [`${completed}/${this.#state.expectedTaskCount} completed`];
+        }
+        // T3: also block on stale fingerprints-vs-disk
+        let staleFiles = [];
+        try {
+            for (const [taskId, info] of Object.entries(this.#state.tasks || {})) {
+                if (info.status !== 'COMPLETED' || !info.filePath || !info.fileHash) continue;
+                const current = fastFingerprint(info.filePath);
+                if (!current) staleFiles.push(`${taskId}:${info.filePath} (missing)`);
+                else if (current !== info.fileHash) staleFiles.push(`${taskId}:${info.filePath} (stale fingerprint)`);
+            }
+            for (const [fp, stored] of Object.entries(this.#state.fileFingerprints || {})) {
+                if (staleFiles.some((s) => s.includes(fp))) continue;
+                const cur = fastFingerprint(fp);
+                if (!cur) staleFiles.push(`${fp} (missing)`);
+                else if (cur !== stored) staleFiles.push(`${fp} (stale fingerprint)`);
+            }
+        } catch {}
+        const hasBlocking = pending.length > 0 || staleFiles.length > 0;
+        if (hasBlocking && !force) {
+            return {
+                error: staleFiles.length ? 'stale fingerprints' : 'tasks incomplete',
+                pending,
+                staleFiles: staleFiles.length ? staleFiles : undefined,
+                current_state: this.#state.state,
+                attempted_transition: 'implementation_complete',
+                suggestion:
+                    'Complete pending tasks via complete_task or retry with {force:true} after explicit user confirmation',
+            };
+        }
+        if (hasBlocking && force) {
+            const all = [...pending, ...staleFiles].join(',');
+            await this.#audit('FORCE', 'implementation_complete', `forced with pending: ${all}`);
+        }
+        await this.#transition(to);
+        await this.#audit('SYNC', 'implementation_complete');
+        return {
+            state: this.#state.state,
+            revision: this.#state.revision,
+            forced: !!force,
+            pending: pending.length ? pending : undefined,
+        };
     }
 
     async syncComplete() {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'sync_complete');
         if (!to) return this.#makeError(`Cannot complete sync from state ${this.#state.state}`, 'sync_complete');
-        this.#transition(to);
-        this.#audit('DONE', 'sync_complete');
+        await this.#transition(to);
+        await this.#audit('DONE', 'sync_complete');
         // Flush remaining audit entries
-        this.#flushAudit();
+        await this.#flushAudit();
         return { state: this.#state.state, revision: this.#state.revision };
     }
 
@@ -756,8 +938,8 @@ class OstackyController {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'block');
         if (!to) return this.#makeError(`Cannot block from state ${this.#state.state}`, 'block');
-        this.#transition(to, { error: reason || 'Blocked' });
-        this.#audit('BLOCKED', 'block', reason || 'no reason');
+        await this.#transition(to, { error: reason || 'Blocked' });
+        await this.#audit('BLOCKED', 'block', reason || 'no reason');
         return { state: this.#state.state, revision: this.#state.revision };
     }
 
@@ -765,7 +947,7 @@ class OstackyController {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'replan');
         if (!to) return this.#makeError(`Cannot replan from state ${this.#state.state}`, 'replan');
-        this.#transition(to, {
+        await this.#transition(to, {
             error: reason || null,
             routeDecisionId: null,
             routeChoice: null,
@@ -774,9 +956,84 @@ class OstackyController {
             snapshots: { codegraph: null, execution: null },
             tasks: {},
             fileFingerprints: {},
+            expectedTasks: null,
+            expectedTaskCount: null,
         });
-        this.#audit('INTERPRETATION_PENDING', 'replan', reason || 'no reason');
+        await this.#audit('INTERPRETATION_PENDING', 'replan', reason || 'no reason');
         return { state: this.#state.state, revision: this.#state.revision };
+    }
+
+    // --- C2: Expected tasks gate (controller as source of truth) ---
+    async setExpectedTasks({ taskIds, taskCount } = {}) {
+        this.#load();
+        if (Array.isArray(taskIds) && taskIds.length > 0) {
+            this.#state.expectedTasks = [...taskIds];
+            this.#state.expectedTaskCount = taskIds.length;
+        } else if (typeof taskCount === 'number' && taskCount > 0) {
+            this.#state.expectedTasks = null;
+            this.#state.expectedTaskCount = taskCount;
+        } else {
+            return { error: 'taskIds (array) or taskCount (number) required' };
+        }
+        await this.#persist();
+        await this.#audit(
+            'EXECUTING',
+            'set_expected_tasks',
+            `expected=${this.#state.expectedTaskCount ?? this.#state.expectedTasks?.length}`
+        );
+        return { ok: true, expectedTasks: this.#state.expectedTasks, expectedTaskCount: this.#state.expectedTaskCount };
+    }
+
+    async verifyIntegrity() {
+        this.#load();
+        let pending = [];
+        if (Array.isArray(this.#state.expectedTasks) && this.#state.expectedTasks.length > 0) {
+            pending = this.#state.expectedTasks.filter(
+                (id) => !this.#state.tasks[id] || this.#state.tasks[id].status !== 'COMPLETED'
+            );
+        } else if (typeof this.#state.expectedTaskCount === 'number') {
+            const completed = Object.values(this.#state.tasks).filter((t) => t.status === 'COMPLETED').length;
+            if (completed < this.#state.expectedTaskCount)
+                pending = [`${completed}/${this.#state.expectedTaskCount} completed`];
+        }
+        // T3: fingerprints-vs-disk — detect stale/missing files after complete_task
+        let staleFiles = [];
+        try {
+            for (const [taskId, info] of Object.entries(this.#state.tasks || {})) {
+                if (info.status !== 'COMPLETED' || !info.filePath || !info.fileHash) continue;
+                const current = fastFingerprint(info.filePath);
+                if (!current) staleFiles.push(`${taskId}:${info.filePath} (missing)`);
+                else if (current !== info.fileHash) staleFiles.push(`${taskId}:${info.filePath} (stale fingerprint)`);
+            }
+            for (const [fp, stored] of Object.entries(this.#state.fileFingerprints || {})) {
+                if (staleFiles.some((s) => s.includes(fp))) continue;
+                const current = fastFingerprint(fp);
+                if (!current) staleFiles.push(`${fp} (missing)`);
+                else if (current !== stored) staleFiles.push(`${fp} (stale fingerprint)`);
+            }
+        } catch {}
+        const ok = pending.length === 0 && staleFiles.length === 0;
+        return {
+            ok,
+            pending,
+            staleFiles,
+            completed: Object.keys(this.#state.tasks).filter((k) => this.#state.tasks[k].status === 'COMPLETED').length,
+            expected: this.#state.expectedTaskCount ?? this.#state.expectedTasks?.length ?? null,
+            state: this.#state.state,
+        };
+    }
+
+    async getAudit({ limit = 20, offset = 0 } = {}) {
+        this.#load();
+        const all = this.#state.audit || [];
+        const slice = all.slice(Math.max(0, all.length - limit - offset), all.length - offset).reverse();
+        return slice.map((e) => ({
+            id: e.id,
+            ts: e.ts,
+            phase: e.phase,
+            decision: e.decision,
+            reasoning: e.reasoning ? String(e.reasoning).slice(0, 300) : undefined,
+        }));
     }
 
     // --- B2: Handoff persistence for cross-session continuity ---
@@ -791,22 +1048,37 @@ class OstackyController {
             nextSteps: Array.isArray(nextSteps) ? nextSteps : [],
             pendingTasks: Array.isArray(pendingTasks) ? pendingTasks : [],
         };
-        this.#audit('HANDOFF', 'set_handoff', summary.slice(0, 100));
-        this.#persist();
+        await this.#audit('HANDOFF', 'set_handoff', summary.slice(0, 100));
+        await this.#persist();
         return { ok: true, lastHandoff: this.#state.lastHandoff };
     }
 
     async getHandoff() {
         this.#load();
-        return this.#state.lastHandoff;
+        if (this.#state.lastHandoff) return this.#state.lastHandoff;
+        // C3: fallback to compaction file — same anchor as writer (dirname(statePath))
+        if (!this.#statePath) return null;
+        try {
+            const fallbackPath = join(dirname(this.#statePath), '.ostacky-handoff-compaction.json');
+            const raw = readFileSync(fallbackPath, 'utf8');
+            const data = JSON.parse(raw);
+            if (data && typeof data.summary === 'string') return data;
+        } catch {}
+        return null;
     }
 
     async clearHandoff() {
         this.#load();
         const prev = this.#state.lastHandoff;
         this.#state.lastHandoff = null;
-        this.#audit('HANDOFF', 'clear_handoff', prev?.summary?.slice(0, 100) || 'none');
-        this.#persist();
+        // C3: also delete fallback compaction file (same anchor)
+        if (this.#statePath) {
+            try {
+                unlinkSync(join(dirname(this.#statePath), '.ostacky-handoff-compaction.json'));
+            } catch {}
+        }
+        await this.#audit('HANDOFF', 'clear_handoff', prev?.summary?.slice(0, 100) || 'none');
+        await this.#persist();
         return { ok: true, cleared: prev };
     }
 
@@ -898,23 +1170,68 @@ class OstackyController {
             this.#state.fileFingerprints[filePath] = effectiveHash;
         }
         this.#trimTasks();
-        this.#persist();
-        this.#audit('EXECUTING', 'complete_task', `taskId=${taskId}`);
+        const totalCompleted = Object.keys(this.#state.tasks).filter(
+            (k) => this.#state.tasks[k].status === 'COMPLETED'
+        ).length;
+        // C2: checkpoint count-based cada 3er complete_task — mismo persist, sin escritura extra
+        if (totalCompleted % 3 === 0) {
+            const pendingForHandoff = Array.isArray(this.#state.expectedTasks)
+                ? this.#state.expectedTasks.filter(
+                      (id) => !this.#state.tasks[id] || this.#state.tasks[id].status !== 'COMPLETED'
+                  )
+                : [];
+            this.#state.lastHandoff = {
+                ts: Date.now(),
+                summary: `Checkpoint auto: ${totalCompleted} tasks completadas`,
+                nextSteps: pendingForHandoff.length ? [`Continuar con ${pendingForHandoff.join(', ')}`] : [],
+                pendingTasks: pendingForHandoff,
+            };
+        }
+        await this.#persist();
+        await this.#audit('EXECUTING', 'complete_task', `taskId=${taskId}`);
         return {
             taskId,
             status: 'COMPLETED',
-            totalCompleted: Object.keys(this.#state.tasks).filter((k) => this.#state.tasks[k].status === 'COMPLETED')
-                .length,
+            totalCompleted,
         };
     }
 
     /**
-     * Public flush — force-persists current state to disk.
-     * Used by graceful shutdown (private fields not accessible from outside).
+     * Public flush — SYNCHRONOUS on purpose: SIGINT/SIGTERM handlers cannot await
+     * (Node does not wait for async shutdown work). Drains the audit buffer into
+     * state and runs a best-effort sync persist with a single non-spinning lock
+     * attempt; skips persisting if another process currently holds the lock.
      */
     flush() {
-        this.#flushAudit();
-        this.#persist();
+        if (this.#auditBuffer.length > 0 && this.#state) {
+            if (!this.#state.audit) this.#state.audit = [];
+            for (const e of this.#auditBuffer) {
+                if (!e.id) e.id = `aud-${e.ts}-${this.#state.auditSeq++}`;
+            }
+            this.#state.audit.push(...this.#auditBuffer);
+            if (this.#state.audit.length > 100) this.#state.audit = this.#state.audit.slice(-100);
+            this.#auditBuffer = [];
+        }
+        // T1: final persist path kept synchronous for graceful shutdown
+        if (!this.#statePath || !this.#state || !this.#loaded) return;
+        try {
+            try {
+                writeFileSync(this.#lockPidPath, String(process.pid), { encoding: 'utf8', flag: 'wx' });
+            } catch (e) {
+                if (e && e.code === 'EEXIST') return; // another process holds the lock — skip best-effort persist
+                throw e;
+            }
+            try {
+                writeFileSync(this.#lockHeartbeatPath, String(Date.now()), 'utf8');
+            } catch {}
+            const serialized = safeJsonStringify(this.#state, true);
+            const tmp = this.#statePath + '.tmp.' + process.pid;
+            writeFileSync(tmp, serialized, 'utf8');
+            renameSync(tmp, this.#statePath);
+            this.#releaseLock();
+        } catch {
+            /* shutdown persist is best-effort */
+        }
     }
 }
 
@@ -947,7 +1264,7 @@ function safeHandler(fn) {
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.7.1',
+    version: '0.7.2',
 });
 
 server.registerTool(
@@ -1070,12 +1387,18 @@ server.registerTool(
 server.registerTool(
     'implementation_complete',
     {
-        description: 'Mark implementation as complete. Transitions to SYNC.',
-        inputSchema: z.object({}),
+        description:
+            'Mark implementation as complete. Transitions to SYNC. Returns error without transitioning if tasks pending unless {force:true}.',
+        inputSchema: z.object({
+            force: z
+                .boolean()
+                .optional()
+                .describe('Force transition even with pending tasks (requires explicit user confirmation)'),
+        }),
     },
-    safeHandler(async () => {
-        log('tool:implementation_complete');
-        return await controller.implementationComplete();
+    safeHandler(async ({ force }) => {
+        log('tool:implementation_complete', { force: !!force });
+        return await controller.implementationComplete({ force: !!force });
     })
 );
 
@@ -1116,6 +1439,50 @@ server.registerTool(
     safeHandler(async ({ reason }) => {
         log('tool:replan');
         return await controller.replan({ reason });
+    })
+);
+
+server.registerTool(
+    'set_expected_tasks',
+    {
+        description:
+            'Register expected task IDs for the integrity gate (controller as source of truth). Call after execution analysis.',
+        inputSchema: z.object({
+            taskIds: z.array(z.string()).optional().describe('Array of expected task IDs'),
+            taskCount: z.number().optional().describe('Fallback count when IDs not available'),
+        }),
+    },
+    safeHandler(async ({ taskIds, taskCount }) => {
+        log('tool:set_expected_tasks', { count: taskIds?.length ?? taskCount });
+        return await controller.setExpectedTasks({ taskIds, taskCount });
+    })
+);
+
+server.registerTool(
+    'verify_integrity',
+    {
+        description:
+            'Verify execution integrity: compare expectedTasks vs completed tasks. Use before implementation_complete.',
+        inputSchema: z.object({}),
+    },
+    safeHandler(async () => {
+        log('tool:verify_integrity');
+        return await controller.verifyIntegrity();
+    })
+);
+
+server.registerTool(
+    'get_audit',
+    {
+        description: 'Get recent audit entries paginated. Read-only, truncated to 300 chars with unique id per entry.',
+        inputSchema: z.object({
+            limit: z.number().optional().describe('Max entries (default 20)'),
+            offset: z.number().optional().describe('Offset from end (default 0)'),
+        }),
+    },
+    safeHandler(async ({ limit, offset }) => {
+        log('tool:get_audit', { limit, offset });
+        return await controller.getAudit({ limit, offset });
     })
 );
 
@@ -1354,7 +1721,7 @@ function setupGracefulShutdown(ctrl) {
 }
 
 async function main() {
-    log('Starting ostacky-controller MCP v0.7.1...');
+    log('Starting ostacky-controller MCP v0.7.2...');
     log('State path:', { path: statePath });
     // Clean up stale tmp/lock files from previous runs
     cleanupTmpFiles(statePath);
@@ -1374,4 +1741,4 @@ if (isDirectRun) {
     });
 }
 
-export { OstackyController };
+export { OstackyController, STATES, DEFAULT_STATE };

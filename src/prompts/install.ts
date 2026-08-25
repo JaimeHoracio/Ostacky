@@ -16,7 +16,7 @@ import {
   installEngram,
   setupContext7,
 } from "../stack.js";
-import { ensureToolDirs, findBinaryInDir } from "../fs.js";
+import { ensureToolDirs, findBinaryInDir, getGlobalOpenCodeDir } from "../fs.js";
 import { onCancel } from "./helpers.js";
 
 export async function doInstallStack(toolsDir?: string, projectRoot?: string): Promise<boolean> {
@@ -65,7 +65,14 @@ export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths): Pr
   const spin = p.spinner();
   let errors = 0;
 
-  ensureToolDirs(paths.tools, ["codegraph", "engram", "context7"]);
+  // Scope global: tools siempre local, no crear tools globales. Saltar stack global.
+  const isGlobal = paths.root === getGlobalOpenCodeDir() || paths.root.startsWith(getGlobalOpenCodeDir() + "/");
+  if (!isGlobal) {
+    ensureToolDirs(paths.tools, ["codegraph", "engram", "context7"]);
+  } else {
+    p.log.info("Scope global detectado: el stack (CodeGraph/Engram) permanece siempre en <proyecto>/.opencode/tools — se omite instalación de stack global.");
+    p.log.info("Para instalar el stack, ejecutá 'npx ostacky install-stack --scope local' dentro de cada proyecto.");
+  }
 
   for (const agent of manifest.agents) {
     spin.start(`Descargando agente: ${agent.name}  (${agent.version})`);
@@ -117,15 +124,21 @@ export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths): Pr
     }
   }
 
-  p.log.info("Instalando stack de herramientas...");
-  const stackOk = await doInstallStack(paths.tools, dirname(paths.root));
-  if (!stackOk) errors++;
+  let stackOk = true;
+  let missingTools: string[] = [];
+  if (isGlobal) {
+    // En global no instalamos stack — se deja para install local por proyecto
+    stackOk = true;
+  } else {
+    p.log.info("Instalando stack de herramientas...");
+    stackOk = await doInstallStack(paths.tools, dirname(paths.root));
+    if (!stackOk) errors++;
 
-  const missingTools: string[] = [];
-  const codegraphDir = join(paths.tools, "codegraph");
-  const engramDir = join(paths.tools, "engram");
-  if (!existsSync(codegraphDir) || !findBinaryInDir(codegraphDir, "codegraph")) missingTools.push("CodeGraph");
-  if (!existsSync(engramDir) || !findBinaryInDir(engramDir, "engram")) missingTools.push("Engram");
+    const codegraphDir = join(paths.tools, "codegraph");
+    const engramDir = join(paths.tools, "engram");
+    if (!existsSync(codegraphDir) || !findBinaryInDir(codegraphDir, "codegraph")) missingTools.push("CodeGraph");
+    if (!existsSync(engramDir) || !findBinaryInDir(engramDir, "engram")) missingTools.push("Engram");
+  }
 
   if (missingTools.length > 0) {
     p.log.warn(

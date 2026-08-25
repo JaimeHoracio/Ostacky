@@ -12,10 +12,13 @@ import {
   renameSync,
 } from "fs";
 import { createHash } from "crypto";
-import { join, resolve, dirname, relative, basename } from "path";
+import { join, resolve, dirname, relative, basename, win32 } from "path";
 import { execFileSync } from "child_process";
+import { homedir } from "os";
 import { sha256 } from "./security.js";
 import type { OpenCodePaths } from "./types.js";
+
+export type Scope = "local" | "global" | "auto";
 
 export const USER_AGENT = "ostacky-installer";
 
@@ -56,6 +59,60 @@ export function findProjectRoot(startDir: string = process.cwd()): string {
     if (parent === current) return resolve(startDir);
     current = parent;
   }
+}
+
+/**
+ * Global OpenCode config directory (verified empíricamente: `~/.config/opencode` en Unix/WSL,
+ * `%APPDATA%\\opencode` en win32, respeta XDG_CONFIG_HOME).
+ */
+export function getGlobalOpenCodeDir(platform: string = process.platform, home: string = homedir()): string {
+  if (platform === "win32") {
+    const appData = process.env.APPDATA ?? win32.join(home, "AppData", "Roaming");
+    return win32.join(appData, "opencode");
+  }
+  const xdg = process.env.XDG_CONFIG_HOME ?? join(home, ".config");
+  return join(xdg, "opencode");
+}
+
+/**
+ * Resuelve el directorio .opencode según scope.
+ * - local → findOpenCodeDir() || createOpenCodeDir(findProjectRoot())
+ * - global → getGlobalOpenCodeDir()
+ * - auto → local si existe .opencode o .git (prioridad .opencode), si no global
+ */
+export function getOpenCodeDirForScope(scope: Scope, cwd: string = process.cwd()): string {
+  if (scope === "global") return getGlobalOpenCodeDir();
+  if (scope === "local") {
+    const existing = findOpenCodeDir(cwd);
+    if (existing) return existing;
+    return join(findProjectRoot(cwd), ".opencode");
+  }
+  // auto
+  const existing = findOpenCodeDir(cwd);
+  if (existing) return existing;
+  const root = findProjectRoot(cwd);
+  if (existsSync(join(root, ".opencode")) || existsSync(join(root, ".git"))) {
+    return join(root, ".opencode");
+  }
+  return getGlobalOpenCodeDir();
+}
+
+/**
+ * Parsea --scope de argv (soporta --scope local y --scope=local). Retorna null si no está.
+ */
+export function parseScopeArg(argv: string[] = process.argv): Scope | null {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--scope" && i + 1 < argv.length) {
+      const v = argv[i + 1];
+      if (v === "local" || v === "global" || v === "auto") return v;
+    }
+    if (arg.startsWith("--scope=")) {
+      const v = arg.split("=")[1];
+      if (v === "local" || v === "global" || v === "auto") return v as Scope;
+    }
+  }
+  return null;
 }
 
 /**
@@ -287,6 +344,11 @@ export interface CommandInvocation {
 /**
  * Converts Windows `.cmd` shims into an invocation that Node can spawn.
  * `execFile` cannot directly execute npm/npx `.cmd` wrappers on Windows.
+ *
+ * PROHIBIDO aplicar pre-quoting manual (`'"' + arg + '"'`) sobre `command`/args:
+ * `spawn`/`execFileSync` sin shell ya escapa cada argumento vía libuv (CommandLineToArgvW)
+ * y el pre-quoting produce doble escaping `\"...\"` que `cmd.exe` no puede parsear —
+ * rompería el caso con espacios `C:\Users\A B\...`. Mantener invocación por arrays.
  */
 export function getCommandInvocation(
   command: string,
@@ -451,7 +513,7 @@ export async function downloadAndExtract(
   stripComponents: number = 1,
   timeoutMs: number = 180_000
 ): Promise<DirectoryPromotion> {
-  const tmp = join(dirname(destDir), `.${basename(destDir)}.download-${Date.now()}`);
+  const tmp = join(dirname(destDir), `.${basename(destDir)}.download-${Date.now()}-${process.pid}`);
   if (!existsSync(tmp)) mkdirSync(tmp, { recursive: true });
   const archivePath = join(tmp, url.endsWith(".zip") ? "archive.zip" : "archive.tar.gz");
   const extractedDir = join(tmp, "extracted");

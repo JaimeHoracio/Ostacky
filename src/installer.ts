@@ -136,6 +136,7 @@ export async function probeMcpServer(
             let stderr = '';
             let stdoutBuffer = '';
             const requestTimeout = 10_000;
+            let exitTimeout: ReturnType<typeof setTimeout> | undefined;
             const finish = (error?: Error) => {
                 if (settled) return;
                 settled = true;
@@ -143,8 +144,17 @@ export async function probeMcpServer(
                 try {
                     child.stdin?.end();
                 } catch {}
-                if (child.exitCode === null) child.kill();
-                error ? reject(error) : resolve();
+                if (child.exitCode === null) {
+                    const onExit = () => {
+                        if (exitTimeout) clearTimeout(exitTimeout);
+                        error ? reject(error) : resolve();
+                    };
+                    child.once('exit', onExit);
+                    child.kill();
+                    exitTimeout = setTimeout(onExit, 500);
+                } else {
+                    error ? reject(error) : resolve();
+                }
             };
             const fail = (message: string) => finish(new Error(`${message}${stderr ? `: ${stderr.trim()}` : ''}`));
             const send = (message: Record<string, unknown>) => {
@@ -219,13 +229,37 @@ export async function probeMcpServer(
                 params: {
                     protocolVersion: '2025-03-26',
                     capabilities: {},
-                    clientInfo: { name: 'ostacky-installer', version: '0.7.1' },
+                    clientInfo: { name: 'ostacky-installer', version: '0.7.2' },
                 },
             });
         });
     } finally {
-        if (statePath && existsSync(statePath)) rmSync(statePath, { force: true });
-        if (statePath && existsSync(statePath + '.backup')) rmSync(statePath + '.backup', { force: true });
+        // Give controller shutdown handler time to finish (flush recreates file) before cleanup
+        await new Promise((r) => setTimeout(r, 200));
+        if (statePath) {
+            for (const p of [
+                statePath,
+                statePath + '.backup',
+                statePath + '.lock.pid',
+                statePath + '.lock.timestamp',
+                statePath + '.tmp.' + process.pid,
+            ]) {
+                try {
+                    if (existsSync(p)) rmSync(p, { force: true });
+                } catch {}
+            }
+            // Also clean up handoff fallback if created
+            try {
+                const { dirname, join } = await import('path');
+                const handoff = join(dirname(statePath), '.ostacky-handoff-compaction.json');
+                if (existsSync(handoff)) {
+                    // Only delete if it's probe's handoff (recent)
+                    try {
+                        rmSync(handoff, { force: true });
+                    } catch {}
+                }
+            } catch {}
+        }
     }
 }
 

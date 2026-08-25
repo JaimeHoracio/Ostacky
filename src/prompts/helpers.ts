@@ -13,7 +13,11 @@ import {
   createOpenCodeDir,
   ensureOpenCodePaths,
   ensureToolDirs,
+  getGlobalOpenCodeDir,
+  getOpenCodeDirForScope,
+  type Scope,
 } from "../fs.js";
+import { homedir } from "os";
 import {
   readLockfile,
   getInstalledVersion,
@@ -67,31 +71,67 @@ export function printPostInstallSteps(): void {
   );
 }
 
-export async function resolveOpenCodePaths(): Promise<OpenCodePaths | null> {
-  const existing = findOpenCodeDir();
-
-  if (existing) {
-    const paths = ensureOpenCodePaths(existing);
-    p.note(existing, "Directorio .opencode encontrado");
-    return paths;
+export async function resolveOpenCodePaths(scope?: Scope | null): Promise<OpenCodePaths | null> {
+  // Si se pasó scope explícito, resolver sin preguntar (salvo auto que decide solo)
+  if (scope === "local" || scope === "global" || scope === "auto") {
+    const dir = getOpenCodeDirForScope(scope);
+    try {
+      const paths = ensureOpenCodePaths(dir);
+      if (scope === "global") p.note(dir, "Instalación global");
+      else if (scope === "auto") p.note(dir, `Scope auto → ${dir.includes(homedir()) && dir.includes(".config") ? "global" : "local"}`);
+      else p.note(dir, "Instalación local");
+      return paths;
+    } catch (e) {
+      const msg = (e as Error).message ?? "";
+      if (scope === "global" && (msg.includes("EACCES") || msg.includes("permission"))) {
+        p.log.warn(`No se pudo escribir en global (${dir}): ${msg}. ¿Instalar local?`);
+        const retry = await p.confirm({ message: "¿Reintentar como instalación local?" });
+        onCancel(retry);
+        if (retry) {
+          const localDir = getOpenCodeDirForScope("local");
+          return ensureOpenCodePaths(localDir);
+        }
+      }
+      throw e;
+    }
   }
 
-  const projectRoot = findProjectRoot();
-  p.note(
-    `No se encontró .opencode\nRaíz detectada: ${projectRoot}`,
-    "Aviso"
-  );
-
-  const create = await p.confirm({
-    message: "¿Deseas crear la estructura .opencode aquí?",
+  // Sin scope explícito → preguntar al usuario, por defecto local (como pidió el usuario)
+  // Prioridad local a menos que el usuario elija global
+  const cwd = process.cwd();
+  const localDir = getOpenCodeDirForScope("local", cwd);
+  const globalDir = getGlobalOpenCodeDir();
+  const hasLocal = !!findOpenCodeDir(cwd);
+  const scopeChoice = await p.select({
+    message: `¿Instalar en proyecto local (${localDir}) o global (${globalDir})?`,
+    options: [
+      { value: "local" as Scope, label: "Local", hint: `${localDir} (recomendado)` },
+      { value: "global" as Scope, label: "Global", hint: globalDir },
+    ],
+    initialValue: "local" as Scope,
   });
-  onCancel(create);
+  onCancel(scopeChoice);
+  const chosen = scopeChoice as Scope;
+  const dir = getOpenCodeDirForScope(chosen, cwd);
+  try {
+    return ensureOpenCodePaths(dir);
+  } catch (e) {
+    const msg = (e as Error).message ?? "";
+    if (chosen === "global" && (msg.includes("EACCES") || msg.includes("permission"))) {
+      p.log.warn(`No se pudo escribir en global (${dir}): ${msg}.`);
+      const retry = await p.confirm({ message: "¿Instalar local en su lugar?" });
+      onCancel(retry);
+      if (retry) return ensureOpenCodePaths(getOpenCodeDirForScope("local", cwd));
+    }
+    throw e;
+  }
+}
 
-  if (!create) return null;
-
-  const paths = createOpenCodeDir(projectRoot);
-  p.log.success(`Estructura creada en ${paths.root}`);
-  return paths;
+/**
+ * Helper para comandos que ya tienen paths resueltos y solo necesitan validar scope global para install-stack
+ */
+export function isGlobalScope(paths: OpenCodePaths): boolean {
+  return paths.root === getGlobalOpenCodeDir() || paths.root.startsWith(getGlobalOpenCodeDir() + "/");
 }
 
 // ─── Version diff helpers ─────────────────────────────────────────────────────

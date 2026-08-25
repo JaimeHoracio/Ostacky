@@ -1,7 +1,9 @@
 import * as p from "@clack/prompts";
-import { dirname } from "path";
-import { ensureToolDirs } from "../fs.js";
-import { loadManifest, loadLatestManifest, printPostInstallSteps, resolveOpenCodePaths, onCancel } from "./helpers.js";
+import { dirname, join } from "path";
+import { existsSync } from "fs";
+import { ensureToolDirs, getOpenCodeDirForScope } from "../fs.js";
+import type { Scope } from "../fs.js";
+import { loadManifest, loadLatestManifest, printPostInstallSteps, resolveOpenCodePaths, isGlobalScope, onCancel } from "./helpers.js";
 import { doInstallAll, doInstallStack } from "./install.js";
 import { doAddAgent, doAddCommand, doAddSkill, doAddMcp } from "./add.js";
 import { doUpdate } from "./update.js";
@@ -9,11 +11,11 @@ import { doUninstall, doUninstallAgentByName, doUninstallCommandByName, doUninst
 
 export { printPostInstallSteps } from "./helpers.js";
 
-export async function runInteractiveMenu() {
+export async function runInteractiveMenu(scope?: Scope | null) {
   p.intro(" OpenCode Installer ");
 
   const manifest = await loadManifest();
-  const paths = await resolveOpenCodePaths();
+  const paths = await resolveOpenCodePaths(scope ?? null);
 
   if (!paths) {
     p.outro("Instalación cancelada.");
@@ -63,6 +65,12 @@ export async function runInteractiveMenu() {
       p.outro("Listo.");
       break;
     case "stack": {
+      if (isGlobalScope(paths)) {
+        p.log.error("install-stack requiere scope local; el stack vive en <proyecto>/.opencode/tools");
+        p.log.info(`Elegiste global (${paths.root}) — el stack debe instalarse por proyecto local.`);
+        p.outro("Cancelado.");
+        break;
+      }
       ensureToolDirs(paths.tools, ["codegraph", "engram", "context7"]);
       const stackOk = await doInstallStack(paths.tools, dirname(paths.root));
       if (!stackOk) process.exitCode = 1;
@@ -85,59 +93,65 @@ export async function runInteractiveMenu() {
   }
 }
 
-export async function runInstallCommand() {
+export async function runInstallCommand(scope?: Scope | null) {
   p.intro(" OpenCode Installer ");
   const manifest = await loadManifest();
-  const paths = await resolveOpenCodePaths();
+  const paths = await resolveOpenCodePaths(scope ?? null);
   if (!paths) { p.outro("Cancelado."); return; }
   if (!(await doInstallAll(manifest, paths))) process.exitCode = 1;
   printPostInstallSteps();
   p.outro(process.exitCode ? "Instalación parcial." : "Instalación completada.");
 }
 
-export async function runAddAgentCommand() {
+export async function runAddAgentCommand(scope?: Scope | null) {
   p.intro(" OpenCode Installer ");
   const manifest = await loadManifest();
-  const paths = await resolveOpenCodePaths();
+  const paths = await resolveOpenCodePaths(scope ?? null);
   if (!paths) { p.outro("Cancelado."); return; }
   await doAddAgent(manifest, paths);
   printPostInstallSteps();
   p.outro("Listo.");
 }
 
-export async function runAddCommandCommand() {
+export async function runAddCommandCommand(scope?: Scope | null) {
   p.intro(" OpenCode Installer ");
   const manifest = await loadManifest();
-  const paths = await resolveOpenCodePaths();
+  const paths = await resolveOpenCodePaths(scope ?? null);
   if (!paths) { p.outro("Cancelado."); return; }
   await doAddCommand(manifest, paths);
   printPostInstallSteps();
   p.outro("Listo.");
 }
 
-export async function runAddSkillCommand() {
+export async function runAddSkillCommand(scope?: Scope | null) {
   p.intro(" OpenCode Installer ");
   const manifest = await loadManifest();
-  const paths = await resolveOpenCodePaths();
+  const paths = await resolveOpenCodePaths(scope ?? null);
   if (!paths) { p.outro("Cancelado."); return; }
   await doAddSkill(manifest, paths);
   printPostInstallSteps();
   p.outro("Listo.");
 }
 
-export async function runAddMcpCommand() {
+export async function runAddMcpCommand(scope?: Scope | null) {
   p.intro(" OpenCode Installer ");
   const manifest = await loadManifest();
-  const paths = await resolveOpenCodePaths();
+  const paths = await resolveOpenCodePaths(scope ?? null);
   if (!paths) { p.outro("Cancelado."); return; }
   await doAddMcp(manifest, paths);
   printPostInstallSteps();
   p.outro("Listo.");
 }
 
-export async function runInstallStackCommand() {
+export async function runInstallStackCommand(scope?: Scope | null) {
+  if (scope === "global") {
+    p.log.error("install-stack requiere scope local; el stack vive en <proyecto>/.opencode/tools");
+    p.outro("Usá: npx ostacky install-stack --scope local");
+    process.exitCode = 1;
+    return;
+  }
   p.intro(" OpenCode Installer — Stack ");
-  const paths = await resolveOpenCodePaths();
+  const paths = await resolveOpenCodePaths(scope ?? null);
   if (!paths) { p.outro("Cancelado."); return; }
   ensureToolDirs(paths.tools, ["codegraph", "engram", "context7"]);
   const stackOk = await doInstallStack(paths.tools, dirname(paths.root));
@@ -145,9 +159,9 @@ export async function runInstallStackCommand() {
   p.outro(stackOk ? "Stack instalado." : "Stack instalado parcialmente.");
 }
 
-export async function runUninstallStackCommand() {
+export async function runUninstallStackCommand(scope?: Scope | null) {
   p.intro(" OpenCode Installer — Stack ");
-  const paths = await resolveOpenCodePaths();
+  const paths = await resolveOpenCodePaths(scope ?? null);
   if (!paths) { p.outro("Cancelado."); return; }
 
   const confirm = await p.confirm({
@@ -170,26 +184,26 @@ export async function runUninstallStackCommand() {
   p.outro("Stack desinstalado.");
 }
 
-export async function runUpdateCommand() {
+export async function runUpdateCommand(scope?: Scope | null) {
   p.intro(" OpenCode Installer ");
   const manifest = await loadLatestManifest();
-  const paths = await resolveOpenCodePaths();
+  const paths = await resolveOpenCodePaths(scope ?? null);
   if (!paths) { p.outro("Cancelado."); return; }
   await doUpdate(manifest, paths);
   p.outro("Actualización completada.");
 }
 
-export async function runUninstallCommand() {
+export async function runUninstallCommand(scope?: Scope | null) {
   p.intro(" OpenCode Installer ");
-  const paths = await resolveOpenCodePaths();
+  const paths = await resolveOpenCodePaths(scope ?? null);
   if (!paths) { p.outro("Cancelado."); return; }
   await doUninstall(paths);
   p.outro("Desinstalación completada.");
 }
 
-export async function runUninstallAgentCommand(name?: string) {
+export async function runUninstallAgentCommand(name?: string, scope?: Scope | null) {
   p.intro(" OpenCode Installer ");
-  const paths = await resolveOpenCodePaths();
+  const paths = await resolveOpenCodePaths(scope ?? null);
   if (!paths) { p.outro("Cancelado."); return; }
   if (name) {
     await doUninstallAgentByName(name, paths);
@@ -221,9 +235,9 @@ export async function runUninstallAgentCommand(name?: string) {
   p.outro("Listo.");
 }
 
-export async function runUninstallCommandCommand(name?: string) {
+export async function runUninstallCommandCommand(name?: string, scope?: Scope | null) {
   p.intro(" OpenCode Installer ");
-  const paths = await resolveOpenCodePaths();
+  const paths = await resolveOpenCodePaths(scope ?? null);
   if (!paths) { p.outro("Cancelado."); return; }
   if (name) {
     await doUninstallCommandByName(name, paths);
@@ -254,9 +268,9 @@ export async function runUninstallCommandCommand(name?: string) {
   p.outro("Listo.");
 }
 
-export async function runUninstallSkillCommand(name?: string) {
+export async function runUninstallSkillCommand(name?: string, scope?: Scope | null) {
   p.intro(" OpenCode Installer ");
-  const paths = await resolveOpenCodePaths();
+  const paths = await resolveOpenCodePaths(scope ?? null);
   if (!paths) { p.outro("Cancelado."); return; }
   if (name) {
     await doUninstallSkillByName(name, paths);
@@ -287,9 +301,9 @@ export async function runUninstallSkillCommand(name?: string) {
   p.outro("Listo.");
 }
 
-export async function runUninstallMcpCommand(name?: string) {
+export async function runUninstallMcpCommand(name?: string, scope?: Scope | null) {
   p.intro(" OpenCode Installer ");
-  const paths = await resolveOpenCodePaths();
+  const paths = await resolveOpenCodePaths(scope ?? null);
   if (!paths) { p.outro("Cancelado."); return; }
   if (name) {
     await doUninstallMcpByName(name, paths);
