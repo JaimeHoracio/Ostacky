@@ -16,8 +16,8 @@ import {
   installEngram,
   setupContext7,
 } from "../stack.js";
-import { ensureToolDirs, findBinaryInDir, getGlobalOpenCodeDir } from "../fs.js";
-import { onCancel } from "./helpers.js";
+import { ensureToolDirs, findBinaryInDir } from "../fs.js";
+import { onCancel, isGlobalScope } from "./helpers.js";
 
 export async function doInstallStack(toolsDir?: string, projectRoot?: string): Promise<boolean> {
   const spin = p.spinner();
@@ -66,7 +66,7 @@ export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths): Pr
   let errors = 0;
 
   // Scope global: tools siempre local, no crear tools globales. Saltar stack global.
-  const isGlobal = paths.root === getGlobalOpenCodeDir() || paths.root.startsWith(getGlobalOpenCodeDir() + "/");
+  const isGlobal = isGlobalScope(paths);
   if (!isGlobal) {
     ensureToolDirs(paths.tools, ["codegraph", "engram", "context7"]);
   } else {

@@ -75,15 +75,16 @@ export async function resolveOpenCodePaths(scope?: Scope | null): Promise<OpenCo
   // Si se pasó scope explícito, resolver sin preguntar (salvo auto que decide solo)
   if (scope === "local" || scope === "global" || scope === "auto") {
     const dir = getOpenCodeDirForScope(scope);
+    const isGlobalDir = dir.replace(/\\/g, "/") === getGlobalOpenCodeDir().replace(/\\/g, "/");
     try {
       const paths = ensureOpenCodePaths(dir);
       if (scope === "global") p.note(dir, "Instalación global");
-      else if (scope === "auto") p.note(dir, `Scope auto → ${dir.includes(homedir()) && dir.includes(".config") ? "global" : "local"}`);
+      else if (scope === "auto") p.note(dir, `Scope auto → ${isGlobalDir ? "global" : "local"}`);
       else p.note(dir, "Instalación local");
       return paths;
     } catch (e) {
       const msg = (e as Error).message ?? "";
-      if (scope === "global" && (msg.includes("EACCES") || msg.includes("permission"))) {
+      if ((scope === "global" || (scope === "auto" && isGlobalDir)) && (msg.includes("EACCES") || msg.toLowerCase().includes("permission"))) {
         p.log.warn(`No se pudo escribir en global (${dir}): ${msg}. ¿Instalar local?`);
         const retry = await p.confirm({ message: "¿Reintentar como instalación local?" });
         onCancel(retry);
@@ -129,9 +130,12 @@ export async function resolveOpenCodePaths(scope?: Scope | null): Promise<OpenCo
 
 /**
  * Helper para comandos que ya tienen paths resueltos y solo necesitan validar scope global para install-stack
+ * Normaliza separadores para soportar Windows (backslashes) y Unix (slashes).
  */
 export function isGlobalScope(paths: OpenCodePaths): boolean {
-  return paths.root === getGlobalOpenCodeDir() || paths.root.startsWith(getGlobalOpenCodeDir() + "/");
+  const globalDir = getGlobalOpenCodeDir().replace(/\\/g, "/");
+  const root = paths.root.replace(/\\/g, "/");
+  return root === globalDir || root.startsWith(globalDir + "/");
 }
 
 // ─── Version diff helpers ─────────────────────────────────────────────────────

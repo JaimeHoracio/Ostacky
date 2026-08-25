@@ -471,11 +471,12 @@ class OstackyController {
             } catch {
                 /* backup is best-effort */
             }
-            // B1: persist success → reset failure counter
+            // B1: persist success → reset failure counter + auto-exit degraded
             if (this.#consecutiveFailures > 0) {
                 log('info:persist_recovered', { after: this.#consecutiveFailures });
             }
             this.#consecutiveFailures = 0;
+            if (this.#degraded) this.#exitDegradedMode();
         } catch (err) {
             // B1: persist failure → increment counter, auto-degrade if threshold reached
             this.#consecutiveFailures++;
@@ -818,13 +819,13 @@ class OstackyController {
             expectedTaskCount: typeof expectedTaskCount === 'number' ? expectedTaskCount : null,
         });
         await this.#audit('EXECUTION_DECISION_PENDING', 'record_execution_analysis');
-        // C2: warning if missing codegraphUsed+recommendation and not degraded
+        // C2: warning if missing codegraphUsed+recommendation and not degraded — snapshot missing also counts
         const hasEvidence =
             snapshot &&
             Array.isArray(snapshot.codegraphUsed) &&
             snapshot.codegraphUsed.length > 0 &&
             snapshot.recommendation != null;
-        if (snapshot && !hasEvidence && !this.#degraded) {
+        if (!hasEvidence && !this.#degraded) {
             const auditId = `aud-${Date.now()}-${this.#state.auditSeq}`;
             log('warn:execution_without_codegraph', { auditId });
             await this.#audit('WARN', 'execution_without_codegraph', 'codegraphUsed/recommendation missing');
@@ -883,15 +884,17 @@ class OstackyController {
         }
         // T3: also block on stale fingerprints-vs-disk
         let staleFiles = [];
+        const seenFp2 = new Set();
         try {
             for (const [taskId, info] of Object.entries(this.#state.tasks || {})) {
                 if (info.status !== 'COMPLETED' || !info.filePath || !info.fileHash) continue;
                 const current = fastFingerprint(info.filePath);
                 if (!current) staleFiles.push(`${taskId}:${info.filePath} (missing)`);
                 else if (current !== info.fileHash) staleFiles.push(`${taskId}:${info.filePath} (stale fingerprint)`);
+                seenFp2.add(info.filePath);
             }
             for (const [fp, stored] of Object.entries(this.#state.fileFingerprints || {})) {
-                if (staleFiles.some((s) => s.includes(fp))) continue;
+                if (seenFp2.has(fp)) continue;
                 const cur = fastFingerprint(fp);
                 if (!cur) staleFiles.push(`${fp} (missing)`);
                 else if (cur !== stored) staleFiles.push(`${fp} (stale fingerprint)`);
@@ -998,15 +1001,17 @@ class OstackyController {
         }
         // T3: fingerprints-vs-disk — detect stale/missing files after complete_task
         let staleFiles = [];
+        const seenFp = new Set();
         try {
             for (const [taskId, info] of Object.entries(this.#state.tasks || {})) {
                 if (info.status !== 'COMPLETED' || !info.filePath || !info.fileHash) continue;
                 const current = fastFingerprint(info.filePath);
                 if (!current) staleFiles.push(`${taskId}:${info.filePath} (missing)`);
                 else if (current !== info.fileHash) staleFiles.push(`${taskId}:${info.filePath} (stale fingerprint)`);
+                seenFp.add(info.filePath);
             }
             for (const [fp, stored] of Object.entries(this.#state.fileFingerprints || {})) {
-                if (staleFiles.some((s) => s.includes(fp))) continue;
+                if (seenFp.has(fp)) continue;
                 const current = fastFingerprint(fp);
                 if (!current) staleFiles.push(`${fp} (missing)`);
                 else if (current !== stored) staleFiles.push(`${fp} (stale fingerprint)`);

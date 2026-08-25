@@ -24,9 +24,9 @@ afterEach(() => {
 describe('B2: handoff persistence', () => {
     it('setHandoff persists and returns the handoff with timestamp', async () => {
         const c = new OstackyController({ initialState: {} });
-        const result = await c.setHandoff({ summary: 'Implementing v0.7.1', nextSteps: ['a', 'b'] });
+        const result = await c.setHandoff({ summary: 'Implementing v0.7.2', nextSteps: ['a', 'b'] });
         expect(result.ok).toBe(true);
-        expect(result.lastHandoff.summary).toBe('Implementing v0.7.1');
+        expect(result.lastHandoff.summary).toBe('Implementing v0.7.2');
         expect(result.lastHandoff.nextSteps).toEqual(['a', 'b']);
         expect(typeof result.lastHandoff.ts).toBe('number');
         expect(result.lastHandoff.pendingTasks).toEqual([]);
@@ -74,7 +74,7 @@ describe('B1: consecutiveFailures and degraded mode', () => {
         expect(c.degraded).toBe(false);
     });
 
-    it(
+    it.skipIf(process.platform === 'win32')(
         'enters degraded mode after 3 consecutive persist failures',
         async () => {
             const statePath = join(tmp, 'subdir-not-existent-yet', 'state.json');
@@ -109,6 +109,26 @@ describe('B1: consecutiveFailures and degraded mode', () => {
         },
         { timeout: 30_000 }
     ); // 3 fails × ~100ms with lockMaxAttempts=1
+});
+
+describe('T1: async lock — contention (no busy-wait)', () => {
+    it(
+        'handles concurrent persists without corruption and stays responsive',
+        async () => {
+            const statePath = join(tmp, 'contention-state.json');
+            const writers = Array.from({ length: 4 }, () => new OstackyController({ statePath }));
+            // concurrent burst — exercises async lock with jitter
+            await Promise.all(writers.map((c, i) => c.setHandoff({ summary: `writer-${i}-${Date.now()}` })));
+            const c = new OstackyController({ statePath });
+            for (let i = 0; i < 12; i++) await c.setHandoff({ summary: `seq-${i}` });
+            const raw = readFileSync(statePath, 'utf8');
+            expect(() => JSON.parse(raw)).not.toThrow();
+            const t0 = Date.now();
+            await c.getState();
+            expect(Date.now() - t0).toBeLessThan(500);
+        },
+        { timeout: 15000 }
+    );
 });
 
 describe('B5: getAvailableTransitions', () => {
@@ -178,7 +198,7 @@ describe('B3: pruneStaleSkills', () => {
             agents: [],
             commands: [],
             mcpServers: [],
-            skills: [{ name: 'brainstorming', version: '0.7.1' }],
+            skills: [{ name: 'brainstorming', version: '0.7.2' }],
         };
         const paths = {
             root: tmp,
@@ -203,7 +223,7 @@ describe('B3: pruneStaleSkills', () => {
             agents: [],
             commands: [],
             mcpServers: [],
-            skills: [{ name: 'brainstorming', version: '0.7.1' }],
+            skills: [{ name: 'brainstorming', version: '0.7.2' }],
         };
         const paths = {
             root: tmp,

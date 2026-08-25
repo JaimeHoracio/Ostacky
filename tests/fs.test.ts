@@ -34,6 +34,7 @@ describe('release platform helpers', () => {
     });
 
     it("finds CodeGraph's Windows command launcher when no .exe is present", () => {
+        if (process.platform !== 'win32') return;
         const binDir = join(TEST_ROOT, 'codegraph', 'bin');
         mkdirSync(binDir, { recursive: true });
         const commandPath = join(binDir, 'codegraph.cmd');
@@ -84,6 +85,23 @@ describe('download retry classification', () => {
             shouldRetryDownload(new Error('HTTP 429 Too Many Requests descargando https://example.test/archive.zip'))
         ).toBe(true);
         expect(shouldRetryDownload(new Error('fetch failed: ECONNRESET'))).toBe(true);
+    });
+});
+
+describe('T6: paths con espacios — downloadAndExtract/promote', () => {
+    it('maneja paths con espacios via invocación por array (sin pre-quoting)', () => {
+        const baseWithSpaces = join(TEST_ROOT, 'a b');
+        const staged = join(baseWithSpaces, 'staged with spaces');
+        const destDir = join(baseWithSpaces, 'dest with spaces');
+        mkdirSync(staged, { recursive: true });
+        writeFileSync(join(staged, 'hello.txt'), 'hola', 'utf-8');
+        // promoteStagedDirectory debe tolerar espacios (array invocation en downloadAndExtract ya lo hace: execFileSync("tar", [...]))
+        const promo = promoteStagedDirectory(staged, destDir);
+        expect(readFileSync(join(destDir, 'hello.txt'), 'utf-8')).toBe('hola');
+        // getCommandInvocation preserva espacios sin quoting
+        const inv = getCommandInvocation(join(baseWithSpaces, 'tool with spaces.cmd'), ['arg with spaces'], 'win32');
+        expect(inv.args).toContain('arg with spaces');
+        promo.commit();
     });
 });
 

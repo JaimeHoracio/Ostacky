@@ -153,6 +153,13 @@ export async function runInstallStackCommand(scope?: Scope | null) {
   p.intro(" OpenCode Installer — Stack ");
   const paths = await resolveOpenCodePaths(scope ?? null);
   if (!paths) { p.outro("Cancelado."); return; }
+  if (isGlobalScope(paths)) {
+    p.log.error("install-stack requiere scope local; el stack vive en <proyecto>/.opencode/tools");
+    p.log.info(`Scope resuelto a global (${paths.root}) — el stack debe instalarse por proyecto local.`);
+    p.outro("Cancelado.");
+    process.exitCode = 1;
+    return;
+  }
   ensureToolDirs(paths.tools, ["codegraph", "engram", "context7"]);
   const stackOk = await doInstallStack(paths.tools, dirname(paths.root));
   if (!stackOk) process.exitCode = 1;

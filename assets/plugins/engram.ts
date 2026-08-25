@@ -208,6 +208,46 @@ function stripPrivateTags(str: string): string {
   return str.replace(/<private>[\s\S]*?<\/private>/gi, "[REDACTED]").trim()
 }
 
+function stripJsoncComments(text: string): string {
+  let result = ""
+  let i = 0
+  let inString = false
+  while (i < text.length) {
+    const char = text[i]
+    const next = text[i + 1]
+    if (inString) {
+      if (char === "\\") {
+        result += char + (next ?? "")
+        i += 2
+        continue
+      }
+      if (char === '"') inString = false
+      result += char
+      i++
+      continue
+    }
+    if (char === '"') {
+      inString = true
+      result += char
+      i++
+      continue
+    }
+    if (char === "/" && next === "/") {
+      while (i < text.length && text[i] !== "\n") i++
+      continue
+    }
+    if (char === "/" && next === "*") {
+      i += 2
+      while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) i++
+      i += 2
+      continue
+    }
+    result += char
+    i++
+  }
+  return result.replace(/,\s*([}\]])/g, "$1")
+}
+
 // ─── Plugin Export ───────────────────────────────────────────────────────────
 
 export const Engram: Plugin = async (ctx) => {
@@ -556,11 +596,7 @@ export const Engram: Plugin = async (ctx) => {
           for (const cand of candidates) {
             try {
               const raw = readFileSync(cand, "utf-8")
-              // strip // and /* */ comments for jsonc
-              let j = raw
-                .replace(/\/\/.*$/gm, "")
-                .replace(/\/\*[\s\S]*?\*\//g, "")
-                .replace(/,\s*([}\]])/g, "$1")
+              const j = stripJsoncComments(raw)
               const cfg = JSON.parse(j)
               const envPath = (cfg as any)?.mcp?.["ostacky-controller"]?.environment?.OSTACKY_STATE_PATH
               if (typeof envPath === "string" && envPath) {
