@@ -17,6 +17,9 @@ import {
   runUninstallSkillCommand,
   runUninstallMcpCommand,
 } from "./prompts/index.js";
+import { existsSync, statSync, readFileSync } from "node:fs";
+import { join, dirname, resolve } from "node:path";
+import { computeTreeHash, findOpenCodeDir } from "./fs.js";
 
 const HELP = `
 ostacky — Instalador de agentes, comandos, skills y MCPs para OpenCode
@@ -30,6 +33,8 @@ Uso:
   npx ostacky add mcp [--scope ...]            Agregar MCP server(s)
   npx ostacky install-stack [--scope local|auto]      Instalar solo el stack de herramientas (CodeGraph, OpenSpec, Engram, Context7) — global bloquea con error
   npx ostacky uninstall-stack [--scope local|global|auto]    Remover la configuración del stack del proyecto
+  npx ostacky doctor                           Diagnostica locks, tools, state health
+  npx ostacky status [--json]                  Muestra estado del controller sin MCP
   npx ostacky update [--scope ...]             Actualizar instalación
   npx ostacky uninstall [--scope ...]          Desinstalar todo
   npx ostacky uninstall agent [--scope ...]    Desinstalar agente(s)
@@ -73,6 +78,152 @@ function withoutScopeArgs(argv: string[]): string[] {
 const scope = parseScopeArg();
 const argvNoScope = withoutScopeArgs(process.argv);
 const [, , cmd, subcmd] = argvNoScope;
+
+async function runDoctorCommand() {
+  const cwd = process.cwd();
+  const opencodeDir = findOpenCodeDir(cwd) || join(cwd, ".opencode");
+  const statePath = join(opencodeDir, "ostacky-state.json");
+  let hasError = false;
+  let hasWarn = false;
+
+  const check = (label: string, ok: boolean, warn = false) => {
+    if (ok) console.log(`✅ ${label}: OK`);
+    else if (warn) { console.log(`⚠️ ${label}`); hasWarn = true; }
+    else { console.log(`❌ ${label}`); hasError = true; }
+  };
+
+  // controller state
+  try {
+    if (!existsSync(statePath)) {
+      check("controller: state file missing", false, true);
+    } else {
+      const stat = statSync(statePath);
+      const raw = readFileSync(statePath, "utf-8");
+      const parsed = JSON.parse(raw);
+      check(`controller: OK (rev ${parsed.revision || 0} state ${parsed.state || "unknown"})`, true);
+      if (parsed.degraded) { console.log("⚠️ degraded: true (persistido)"); hasWarn = true; }
+      if (parsed.degradedEditsCount > 0) console.log(`⚠️ degraded: confirmation not audited in controller (degradedEditsCount=${parsed.degradedEditsCount})`);
+      if (parsed.codegraphBypassCount > 0) console.log(`⚠️ codegraphBypassCount=${parsed.codegraphBypassCount} (inefficient: codegraph bypass)`);
+      if (parsed.stateOversizedCount > 0) console.log(`⚠️ stateOversizedCount=${parsed.stateOversizedCount} snapshots perdidos`);
+      if (parsed.sensitiveAccess) console.log(`ℹ️ sensitiveAccess: allowed=${parsed.sensitiveAccess.allowed || 0} denied=${parsed.sensitiveAccess.denied || 0} blocked=${parsed.sensitiveAccess.blockedAttempts || 0}`);
+      if (parsed.deniedFiles && Object.keys(parsed.deniedFiles).length) {
+        console.log(`ℹ️ denied files: ${Object.keys(parsed.deniedFiles).join(", ")} (denied by user)`);
+      }
+      if (parsed.staleContentAttempts > 0) console.log(`⚠️ staleContentAttempts=${parsed.staleContentAttempts}`);
+      if (parsed.completeWithoutValidateCount > 0) console.log(`⚠️ completeWithoutValidateCount=${parsed.completeWithoutValidateCount}`);
+      if (stat.size > 2 * 1024 * 1024) { console.log("⚠️ state file >2MB (oversized)"); hasWarn = true; }
+      // audit size
+      const auditSize = (parsed.audit || []).length;
+      if (auditSize > 500) console.log(`⚠️ audit large: ${auditSize}`);
+      // disk free best-effort
+      try {
+        const { statfsSync } = await import("node:fs");
+        if (typeof statfsSync === "function") {
+          const s: any = (statfsSync as any)(dirname(statePath));
+          const freeMB = Math.floor((s.bfree * s.bsize) / (1024 * 1024));
+          if (freeMB < 100) { console.log(`⚠️ Disco casi lleno: ${freeMB}MB libres`); hasWarn = true; }
+          else console.log(`ℹ️ diskFreeMB: ${freeMB}`);
+        }
+      } catch {}
+      // liveness 11.4: detect freeze potential
+      if ((parsed.state === "EXECUTING_INLINE" || parsed.state === "EXECUTING_SUBAGENTS") && parsed.expectedTasks) {
+        const pending = parsed.expectedTasks.filter((id: string) => !parsed.tasks?.[id] || parsed.tasks[id].status !== "COMPLETED").length;
+        const lastHandoffAge = parsed.lastHandoff ? Date.now() - parsed.lastHandoff.ts : Infinity;
+        if (pending === 0 && lastHandoffAge > 60000) {
+          console.log("⚠️ EXECUTING_* con pending==0 y lastHandoff >60s sin progreso — sugerir implementation_complete manual");
+          hasWarn = true;
+        }
+      }
+    }
+  } catch (e) {
+    check(`controller: ${(e as Error).message}`, false);
+  }
+
+  // locks
+  try {
+    const lockPid = join(opencodeDir, "ostacky-state.json.lock.pid");
+    const lockTs = join(opencodeDir, "ostacky-state.json.lock.timestamp");
+    if (existsSync(lockPid) || existsSync(lockTs)) {
+      let ageStr = "";
+      try {
+        const ts = parseInt(readFileSync(lockTs, "utf-8"), 10);
+        const age = Date.now() - ts;
+        ageStr = `${Math.floor(age / 1000)}s`;
+        const pid = readFileSync(lockPid, "utf-8").trim();
+        let alive = false;
+        try { process.kill(parseInt(pid, 10), 0); alive = true; } catch {}
+        check(`lock: PID ${pid} age ${ageStr} alive=${alive}`, !alive || age > 15000, true);
+      } catch {
+        check("lock: exists (no timestamp)", false, true);
+      }
+    } else {
+      check("lock: no active lock", true);
+    }
+  } catch {
+    check("lock: check failed", false, true);
+  }
+
+  // binaries
+  const tools = ["codegraph", "engram"];
+  for (const t of tools) {
+    const p = join(opencodeDir, "tools", t, "bin", t);
+    const pExe = p + ".exe";
+    check(`tool ${t}: ${existsSync(p) || existsSync(pExe) ? "found" : "missing"}`, existsSync(p) || existsSync(pExe), true);
+  }
+
+  // manifest hashes
+  try {
+    const manifest = JSON.parse(readFileSync(join(cwd, "manifest.json"), "utf-8"));
+    const expected = manifest.mcpServers?.find((x: any) => x.name === "ostacky-controller")?.sha256;
+    if (expected) {
+      const actual = computeTreeHash(join(cwd, "assets", "mcp", "ostacky-controller"));
+      check(`manifest hash: ${expected.slice(0, 8)} vs actual ${actual.slice(0, 8)}`, expected === actual);
+      if (expected !== actual) console.log("  Run: bun run hash:update");
+    }
+  } catch {
+    check("manifest: not found", false, true);
+  }
+
+  // sensitive files denied check
+  if (existsSync(statePath)) {
+    try {
+      const s = JSON.parse(readFileSync(statePath, "utf-8"));
+      if (s.allowedFiles || s.deniedFiles) {
+        // already logged above
+      }
+    } catch {}
+  }
+
+  if (hasError) process.exit(1);
+  if (hasWarn) process.exit(0);
+}
+
+async function runStatusCommand(args: string[]) {
+  const isJson = args.includes("--json");
+  const cwd = process.cwd();
+  const opencodeDir = findOpenCodeDir(cwd) || join(cwd, ".opencode");
+  const statePath = join(opencodeDir, "ostacky-state.json");
+  if (!existsSync(statePath)) {
+    console.log(isJson ? JSON.stringify({ error: "no state" }) : "No state file");
+    return;
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(statePath, "utf-8"));
+    const completed = Object.values(parsed.tasks || {}).filter((t: any) => t.status === "COMPLETED").length;
+    const expected = parsed.expectedTaskCount ?? parsed.expectedTasks?.length ?? Object.keys(parsed.tasks || {}).length;
+    const degraded = parsed.degraded ? " degraded" : "";
+    const lastHandoff = parsed.lastHandoff ? ` lastHandoff: ${parsed.lastHandoff.summary?.slice(0, 60)}` : "";
+    if (isJson) {
+      console.log(JSON.stringify({ state: parsed.state, revision: parsed.revision, degraded: !!parsed.degraded, tasks: `${completed}/${expected}`, lastHandoff: parsed.lastHandoff }, null, 2));
+    } else {
+      console.log(`${parsed.state} rev ${parsed.revision}${degraded} tasks ${completed}/${expected}${lastHandoff}`);
+      if (parsed.lastProposal) console.log(`lastProposal: ${parsed.lastProposal.summary} shownToUser=${parsed.lastProposal.shownToUser}`);
+    }
+  } catch (e) {
+    console.log(`Error reading state: ${(e as Error).message}`);
+  }
+}
+
 
 async function main() {
   switch (cmd) {
@@ -133,6 +284,14 @@ async function main() {
         );
         process.exit(1);
       }
+      break;
+
+    case "doctor":
+      await runDoctorCommand();
+      break;
+
+    case "status":
+      await runStatusCommand(argvNoScope.slice(3));
       break;
 
     case "--help":

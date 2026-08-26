@@ -24,9 +24,9 @@ afterEach(() => {
 describe('B2: handoff persistence', () => {
     it('setHandoff persists and returns the handoff with timestamp', async () => {
         const c = new OstackyController({ initialState: {} });
-        const result = await c.setHandoff({ summary: 'Implementing v0.7.2', nextSteps: ['a', 'b'] });
+        const result = await c.setHandoff({ summary: 'Implementing v0.7.3', nextSteps: ['a', 'b'] });
         expect(result.ok).toBe(true);
-        expect(result.lastHandoff.summary).toBe('Implementing v0.7.2');
+        expect(result.lastHandoff.summary).toBe('Implementing v0.7.3');
         expect(result.lastHandoff.nextSteps).toEqual(['a', 'b']);
         expect(typeof result.lastHandoff.ts).toBe('number');
         expect(result.lastHandoff.pendingTasks).toEqual([]);
@@ -198,7 +198,7 @@ describe('B3: pruneStaleSkills', () => {
             agents: [],
             commands: [],
             mcpServers: [],
-            skills: [{ name: 'brainstorming', version: '0.7.2' }],
+            skills: [{ name: 'brainstorming', version: '0.7.3' }],
         };
         const paths = {
             root: tmp,
@@ -223,7 +223,7 @@ describe('B3: pruneStaleSkills', () => {
             agents: [],
             commands: [],
             mcpServers: [],
-            skills: [{ name: 'brainstorming', version: '0.7.2' }],
+            skills: [{ name: 'brainstorming', version: '0.7.3' }],
         };
         const paths = {
             root: tmp,

@@ -45,8 +45,14 @@ export function findOpenCodeDir(startDir: string = process.cwd()): string | null
 /**
  * Finds the project root by walking up and looking for .opencode or .git.
  * Falls back to cwd if neither is found.
+ * Worktree-aware: tries `git rev-parse --show-toplevel` first (each worktree has its own root).
  */
 export function findProjectRoot(startDir: string = process.cwd()): string {
+  // Worktree isolation: git rev-parse gives the correct worktree root
+  try {
+    const out = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf-8", cwd: startDir, stdio: ["pipe", "pipe", "pipe"] }).trim();
+    if (out && existsSync(out)) return resolve(out);
+  } catch {}
   let current = resolve(startDir);
   while (true) {
     if (

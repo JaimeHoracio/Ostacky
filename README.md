@@ -221,33 +221,33 @@ Tras instalar, el proyecto queda así:
 
 ```json
 {
-    "version": "0.7.2",
+    "version": "0.7.3",
     "lockedAt": "2025-01-01T00:00:00.000Z",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.7.2",
+    "tag": "v0.7.3",
     "agents": {
         "ostacky": {
-            "version": "0.7.2",
+            "version": "0.7.3",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "abc123..."
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.7.2",
+            "version": "0.7.3",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "def456..."
         },
         "opsx-sync": {
-            "version": "0.7.2",
+            "version": "0.7.3",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "ghi789..."
         }
     },
     "skills": {
-        "brainstorming": { "version": "0.7.2", ... },
-        "execution-mode-evaluation": { "version": "0.7.2", ... },
-        "openspec-propose": { "version": "0.7.2", ... }
+        "brainstorming": { "version": "0.7.3", ... },
+        "execution-mode-evaluation": { "version": "0.7.3", ... },
+        "openspec-propose": { "version": "0.7.3", ... }
     }
 }
 ```
@@ -277,7 +277,7 @@ Es opcional y solo necesario si algo falló durante la instalación o si querés
 ## Seguridad
 
 - `opencode.jsonc` se versiona en el repo para compartir permisos y MCP de forma reproducible.
-- Las URLs de descarga usan **tags de GitHub** (ej. `v0.7.2`), nunca `main` — instalaciones reproducibles
+- Las URLs de descarga usan **tags de GitHub** (ej. `v0.7.3`), nunca `main` — instalaciones reproducibles
 - Cada path de archivo descargado es validado para prevenir **path traversal**
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
 - El cache local (`.opencode/cache/`) también valida integridad al servir archivos cacheados
@@ -287,6 +287,10 @@ Es opcional y solo necesario si algo falló durante la instalación o si querés
 - La configuración local de OpenCode (`opencode.jsonc`) bloquea lectura y escritura de `*.env` y `.secret/**` con `deny`.
 - La sesión sigue ejecutándose después del bloqueo porque `experimental.continue_loop_on_deny` está activado.
 - Para worktrees, el repo prefiere `.worktrees/` o `worktrees/` (ambos project-local).
+
+#### Aislamiento de worktrees (harness-prod-hardening)
+
+Cada worktree de git tiene su **propio** `ostacky-state.json` aislado (resuelto via `findProjectRoot()` con `git rev-parse --show-toplevel`). Dos worktrees no comparten `statePath`, locks ni backups — 3 agentes en 3 worktrees no corrompen el estado del otro. Ver `assets/skills/using-git-worktrees/SKILL.md` §Ostacky Worktree Isolation y `src/fs.ts:findProjectRoot`.
 
 ## Cache
 

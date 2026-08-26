@@ -170,6 +170,15 @@ When a tool becomes available again during the session:
 3. **Resume:** Switch back to normal workflow
 4. **Catch up:** Use the tool to verify recent work
 
+## Health via get_metrics y doctor (6.2)
+
+- **Con Controller:** usar `get_metrics` como health — expone `degraded`, `diskFreeMB`, `auditSize`, `stateFileSize`, `codegraphBypassCount`, `stateOversizedCount`, `degradedEditsCount`, `sensitiveAccess`. Si `diskFreeMB<100` → ⚠️ Disco casi lleno; si `stateOversizedCount>0` → snapshots perdidos.
+- **Sin Controller:** fallback a `ostacky doctor` (lee `.opencode/ostacky-state.json` sin MCP, verifica locks, tamaños, audit, binarios y `manifest.json` hashes). `doctor` es el fallback a `check:skills` cuando MCP caído.
+- **Sin CodeGraph:** `get_metrics.codegraphBypassCount` incrementa cuando `record_discovery` sin `symbols` y no degraded; `get_audit` marca `inefficient: codegraph bypass` para review.
+- **Sin Engram:** continuar sin memoria; `doctor` no requiere Engram.
+
+No usar `skill("engram")` — Engram es MCP server, no skill. Usar `engram_mem_*` tools.
+
 ## Guardrails
 
 ### During Degradation

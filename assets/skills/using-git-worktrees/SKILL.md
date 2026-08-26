@@ -201,6 +201,14 @@ Ready to implement auth feature
 - Auto-detect and run project setup
 - Verify clean test baseline
 
+## Ostacky Worktree Isolation
+
+Cada worktree de git es **aislado** para Ostacky:
+
+- **State file independiente:** `findProjectRoot()` resuelve el root del worktree vía `git rev-parse --show-toplevel` (cada worktree tiene su propio `.opencode/ostacky-state.json`). Dos worktrees no comparten `statePath`, por lo que `ostacky-controller` no pisa estados entre worktrees.
+- **Lock independiente:** cada worktree tiene su propio `.lock` y `.backup` rotativo, por lo que 3 agentes en 3 worktrees no corrompen el lock del otro.
+- **Verificación:** `tests` con dos tmp dirs simulando worktrees verifican que no comparten `statePath` y que `doctor` reporta OK en cada uno.
+
 ## Integration
 
 **Called by:**

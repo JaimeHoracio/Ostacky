@@ -112,6 +112,7 @@ Para cada fase de `tasks.md`, evaluar intra-fase:
   "reasons": ["razón principal", "razón secundaria"],
   "codegraphUsed": ["codegraph_codegraph_explore"],
   "taskCount": <N>,
+  "expectedTaskIds": ["T1", "T2", "T3"],
   "sharedFiles": { "src/archivo.ts": ["task1", "task2"] },
   "fileClusters": [["task1", "task2"], ["task3"]],
   "clusterCount": <N>,
@@ -123,6 +124,9 @@ Para cada fase de `tasks.md`, evaluar intra-fase:
   "phaseRecommendations": []
 }
 ```
+
+> **Nota 6.1:** `expectedTaskIds` es **obligatorio** cuando `taskCount>0` — el controller lo exige y rechaza snapshot sin él (excepto `early-exit` con `taskCount<=2` y `codegraphUsed:[]` que es válido sin WARN).
+> Ejemplo early-exit válido: `{"recommendation":"INLINE","reasons":["Cambio pequeño"],"codegraphUsed":[],"taskCount":2,"expectedTaskIds":["T1","T2"],"globalRuleTriggered":"early-exit"}`
 
 **Output para el usuario (mostrar en lenguaje natural):**
 
@@ -167,6 +171,8 @@ Para cada fase de `tasks.md`, evaluar intra-fase:
 | `sequentialDeps` | Dependencias secuenciales entre tasks |
 | `estLines` | Estimación conservadora |
 | `hasExplicitContract` | `true` si design.md explicita contratos |
+| `expectedTaskIds` | **Obligatorio** cuando `taskCount>0` — gate del controller |
+| `taskCount` | Total tasks, debe coincidir con `expectedTaskIds.length` |
 
 **⚠️ Este skill provee ANÁLISIS, no autorización.** El coordinador muestra el snapshot al usuario y pide confirmación en lenguaje natural, luego espera la respuesta.
 
@@ -184,6 +190,8 @@ Para cada fase de `tasks.md`, evaluar intra-fase:
 - [ ] Verifiqué deps ENTRE clusters (no solo intra)?
 - [ ] Apliqué reglas en orden (1→2a/2b→3a/3b/3c)?
 - [ ] Anoté `globalRuleTriggered`?
+- [ ] Incluí `expectedTaskIds` (obligatorio cuando `taskCount>0`) y verifiqué que `taskCount == expectedTaskIds.length`?
 - [ ] Si global es inline, ejecuté Paso 3b por fase?
-- [ ] Si global es subagent por clusters (Rule 2b), documenté dispatch?
+- [ ] Si global es subagent por clusters (Rule 2b), documenté dispatch por clusters (máx 3 subagentes, advertir si `clusterCount>3` → oleadas)?
 - [ ] Output es JSON válido con todos los campos del contrato?
+- [ ] Early-exit con `codegraphUsed:[]` y `taskCount<=2` solo cuando realmente es cambio trivial (no genera WARN)?
