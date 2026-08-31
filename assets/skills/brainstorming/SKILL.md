@@ -20,6 +20,7 @@ A thinking partner that adapts to what the user needs: structured design when th
 | "design", "build", "create", "add feature", "implement" | **creative-design** |
 | "explore", "investigate", "think through", "what if", "how does" | **open-explore** |
 | "brainstorm", "ideate", "propose approach" | **creative-design** |
+| "mejor forma", "qué conviene", "tradeoff", "comparar", "diseñar", "arquitectura", "alternativas", "evaluar opciones" | **creative-design** — **hardening-v2**: SHALL invocar skill con CodeGraph+Engram, 2-3 approaches con tabla trade-offs y recomendación |
 | "check", "understand", "review existing" | **open-explore** |
 | Unclear | Ask in natural language: "¿Querés diseñar algo nuevo o explorar/entender algo existente?" |
 
@@ -38,8 +39,8 @@ Do NOT invoke any implementation skill, write any code, or scaffold any project 
 1. **Check Engram** — `engram_mem_search` with keywords from the user's idea. Surface any prior design decisions or similar proposals.
 2. **Explore via CodeGraph** — `codegraph_codegraph_explore` on the affected area. Only `Read` files CodeGraph didn't cover.
 3. **Ask clarifying questions** — one at a time, understand purpose/constraints/success criteria
-4. **Propose 2-3 approaches** — with trade-offs and your recommendation
-5. **Present design** — in sections scaled to complexity, get user approval after each section
+4. **Propose 2-3 approaches (hardening-v2 — SHALL)** — con tabla trade-offs (coste|riesgo|complejidad) + evidencia CodeGraph+Engram (+Context7 si librería) sin alucinar, YAGNI, y recomendación con razón; cada approach cita symbols existentes y mem_search hits verificables
+5. **Present design** — in sections scaled to complexity, get user approval after each section. **Gate post-brainstorming (hardening-v2):** tras presentar diseño, preguntar "¿Procedo con este diseño o querés ajustar algo?" y esperar confirmación explícita antes de `record_discovery`, `openspec-propose` o implementación directa
 6. **Write design doc** — save to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` and commit
 7. **Spec self-review** — check for placeholders, contradictions, ambiguity, scope
 8. **User reviews spec** — ask user to review before proceeding

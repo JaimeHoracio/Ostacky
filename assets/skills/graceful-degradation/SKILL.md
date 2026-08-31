@@ -99,6 +99,9 @@ When controller is unavailable, `check_pending_state` does NOT exist.
 - The enforcement rule in Core Instructions applies ONLY when controller is available
 - In degraded mode, rely on the "Una pregunta por turno" rule directly
 
+**Hard gate de credenciales (hardening-v2 P0):**
+Incluso en degraded, el guard de credenciales sigue activo (hard gate incluso en degraded). `bash`/`read`/`write`/`edit` sobre `.env`, `.secrets`, `*.pem`, `*.key`, `.aws`, `.ssh`, `credentials.json`, `.npmrc` sin `allowedFiles` sigue lanzando `BLOCKED` — nunca uses `bash cat .env` sin `check_file_access → consume ALLOW` auditado (ver `assets/agents/ostacky.md` §Credential Guard).
+
 **Limitations:**
 - No automatic edit validation
 - No task completion tracking

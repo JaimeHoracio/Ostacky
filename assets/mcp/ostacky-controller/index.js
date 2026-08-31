@@ -27,6 +27,7 @@ import {
 } from 'node:fs';
 import { dirname, basename, join, resolve, relative } from 'node:path';
 import { writeFile as writeFileAsync, rename as renameAsync, mkdir as mkdirAsync } from 'node:fs/promises';
+import { SENSITIVE_DEFAULT, BASH_SENSITIVE_RE, isSensitive, extractPathsFromBash } from './security.js';
 
 // T1: non-blocking wait — replaces busy-wait spins that froze the event loop
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -41,11 +42,11 @@ const DEGRADED_THRESHOLD = 3; // consecutive failures before auto-degraded mode
 
 function getMaxTasks() {
     const raw = process.env.OSTACKY_MAX_TASKS;
-    if (raw == null || raw === "") return MAX_TASKS_DEFAULT;
+    if (raw == null || raw === '') return MAX_TASKS_DEFAULT;
     const n = parseInt(raw, 10);
     if (Number.isNaN(n) || n <= 0) return MAX_TASKS_DEFAULT;
     if (n > MAX_TASKS_CAP) {
-        log("warn:max_tasks_capped", { requested: n, capped: MAX_TASKS_CAP });
+        log('warn:max_tasks_capped', { requested: n, capped: MAX_TASKS_CAP });
         return MAX_TASKS_CAP;
     }
     return n;
@@ -100,6 +101,8 @@ function redactSecrets(obj) {
 }
 
 const SENSITIVE_REDACT_RE = /(apiKey|secret|token|password|api_key)/i;
+
+// D1: source-of-truth — src/security.ts (via ./security.js) — isSensitive, SENSITIVE_DEFAULT, BASH_SENSITIVE_RE, extractPathsFromBash imported above
 
 // --- Transition table ---
 const TRANSITIONS = {
@@ -221,7 +224,9 @@ function redactForLog(data) {
             return copy;
         }
         return data;
-    } catch { return data; }
+    } catch {
+        return data;
+    }
 }
 
 function log(eventOrLevel, maybeEventOrData, maybeData) {
@@ -234,10 +239,15 @@ function log(eventOrLevel, maybeEventOrData, maybeData) {
         data = maybeData;
     } else {
         // infer level from prefix
-        if (event.startsWith('warn:')) { level = 'warn'; }
-        else if (event.startsWith('error:')) { level = 'error'; }
-        else if (event.startsWith('info:')) { level = 'info'; }
-        else if (event.startsWith('degraded_')) { level = 'warn'; }
+        if (event.startsWith('warn:')) {
+            level = 'warn';
+        } else if (event.startsWith('error:')) {
+            level = 'error';
+        } else if (event.startsWith('info:')) {
+            level = 'info';
+        } else if (event.startsWith('degraded_')) {
+            level = 'warn';
+        }
     }
     const ts = new Date().toISOString();
     const safeData = redactForLog(data);
@@ -331,6 +341,14 @@ const STATES = Object.freeze({
     BLOCKED: 'BLOCKED',
 });
 
+// States where start_request should reset (not resume) when force=false
+const TERMINAL_STATES = Object.freeze([
+    STATES.INTERPRETATION_PENDING,
+    STATES.CLARIFICATION_PENDING,
+    STATES.BLOCKED,
+    STATES.DONE,
+]);
+
 const DEFAULT_STATE = Object.freeze({
     state: STATES.INTERPRETATION_PENDING,
     revision: 0,
@@ -354,10 +372,22 @@ const DEFAULT_STATE = Object.freeze({
     stateOversizedCount: 0, // 2.3
     codegraphBypassCount: 0, // 6.3 / 3.1
     degradedEditsCount: 0, // 8.5
+    cacheHitCount: 0, // 5.4 hardening-v2
+    cacheMissCount: 0,
+    tokenSavingEstimate: 0,
     lastProposal: null, // 8.1
     allowedFiles: {}, // 9.2
     deniedFiles: {}, // 9.2
-    sensitivePatterns: ['**/.env*', '**/.secrets/**', '**/*.pem', '**/*.key', '**/.aws/**', '**/.ssh/**', '**/credentials.json', '**/.npmrc'], // 9.1
+    sensitivePatterns: [
+        '**/.env*',
+        '**/.secrets/**',
+        '**/*.pem',
+        '**/*.key',
+        '**/.aws/**',
+        '**/.ssh/**',
+        '**/credentials.json',
+        '**/.npmrc',
+    ], // 9.1
     sensitiveAccess: { allowed: 0, denied: 0, blockedAttempts: 0 }, // 9.3
     staleContentAttempts: 0, // 10.4
     completeWithoutValidateCount: 0, // 10.5
@@ -367,6 +397,9 @@ const DEFAULT_STATE = Object.freeze({
     subagentFailedCount: 0, // 10.6
     lastValidated: null, // 10.5 {filePath, hash, ts}
     pendingFileAccess: {}, // 9.2
+    // Heartbeat monitoring for external watchdog (30s stale threshold)
+    lastHeartbeat: 0, // epoch ms, updated on each successful tool completion
+    watchdogEnabled: true, // when false, external watchdog should not restart based on heartbeat
     ts: Date.now(), // for uptime
 });
 
@@ -406,6 +439,18 @@ class OstackyController {
      */
     get degraded() {
         return this.#degraded;
+    }
+
+    /**
+     * Updates the lastHeartbeat timestamp to now.
+     * Called after successful tool completion for external watchdog monitoring.
+     * External watchdog contract: if Date.now() - lastHeartbeat > 30000 and watchdogEnabled === true,
+     * the watchdog should restart the MCP server process.
+     */
+    updateHeartbeat() {
+        if (this.#state) {
+            this.#state.lastHeartbeat = Date.now();
+        }
     }
 
     /**
@@ -468,7 +513,7 @@ class OstackyController {
                     }
                     throw e;
                 }
-                writeFileSync(this.#lockHeartbeatPath, String(Date.now()), 'utf8');
+                this.#heartbeatLock();
                 this.#lockOwner = true;
                 return true;
             } catch {
@@ -532,13 +577,19 @@ class OstackyController {
             const validationError = this.#validateState(parsed);
             if (validationError) throw new Error(`State validation failed: ${validationError}`);
             this.#state = { ...structuredClone(DEFAULT_STATE), ...parsed };
+            let migrated = false;
             if ((parsed.schemaVersion ?? 0) < 1) {
-                let migrated = false;
                 if (typeof this.#state.snapshots?.codegraph === 'string') {
-                    try { this.#state.snapshots.codegraph = JSON.parse(this.#state.snapshots.codegraph); migrated = true; } catch {}
+                    try {
+                        this.#state.snapshots.codegraph = JSON.parse(this.#state.snapshots.codegraph);
+                        migrated = true;
+                    } catch {}
                 }
                 if (typeof this.#state.snapshots?.execution === 'string') {
-                    try { this.#state.snapshots.execution = JSON.parse(this.#state.snapshots.execution); migrated = true; } catch {}
+                    try {
+                        this.#state.snapshots.execution = JSON.parse(this.#state.snapshots.execution);
+                        migrated = true;
+                    } catch {}
                 }
                 if (typeof this.#state.expectedTasks === 'string') {
                     try {
@@ -549,12 +600,29 @@ class OstackyController {
                 }
                 if (Array.isArray(this.#state.audit)) {
                     for (const e of this.#state.audit) {
-                        if (!e.id) { e.id = `aud-${e.ts || Date.now()}-${this.#state.auditSeq++}`; migrated = true; }
+                        if (!e.id) {
+                            e.id = `aud-${e.ts || Date.now()}-${this.#state.auditSeq++}`;
+                            migrated = true;
+                        }
                     }
                 }
                 this.#state.schemaVersion = 1;
                 if (migrated) log('info:schema_migrated', { from: parsed.schemaVersion ?? 0, to: 1 });
             }
+            // Migration for heartbeat fields (added in controller-resilience-improvements)
+            if (this.#state.lastHeartbeat === undefined) {
+                this.#state.lastHeartbeat = 0;
+                migrated = true;
+            }
+            if (this.#state.watchdogEnabled === undefined) {
+                this.#state.watchdogEnabled = true;
+                migrated = true;
+            }
+            if (migrated)
+                log('info:heartbeat_fields_migrated', {
+                    lastHeartbeat: this.#state.lastHeartbeat,
+                    watchdogEnabled: this.#state.watchdogEnabled,
+                });
             this.#degraded = !!this.#state.degraded;
             this.#loaded = true;
             return;
@@ -570,21 +638,49 @@ class OstackyController {
                 const parsed = JSON.parse(raw);
                 const validationError = this.#validateState(parsed);
                 if (validationError) throw new Error(`Backup validation failed: ${validationError}`);
-                this.#state = { ...structuredClone(DEFAULT_STATE), ...parsed, error: suffix === '.backup' ? 'State restored from backup' : `State restored from ${suffix}` };
+                this.#state = {
+                    ...structuredClone(DEFAULT_STATE),
+                    ...parsed,
+                    error: suffix === '.backup' ? 'State restored from backup' : `State restored from ${suffix}`,
+                };
+                let backupMigrated = false;
                 if ((parsed.schemaVersion ?? 0) < 1) {
                     if (typeof this.#state.snapshots?.codegraph === 'string') {
-                        try { this.#state.snapshots.codegraph = JSON.parse(this.#state.snapshots.codegraph); } catch {}
+                        try {
+                            this.#state.snapshots.codegraph = JSON.parse(this.#state.snapshots.codegraph);
+                            backupMigrated = true;
+                        } catch {}
                     }
                     if (typeof this.#state.snapshots?.execution === 'string') {
-                        try { this.#state.snapshots.execution = JSON.parse(this.#state.snapshots.execution); } catch {}
+                        try {
+                            this.#state.snapshots.execution = JSON.parse(this.#state.snapshots.execution);
+                            backupMigrated = true;
+                        } catch {}
                     }
                     if (Array.isArray(this.#state.audit)) {
                         for (const e of this.#state.audit) {
-                            if (!e.id) e.id = `aud-${e.ts || Date.now()}-${this.#state.auditSeq++}`;
+                            if (!e.id) {
+                                e.id = `aud-${e.ts || Date.now()}-${this.#state.auditSeq++}`;
+                                backupMigrated = true;
+                            }
                         }
                     }
                     this.#state.schemaVersion = 1;
                 }
+                // Migration for heartbeat fields in backups
+                if (this.#state.lastHeartbeat === undefined) {
+                    this.#state.lastHeartbeat = 0;
+                    backupMigrated = true;
+                }
+                if (this.#state.watchdogEnabled === undefined) {
+                    this.#state.watchdogEnabled = true;
+                    backupMigrated = true;
+                }
+                if (backupMigrated)
+                    log('info:backup_heartbeat_fields_migrated', {
+                        lastHeartbeat: this.#state.lastHeartbeat,
+                        watchdogEnabled: this.#state.watchdogEnabled,
+                    });
                 this.#degraded = !!this.#state.degraded;
                 log('warn:state_restored_from_backup', { suffix });
                 this.#loaded = true;
@@ -641,7 +737,9 @@ class OstackyController {
                             if (SENSITIVE_REDACT_RE.test(k)) {
                                 obj[k] = '[REDACTED]';
                             } else if (typeof obj[k] === 'string' && SENSITIVE_REDACT_RE.test(obj[k])) {
-                                obj[k] = obj[k].replace(/(apiKey|secret|token|password|api_key)\s*[:=]\s*\S+/gi, '$1=[REDACTED]').replace(/sk-[a-zA-Z0-9_-]+/g, '[REDACTED]');
+                                obj[k] = obj[k]
+                                    .replace(/(apiKey|secret|token|password|api_key)\s*[:=]\s*\S+/gi, '$1=[REDACTED]')
+                                    .replace(/sk-[a-zA-Z0-9_-]+/g, '[REDACTED]');
                                 if (SENSITIVE_REDACT_RE.test(obj[k])) obj[k] = '[REDACTED]';
                             } else if (typeof obj[k] === 'object') {
                                 redactRecursively(obj[k]);
@@ -652,7 +750,9 @@ class OstackyController {
                     if (copy.snapshots) redactRecursively(copy.snapshots);
                     if (copy.audit) copy.audit.forEach(redactRecursively);
                     return copy;
-                } catch { return this.#state; }
+                } catch {
+                    return this.#state;
+                }
             })();
             let serialized = safeJsonStringify(stateForSerialize, true);
             if (serialized.length > MAX_STATE_FILE_SIZE) {
@@ -674,8 +774,12 @@ class OstackyController {
             await renameAsync(tmp, this.#statePath);
             // 2.1: backup rotativo 3 niveles best-effort
             try {
-                try { renameSync(this.#statePath + '.backup.1', this.#statePath + '.backup.2'); } catch {}
-                try { renameSync(this.#statePath + '.backup', this.#statePath + '.backup.1'); } catch {}
+                try {
+                    renameSync(this.#statePath + '.backup.1', this.#statePath + '.backup.2');
+                } catch {}
+                try {
+                    renameSync(this.#statePath + '.backup', this.#statePath + '.backup.1');
+                } catch {}
             } catch {}
             try {
                 const backupTmp = this.#statePath + '.backup.tmp.' + process.pid;
@@ -736,7 +840,11 @@ class OstackyController {
                 return db.localeCompare(da);
             });
             this.#state.tasks = Object.fromEntries(kept.slice(0, limit));
-            log('warn:tasks_trimmed', { before: entries.length, after: limit, preservedExpected: expectedEntries.length });
+            log('warn:tasks_trimmed', {
+                before: entries.length,
+                after: limit,
+                preservedExpected: expectedEntries.length,
+            });
             return;
         }
         const sortedExpected = [...expectedEntries].sort((a, b) => {
@@ -748,7 +856,10 @@ class OstackyController {
         if (needToArchive > 0) {
             for (let i = 0; i < Math.min(needToArchive, sortedExpected.length); i++) {
                 const [taskId] = sortedExpected[i];
-                log('info:task_archived_to_engram', { taskId, topic: `harness/archive/${this.#state.requestId || 'unknown'}-${taskId}` });
+                log('info:task_archived_to_engram', {
+                    taskId,
+                    topic: `harness/archive/${this.#state.requestId || 'unknown'}-${taskId}`,
+                });
             }
             sortedExpected.sort((a, b) => {
                 const da = a[1].completedAt || '';
@@ -789,7 +900,10 @@ class OstackyController {
         if (redactedReasoning && SENSITIVE_REDACT_RE.test(redactedReasoning)) {
             redactedReasoning = redactedReasoning.replace(SENSITIVE_REDACT_RE, '[REDACTED]');
             // also redact values after = if present
-            redactedReasoning = redactedReasoning.replace(/(apiKey|secret|token|password|api_key)\s*[:=]\s*\S+/gi, '$1=[REDACTED]');
+            redactedReasoning = redactedReasoning.replace(
+                /(apiKey|secret|token|password|api_key)\s*[:=]\s*\S+/gi,
+                '$1=[REDACTED]'
+            );
         }
         const id = `aud-${Date.now()}-${this.#state.auditSeq++}`;
         this.#auditBuffer.push({
@@ -881,7 +995,9 @@ class OstackyController {
         if (this.#state) this.#state.degraded = true;
         log('degraded_mode_activated', { reason, state: this.#state?.state });
         if (this.#state && this.#statePath) {
-            try { this.#persist().catch(() => {}); } catch {}
+            try {
+                this.#persist().catch(() => {});
+            } catch {}
         }
     }
 
@@ -892,17 +1008,33 @@ class OstackyController {
         if (this.#state) this.#state.degraded = false;
         log('degraded_mode_exited', { state: this.#state?.state });
         if (this.#state && this.#statePath) {
-            try { this.#persist().catch(() => {}); } catch {}
+            try {
+                this.#persist().catch(() => {});
+            } catch {}
         }
     }
 
     // --- Core transitions ---
 
-    async startRequest({ requestId, changeId } = {}) {
+    async startRequest({ requestId, changeId, force = false } = {}) {
         this.#load();
-        if (this.#state.state === 'INTERPRETATION_PENDING' && !requestId) {
-            return { state: this.#state.state, revision: this.#state.revision, requestId: this.#state.requestId };
+
+        // If not forcing and current state is active (not terminal), resume instead of reset
+        if (!force && !TERMINAL_STATES.includes(this.#state.state) && this.#state.requestId) {
+            await this.#audit(
+                this.#state.state,
+                'start_request',
+                `resumed from ${this.#state.state}, requestId=${this.#state.requestId}`
+            );
+            return {
+                state: this.#state.state,
+                revision: this.#state.revision,
+                requestId: this.#state.requestId,
+                continued: true,
+            };
         }
+
+        // Force reset or terminal state: create new session
         await this.#transition('INTERPRETATION_PENDING', {
             requestId: requestId || 'req-' + Date.now(),
             changeId: changeId || null,
@@ -917,8 +1049,17 @@ class OstackyController {
             expectedTaskCount: null,
             error: null,
         });
-        await this.#audit('INTERPRETATION_PENDING', 'start_request', `requestId=${this.#state.requestId}`);
-        return { state: this.#state.state, revision: this.#state.revision, requestId: this.#state.requestId };
+        await this.#audit(
+            'INTERPRETATION_PENDING',
+            'start_request',
+            `requestId=${this.#state.requestId}${force ? ' (forced)' : ''}`
+        );
+        return {
+            state: this.#state.state,
+            revision: this.#state.revision,
+            requestId: this.#state.requestId,
+            continued: false,
+        };
     }
 
     async requestClarification({ question } = {}) {
@@ -1031,7 +1172,11 @@ class OstackyController {
         if (!shownToUser && !isTrivial) {
             const auditId = `aud-${Date.now()}-${this.#state.auditSeq}`;
             log('warn:proposal_without_transparent_plan', { level, auditId });
-            await this.#audit('WARN', 'proposal_without_transparent_plan', `level=${level} reasoning missing files/estLines`);
+            await this.#audit(
+                'WARN',
+                'proposal_without_transparent_plan',
+                `level=${level} reasoning missing files/estLines`
+            );
             this.#state.lastProposal.shownToUser = false;
             await this.#persist();
             const lastAudit = this.#state.audit?.[this.#state.audit.length - 1];
@@ -1071,7 +1216,14 @@ class OstackyController {
             if (autoTo) {
                 await this.#transition(autoTo, { routeChoice: defaultChoice });
                 await this.#audit(autoTo, 'consume_route_decision', `choice=${defaultChoice} auto-confirm (CI)`);
-                return { state: this.#state.state, revision: this.#state.revision, level, routeDecisionId: this.#state.routeDecisionId, defaultChoice, autoConfirmed: true };
+                return {
+                    state: this.#state.state,
+                    revision: this.#state.revision,
+                    level,
+                    routeDecisionId: this.#state.routeDecisionId,
+                    defaultChoice,
+                    autoConfirmed: true,
+                };
             }
         }
         return {
@@ -1155,10 +1307,16 @@ class OstackyController {
             const hasTaskIds = Array.isArray(snapshot.taskIds) && snapshot.taskIds.length > 0;
             const hasCount = typeof snapshot.taskCount === 'number' && snapshot.taskCount > 0;
             if (!hasExpectedIds && !hasTaskIds && !hasCount) {
-                return this.#makeError('Snapshot missing expectedTaskIds/taskIds/taskCount when taskCount>0', 'record_execution_analysis');
+                return this.#makeError(
+                    'Snapshot missing expectedTaskIds/taskIds/taskCount when taskCount>0',
+                    'record_execution_analysis'
+                );
             }
             if (!hasExpectedIds && !hasTaskIds) {
-                return this.#makeError('Snapshot missing expectedTaskIds or taskIds when taskCount>0', 'record_execution_analysis');
+                return this.#makeError(
+                    'Snapshot missing expectedTaskIds or taskIds when taskCount>0',
+                    'record_execution_analysis'
+                );
             }
         }
         // C2: capture expected tasks for gate
@@ -1169,7 +1327,12 @@ class OstackyController {
         let execShown = false;
         let execFiles = [];
         let execEst = 0;
-        if (snapshot?.reasoning && typeof snapshot.reasoning === 'object' && Array.isArray(snapshot.reasoning.files) && typeof snapshot.reasoning.estLines === 'number') {
+        if (
+            snapshot?.reasoning &&
+            typeof snapshot.reasoning === 'object' &&
+            Array.isArray(snapshot.reasoning.files) &&
+            typeof snapshot.reasoning.estLines === 'number'
+        ) {
             execShown = true;
             execFiles = snapshot.reasoning.files;
             execEst = snapshot.reasoning.estLines;
@@ -1207,7 +1370,11 @@ class OstackyController {
             // Only warn if snapshot was expected to have reasoning (taskCount>2 or not early-exit)
             const auditId2 = `aud-${Date.now()}-${this.#state.auditSeq}`;
             log('warn:proposal_without_transparent_plan', { auditId: auditId2 });
-            await this.#audit('WARN', 'proposal_without_transparent_plan', 'execution reasoning missing files/estLines');
+            await this.#audit(
+                'WARN',
+                'proposal_without_transparent_plan',
+                'execution reasoning missing files/estLines'
+            );
             this.#state.lastProposal.shownToUser = false;
             await this.#persist();
         }
@@ -1233,14 +1400,26 @@ class OstackyController {
             };
         }
         // 8.6: Bypass solo para CI
-        if (process.env.OSTACKY_REQUIRE_CONFIRMATION === 'false' && this.#state.state === 'EXECUTION_DECISION_PENDING') {
+        if (
+            process.env.OSTACKY_REQUIRE_CONFIRMATION === 'false' &&
+            this.#state.state === 'EXECUTION_DECISION_PENDING'
+        ) {
             await this.#audit('AUTO', 'auto-confirm (CI)', `auto-consume for CI`);
-            const defaultMode = snapshot?.recommendation && ['INLINE', 'SUBAGENT_DRIVEN'].includes(snapshot.recommendation) ? snapshot.recommendation : 'INLINE';
+            const defaultMode =
+                snapshot?.recommendation && ['INLINE', 'SUBAGENT_DRIVEN'].includes(snapshot.recommendation)
+                    ? snapshot.recommendation
+                    : 'INLINE';
             const autoTo = this.#isAllowedTransition(this.#state.state, 'consume_execution_decision', defaultMode);
             if (autoTo) {
                 await this.#transition(autoTo, { executionMode: defaultMode });
                 await this.#audit(autoTo, 'consume_execution_decision', `mode=${defaultMode} auto-confirm (CI)`);
-                return { state: this.#state.state, revision: this.#state.revision, executionDecisionId: this.#state.executionDecisionId, executionMode: defaultMode, autoConfirmed: true };
+                return {
+                    state: this.#state.state,
+                    revision: this.#state.revision,
+                    executionDecisionId: this.#state.executionDecisionId,
+                    executionMode: defaultMode,
+                    autoConfirmed: true,
+                };
             }
         }
         return {
@@ -1368,13 +1547,19 @@ class OstackyController {
         await this.#transition(to, { error: reason || 'Blocked' });
         await this.#audit('BLOCKED', 'block', reason || 'no reason');
         if (isExecuting) {
-            await this.#audit('WARN', 'block_from_executing', `block from ${from} preserved tasks: ${Object.keys(this.#state.tasks || {}).length}`);
+            await this.#audit(
+                'WARN',
+                'block_from_executing',
+                `block from ${from} preserved tasks: ${Object.keys(this.#state.tasks || {}).length}`
+            );
         }
         // 10.6: increment subagentFailedCount if block reason indicates subagent failure
         if (reason && /subagent.*failed/i.test(reason)) {
             this.#state.subagentFailedCount = (this.#state.subagentFailedCount || 0) + 1;
             await this.#audit('WARN', 'subagent_failed', reason);
-            try { await this.#persist(); } catch {}
+            try {
+                await this.#persist();
+            } catch {}
         }
         return { state: this.#state.state, revision: this.#state.revision };
     }
@@ -1383,7 +1568,10 @@ class OstackyController {
         this.#load();
         // 1.9: replan desde EXECUTING_* rechazado sin limpiar tasks
         if (this.#state.state === 'EXECUTING_INLINE' || this.#state.state === 'EXECUTING_SUBAGENTS') {
-            return this.#makeError(`Cannot replan from state ${this.#state.state} — replan only from BLOCKED`, 'replan');
+            return this.#makeError(
+                `Cannot replan from state ${this.#state.state} — replan only from BLOCKED`,
+                'replan'
+            );
         }
         const to = this.#isAllowedTransition(this.#state.state, 'replan');
         if (!to) return this.#makeError(`Cannot replan from state ${this.#state.state}`, 'replan');
@@ -1505,16 +1693,23 @@ class OstackyController {
         const completed = Object.values(this.#state.tasks || {}).filter((t) => t.status === 'COMPLETED').length;
         const total = Object.keys(this.#state.tasks || {}).length;
         const pending = Array.isArray(this.#state.expectedTasks)
-            ? this.#state.expectedTasks.filter((id) => !this.#state.tasks[id] || this.#state.tasks[id].status !== 'COMPLETED').length
+            ? this.#state.expectedTasks.filter(
+                  (id) => !this.#state.tasks[id] || this.#state.tasks[id].status !== 'COMPLETED'
+              ).length
             : typeof this.#state.expectedTaskCount === 'number'
-            ? Math.max(0, this.#state.expectedTaskCount - completed)
-            : 0;
+              ? Math.max(0, this.#state.expectedTaskCount - completed)
+              : 0;
         return {
             revision: this.#state.revision,
             state: this.#state.state,
             degraded: this.#degraded || !!this.#state.degraded,
             consecutiveFailures: this.#consecutiveFailures,
-            taskCounts: { completed, pending, total, expected: this.#state.expectedTaskCount ?? this.#state.expectedTasks?.length ?? null },
+            taskCounts: {
+                completed,
+                pending,
+                total,
+                expected: this.#state.expectedTaskCount ?? this.#state.expectedTasks?.length ?? null,
+            },
             expectedTaskCount: this.#state.expectedTaskCount,
             auditSize,
             stateFileSize,
@@ -1523,6 +1718,9 @@ class OstackyController {
             stateOversizedCount: this.#state.stateOversizedCount || 0,
             codegraphBypassCount: this.#state.codegraphBypassCount || 0,
             degradedEditsCount: this.#state.degradedEditsCount || 0,
+            cacheHitCount: this.#state.cacheHitCount || 0,
+            cacheMissCount: this.#state.cacheMissCount || 0,
+            tokenSavingEstimate: this.#state.tokenSavingEstimate || 0,
             sensitiveAccess: this.#state.sensitiveAccess || { allowed: 0, denied: 0, blockedAttempts: 0 },
             subagentFailedCount: this.#state.subagentFailedCount || 0,
             staleContentAttempts: this.#state.staleContentAttempts || 0,
@@ -1537,14 +1735,43 @@ class OstackyController {
         this.#load();
         this.#state.toolTimeoutCount = (this.#state.toolTimeoutCount || 0) + 1;
         this.#state.lastToolDurationMs = 5000;
-        try { await this.#persist(); } catch {}
+        try {
+            await this.#persist();
+        } catch {}
     }
 
     async _recordToolDuration(ms) {
         this.#load();
         this.#state.lastToolDurationMs = ms;
         this.#state.stateDurationMs = Date.now() - (this.#state.ts || Date.now());
-        try { await this.#persist(); } catch {}
+        try {
+            await this.#persist();
+        } catch {}
+    }
+
+    // --- 5.4 hardening-v2: cache metrics (token efficiency) ---
+    async recordCacheHit({ tokensSaved = 500 } = {}) {
+        this.#load();
+        this.#state.cacheHitCount = (this.#state.cacheHitCount || 0) + 1;
+        const saved = typeof tokensSaved === 'number' && tokensSaved > 0 ? tokensSaved : 500;
+        this.#state.tokenSavingEstimate = (this.#state.tokenSavingEstimate || 0) + saved;
+        try {
+            await this.#persist();
+        } catch {}
+        return {
+            ok: true,
+            cacheHitCount: this.#state.cacheHitCount,
+            tokenSavingEstimate: this.#state.tokenSavingEstimate,
+        };
+    }
+
+    async recordCacheMiss() {
+        this.#load();
+        this.#state.cacheMissCount = (this.#state.cacheMissCount || 0) + 1;
+        try {
+            await this.#persist();
+        } catch {}
+        return { ok: true, cacheMissCount: this.#state.cacheMissCount };
     }
 
     async recordUserConfirmation({ decisionId, confirmationText } = {}) {
@@ -1552,37 +1779,23 @@ class OstackyController {
         if (!decisionId || typeof confirmationText !== 'string') {
             return { error: 'decisionId and confirmationText required' };
         }
-        await this.#audit('CONFIRMATION', 'record_user_confirmation', `user confirmed: ${confirmationText} for ${decisionId}`);
+        await this.#audit(
+            'CONFIRMATION',
+            'record_user_confirmation',
+            `user confirmed: ${confirmationText} for ${decisionId}`
+        );
         await this.#flushAudit(true);
         await this.#persist();
         return { ok: true, decisionId, confirmationText, ts: Date.now() };
     }
 
-    // --- D11: Credential guard helpers ---
+    // --- D11: Credential guard helpers — source-of-truth is src/security.ts (hardening-v2 D1) ---
     isSensitiveFile(filePath) {
         if (!filePath) return false;
         this.#load();
-        const lower = (filePath || '').toLowerCase();
-        // allowlist
-        if (lower.endsWith('.env.example') || lower.endsWith('.env.template') || lower.endsWith('.env.sample')) return false;
-        const patterns = (this.#state && this.#state.sensitivePatterns) || DEFAULT_STATE.sensitivePatterns || [];
-        for (const pat of patterns) {
-            if (pat.includes('.env') && lower.split('/').pop().startsWith('.env')) return true;
-            if (pat.includes('.secrets') && lower.includes('.secrets')) return true;
-            if (pat.includes('*.pem') && lower.endsWith('.pem')) return true;
-            if (pat.includes('*.key') && lower.endsWith('.key')) return true;
-            if (pat.includes('.aws') && lower.includes('.aws')) return true;
-            if (pat.includes('.ssh') && lower.includes('.ssh')) return true;
-            if (pat.includes('credentials.json') && lower.endsWith('credentials.json')) return true;
-            if (pat.includes('.npmrc') && lower.endsWith('.npmrc')) return true;
-        }
-        // fallback regex for generic
-        if (/\.(pem|key)$/i.test(filePath)) return true;
-        if (filePath.includes('.env')) {
-            const base = filePath.split('/').pop();
-            if (base.startsWith('.env')) return true;
-        }
-        return false;
+        const patterns =
+            (this.#state && this.#state.sensitivePatterns) || DEFAULT_STATE.sensitivePatterns || SENSITIVE_DEFAULT;
+        return isSensitive(filePath, patterns);
     }
 
     async checkFileAccess({ filePath, reason } = {}) {
@@ -1591,7 +1804,11 @@ class OstackyController {
         if (!this.isSensitiveFile(filePath)) return { allowed: true, reason: 'not sensitive' };
         if (this.#state.allowedFiles?.[filePath]) return { allowed: true, reason: 'previously allowed' };
         if (this.#state.deniedFiles?.[filePath]) {
-            return { error: `BLOCKED: File ${filePath} requires check_file_access (previously denied)`, denied: true, filePath };
+            return {
+                error: `BLOCKED: File ${filePath} requires check_file_access (previously denied)`,
+                denied: true,
+                filePath,
+            };
         }
         const decisionId = `file-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
         if (!this.#state.pendingFileAccess) this.#state.pendingFileAccess = {};
@@ -1606,7 +1823,8 @@ class OstackyController {
     async consumeFileAccessDecision({ decisionId, choice } = {}) {
         this.#load();
         if (!decisionId || !choice) return { error: 'decisionId and choice required' };
-        if (!['ALLOW', 'DENY'].includes(choice)) return { error: 'choice must be ALLOW or DENY', available: ['ALLOW', 'DENY'] };
+        if (!['ALLOW', 'DENY'].includes(choice))
+            return { error: 'choice must be ALLOW or DENY', available: ['ALLOW', 'DENY'] };
         const pending = this.#state.pendingFileAccess?.[decisionId];
         let filePath = pending?.filePath;
         // fallback: if no pending, try to find by decisionId prefix? require filePath param alternative
@@ -1716,13 +1934,18 @@ class OstackyController {
         // 8.5: contar edits en degraded sin confirmación auditada
         if (this.#degraded) {
             this.#state.degradedEditsCount = (this.#state.degradedEditsCount || 0) + 1;
-            try { await this.#persist(); } catch {}
+            try {
+                await this.#persist();
+            } catch {}
         }
         // 10.4: validación de frescura — content debe coincidir con disco si filePath dado
         if (filePath && typeof content === 'string') {
             try {
                 const projectRoot = getProjectRoot(this.#statePath);
-                const absolutePath = filePath.startsWith('/') || /^[A-Za-z]:/.test(filePath) ? resolve(filePath) : resolve(projectRoot, filePath);
+                const absolutePath =
+                    filePath.startsWith('/') || /^[A-Za-z]:/.test(filePath)
+                        ? resolve(filePath)
+                        : resolve(projectRoot, filePath);
                 const diskContent = readFileSync(absolutePath, 'utf8');
                 if (diskContent !== content) {
                     this.#state.staleContentAttempts = (this.#state.staleContentAttempts || 0) + 1;
@@ -1734,6 +1957,27 @@ class OstackyController {
                     // ignore ENOENT (new file), but other errors considered stale
                 }
             }
+        }
+        // 5.3: optimization — si fastFingerprint no cambió, no re-enviar content completo
+        if (
+            (typeof content !== 'string' || content.length === 0) &&
+            filePath &&
+            this.#state.lastValidated?.filePath === filePath
+        ) {
+            try {
+                const projectRoot = getProjectRoot(this.#statePath);
+                const absolutePath =
+                    filePath.startsWith('/') || /^[A-Za-z]:/.test(filePath)
+                        ? resolve(filePath)
+                        : resolve(projectRoot, filePath);
+                const currentHash = fastFingerprint(absolutePath);
+                if (currentHash && currentHash === this.#state.lastValidated.hash) {
+                    try {
+                        const diskContent = readFileSync(absolutePath, 'utf8');
+                        content = diskContent;
+                    } catch {}
+                }
+            } catch {}
         }
         if (typeof content !== 'string' || typeof oldString !== 'string' || typeof newString !== 'string') {
             return { outcome: 'CONFLICT', reason: 'Missing required fields: content, oldString, newString' };
@@ -1773,7 +2017,11 @@ class OstackyController {
         // 10.5: ligadura validate → complete
         try {
             const projectRoot = getProjectRoot(this.#statePath);
-            const absolutePath = filePath ? (filePath.startsWith('/') || /^[A-Za-z]:/.test(filePath) ? resolve(filePath) : resolve(projectRoot, filePath)) : null;
+            const absolutePath = filePath
+                ? filePath.startsWith('/') || /^[A-Za-z]:/.test(filePath)
+                    ? resolve(filePath)
+                    : resolve(projectRoot, filePath)
+                : null;
             const hash = absolutePath ? fastFingerprint(absolutePath) : null;
             this.#state.lastValidated = { filePath: filePath || null, hash, ts: Date.now() };
             await this.#persist();
@@ -1813,7 +2061,11 @@ class OstackyController {
         // 10.5: ligadura validate → complete — WARN si no hubo validate previo
         if (!this.#state.lastValidated || (filePath && this.#state.lastValidated.filePath !== filePath)) {
             this.#state.completeWithoutValidateCount = (this.#state.completeWithoutValidateCount || 0) + 1;
-            await this.#audit('WARN', 'complete_without_validate', `complete_task without prior validate_edit for ${filePath || taskId}`);
+            await this.#audit(
+                'WARN',
+                'complete_without_validate',
+                `complete_task without prior validate_edit for ${filePath || taskId}`
+            );
         } else {
             this.#state.lastValidated = null;
         }
@@ -1841,11 +2093,17 @@ class OstackyController {
                   )
                 : [];
             const existing = this.#state.lastHandoff;
-            const isRecentManual = existing && (Date.now() - existing.ts < 60000) && existing.summary && !existing.summary.startsWith('Checkpoint auto');
+            const isRecentManual =
+                existing &&
+                Date.now() - existing.ts < 60000 &&
+                existing.summary &&
+                !existing.summary.startsWith('Checkpoint auto');
             let shouldOverwrite = true;
             if (isRecentManual) {
                 const existingPending = existing.pendingTasks || [];
-                const isDistinct = pendingForHandoff.length !== existingPending.length || pendingForHandoff.some((id) => !existingPending.includes(id));
+                const isDistinct =
+                    pendingForHandoff.length !== existingPending.length ||
+                    pendingForHandoff.some((id) => !existingPending.includes(id));
                 if (isDistinct && existingPending.length > 0) {
                     shouldOverwrite = false;
                 }
@@ -1879,7 +2137,8 @@ class OstackyController {
             if (!this.#state.audit) this.#state.audit = [];
             for (const e of this.#auditBuffer) {
                 if (!e.id) e.id = `aud-${e.ts}-${this.#state.auditSeq++}`;
-                if (e.reasoning && SENSITIVE_REDACT_RE.test(e.reasoning)) e.reasoning = e.reasoning.replace(SENSITIVE_REDACT_RE, '[REDACTED]');
+                if (e.reasoning && SENSITIVE_REDACT_RE.test(e.reasoning))
+                    e.reasoning = e.reasoning.replace(SENSITIVE_REDACT_RE, '[REDACTED]');
             }
             this.#state.audit.push(...this.#auditBuffer);
             const retention = getAuditRetentionSafe();
@@ -1894,8 +2153,12 @@ class OstackyController {
                 const tsRaw = readFileSync(this.#lockHeartbeatPath, 'utf8');
                 const age = Date.now() - parseInt(tsRaw, 10);
                 if (!Number.isNaN(age) && age >= 15000) {
-                    try { unlinkSync(this.#lockPidPath); } catch {}
-                    try { unlinkSync(this.#lockHeartbeatPath); } catch {}
+                    try {
+                        unlinkSync(this.#lockPidPath);
+                    } catch {}
+                    try {
+                        unlinkSync(this.#lockHeartbeatPath);
+                    } catch {}
                     this.#lockOwner = false;
                 } else if (!Number.isNaN(age) && age < 15000) {
                     try {
@@ -1912,15 +2175,22 @@ class OstackyController {
                         const tsRaw2 = readFileSync(this.#lockHeartbeatPath, 'utf8');
                         const age2 = Date.now() - parseInt(tsRaw2, 10);
                         if (!Number.isNaN(age2) && age2 >= 15000) {
-                            try { unlinkSync(this.#lockPidPath); } catch {}
-                            try { unlinkSync(this.#lockHeartbeatPath); } catch {}
+                            try {
+                                unlinkSync(this.#lockPidPath);
+                            } catch {}
+                            try {
+                                unlinkSync(this.#lockHeartbeatPath);
+                            } catch {}
                             writeFileSync(this.#lockPidPath, String(process.pid), { encoding: 'utf8', flag: 'wx' });
                         } else return;
-                    } catch { return; }
+                    } catch {
+                        return;
+                    }
                 } else throw e;
             }
             try {
-                writeFileSync(this.#lockHeartbeatPath, String(Date.now()), 'utf8');
+                writeFileSync(this.#lockPidPath, String(process.pid), { encoding: 'utf8', flag: 'wx' });
+                this.#heartbeatLock();
                 this.#lockOwner = true;
             } catch {}
             const serialized = safeJsonStringify(this.#state, true);
@@ -1941,59 +2211,101 @@ const controller = new OstackyController({ statePath });
  * Wraps an async tool handler to ALWAYS return a response (even on error).
  * Without this, an unhandled exception in any tool handler leaves the LLM
  * waiting forever — the root cause of agent freezes.
+ * Supports configurable retry with exponential backoff for transient failures.
+ * @param {Function} fn - The tool handler function
+ * @param {Object} options - Retry options
+ * @param {number} options.maxRetries - Maximum retry attempts (default: 0)
+ * @param {number} options.baseTimeout - Base timeout in ms (default: 5000)
  */
-function safeHandler(fn) {
+function safeHandler(fn, options = {}) {
+    const { maxRetries = 0, baseTimeout = 5000 } = options;
+
     return async (params) => {
-        const start = Date.now();
-        try {
-            const result = await Promise.race([
-                fn(params),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('timeout 5s')), 5000)),
-            ]);
-            const duration = Date.now() - start;
-            try { await controller._recordToolDuration(duration); } catch {}
-            return { content: [{ type: 'text', text: safeJsonStringify(result) }] };
-        } catch (error) {
-            const isTimeout = error && error.message && error.message.includes('timeout 5s');
-            if (isTimeout) {
-                log('warn:tool_timeout', { tool: fn.name || 'anonymous', durationMs: 5000 });
-                try { await controller._recordToolTimeout(); } catch {}
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            const currentTimeout = baseTimeout * Math.pow(1.5, attempt);
+            const start = Date.now();
+            try {
+                const result = await Promise.race([
+                    fn(params),
+                    new Promise((_, reject) =>
+                        setTimeout(() => reject(new Error(`timeout ${currentTimeout}ms`)), currentTimeout)
+                    ),
+                ]);
+                const duration = Date.now() - start;
+                try {
+                    await controller._recordToolDuration(duration);
+                } catch {}
+                // Update heartbeat on successful completion
+                controller.updateHeartbeat();
+                return { content: [{ type: 'text', text: safeJsonStringify(result) }] };
+            } catch (error) {
+                const isTimeout = error && error.message && error.message.includes('timeout');
+                const isNetworkError =
+                    error && error.code && ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND'].includes(error.code);
+                const isRetryable = isTimeout || isNetworkError;
+
+                if (isRetryable && attempt < maxRetries) {
+                    const backoff = 200 * Math.pow(2, attempt);
+                    log('warn:tool_retry', {
+                        tool: fn.name || 'anonymous',
+                        attempt: attempt + 1,
+                        maxRetries,
+                        error: error.message,
+                        backoff,
+                    });
+                    await sleep(backoff);
+                    continue; // retry
+                }
+
+                if (isTimeout) {
+                    log('warn:tool_timeout', { tool: fn.name || 'anonymous', durationMs: currentTimeout });
+                    try {
+                        await controller._recordToolTimeout();
+                    } catch {}
+                    return {
+                        content: [
+                            {
+                                type: 'text',
+                                text: safeJsonStringify({ error: `timeout ${currentTimeout}ms`, degraded: true }),
+                            },
+                        ],
+                        isError: true,
+                    };
+                }
+
+                log('tool:error', {
+                    name: fn.name || 'anonymous',
+                    error: error.message,
+                    stack: error.stack,
+                });
                 return {
-                    content: [{ type: 'text', text: safeJsonStringify({ error: 'timeout 5s', degraded: true }) }],
+                    content: [{ type: 'text', text: safeJsonStringify({ error: error.message }) }],
                     isError: true,
                 };
             }
-            log('tool:error', {
-                name: fn.name || 'anonymous',
-                error: error.message,
-                stack: error.stack,
-            });
-            return {
-                content: [{ type: 'text', text: safeJsonStringify({ error: error.message }) }],
-                isError: true,
-            };
         }
     };
 }
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.7.3',
+    version: '0.7.4',
 });
 
 server.registerTool(
     'start_request',
     {
         description:
-            'Start or reset a new request. Can be called from ANY state — resets state machine. Call this first.',
+            'Start or resume a request. By default, resumes in-progress work (non-terminal states). Use force=true to always reset.',
         inputSchema: z.object({
             requestId: z.string().optional().describe('Unique request ID'),
             changeId: z.string().optional().describe('Optional change ID for OpenSpec tracking'),
+            force: z.boolean().optional().describe('Force reset even if work in progress (default: false)'),
         }),
     },
-    safeHandler(async ({ requestId, changeId }) => {
-        log('tool:start_request');
-        return await controller.startRequest({ requestId, changeId });
+    safeHandler(async ({ requestId, changeId, force }) => {
+        log('tool:start_request', { force: !!force });
+        return await controller.startRequest({ requestId, changeId, force: !!force });
     })
 );
 
@@ -2179,10 +2491,13 @@ server.registerTool(
             'Verify execution integrity: compare expectedTasks vs completed tasks. Use before implementation_complete.',
         inputSchema: z.object({}),
     },
-    safeHandler(async () => {
-        log('tool:verify_integrity');
-        return await controller.verifyIntegrity();
-    })
+    safeHandler(
+        async () => {
+            log('tool:verify_integrity');
+            return await controller.verifyIntegrity();
+        },
+        { maxRetries: 1 }
+    )
 );
 
 server.registerTool(
@@ -2196,28 +2511,64 @@ server.registerTool(
             since: z.number().optional().describe('Filter by timestamp >= since'),
         }),
     },
-    safeHandler(async ({ limit, offset, phase, since }) => {
-        log('tool:get_audit', { limit, offset, phase, since });
-        return await controller.getAudit({ limit, offset, phase, since });
-    })
+    safeHandler(
+        async ({ limit, offset, phase, since }) => {
+            log('tool:get_audit', { limit, offset, phase, since });
+            return await controller.getAudit({ limit, offset, phase, since });
+        },
+        { maxRetries: 1 }
+    )
 );
 
 server.registerTool(
     'get_metrics',
     {
-        description: 'Get controller metrics read-only (revision, state, degraded, taskCounts, auditSize, stateFileSize, diskFreeMB, uptimeMs, stateOversizedCount, codegraphBypassCount)',
+        description:
+            'Get controller metrics read-only (revision, state, degraded, taskCounts, auditSize, stateFileSize, diskFreeMB, uptimeMs, stateOversizedCount, codegraphBypassCount)',
+        inputSchema: z.object({}),
+    },
+    safeHandler(
+        async () => {
+            log('tool:get_metrics');
+            return await controller.getMetrics();
+        },
+        { maxRetries: 1 }
+    )
+);
+
+server.registerTool(
+    'record_cache_hit',
+    {
+        description:
+            'Record a CodeGraph cache hit — increments cacheHitCount and tokenSavingEstimate. Call after reusing getCachedCodegraph result.',
+        inputSchema: z.object({
+            tokensSaved: z.number().optional().describe('Estimated tokens saved (default 500)'),
+        }),
+    },
+    safeHandler(async ({ tokensSaved }) => {
+        log('tool:record_cache_hit', { tokensSaved });
+        return await controller.recordCacheHit({ tokensSaved });
+    })
+);
+
+server.registerTool(
+    'record_cache_miss',
+    {
+        description:
+            'Record a CodeGraph cache miss — increments cacheMissCount. Call after getCachedCodegraph returns null.',
         inputSchema: z.object({}),
     },
     safeHandler(async () => {
-        log('tool:get_metrics');
-        return await controller.getMetrics();
+        log('tool:record_cache_miss');
+        return await controller.recordCacheMiss();
     })
 );
 
 server.registerTool(
     'record_user_confirmation',
     {
-        description: 'Record user confirmation with decisionId and literal text. Required for force and human-in-the-loop gates.',
+        description:
+            'Record user confirmation with decisionId and literal text. Required for force and human-in-the-loop gates.',
         inputSchema: z.object({
             decisionId: z.string().describe('Decision ID from pending state'),
             confirmationText: z.string().describe('Literal user confirmation text'),
@@ -2232,7 +2583,8 @@ server.registerTool(
 server.registerTool(
     'check_file_access',
     {
-        description: 'Check if file is sensitive and requires ALLOW. Returns BLOCKED with decisionId if sensitive and not allowed.',
+        description:
+            'Check if file is sensitive and requires ALLOW. Returns BLOCKED with decisionId if sensitive and not allowed.',
         inputSchema: z.object({
             filePath: z.string().describe('File path to check'),
             reason: z.string().optional().describe('Reason for access'),
@@ -2293,22 +2645,25 @@ server.registerTool(
             'Health check — returns pong if controller is alive. Use this to verify controller availability before making other calls.',
         inputSchema: z.object({}),
     },
-    safeHandler(async () => {
-        const state = await controller.getState();
-        const metrics = await controller.getMetrics().catch(() => ({}));
-        return {
-            pong: true,
-            degraded: controller.degraded,
-            state: {
-                state: state.state,
-                revision: state.revision,
-                requestId: state.requestId,
-            },
-            diskFreeMB: metrics.diskFreeMB ?? null,
-            stateFileSize: metrics.stateFileSize ?? null,
-            auditSize: metrics.auditSize ?? null,
-        };
-    })
+    safeHandler(
+        async () => {
+            const state = await controller.getState();
+            const metrics = await controller.getMetrics().catch(() => ({}));
+            return {
+                pong: true,
+                degraded: controller.degraded,
+                state: {
+                    state: state.state,
+                    revision: state.revision,
+                    requestId: state.requestId,
+                },
+                diskFreeMB: metrics.diskFreeMB ?? null,
+                stateFileSize: metrics.stateFileSize ?? null,
+                auditSize: metrics.auditSize ?? null,
+            };
+        },
+        { maxRetries: 1 }
+    )
 );
 
 server.registerTool(
@@ -2317,9 +2672,12 @@ server.registerTool(
         description: 'Get the current controller state (reads persistent store).',
         inputSchema: z.object({}),
     },
-    safeHandler(async () => {
-        return await controller.getState();
-    })
+    safeHandler(
+        async () => {
+            return await controller.getState();
+        },
+        { maxRetries: 1 }
+    )
 );
 
 server.registerTool(
@@ -2328,9 +2686,12 @@ server.registerTool(
         description: 'Get current task states.',
         inputSchema: z.object({}),
     },
-    safeHandler(async () => {
-        return await controller.getTasks();
-    })
+    safeHandler(
+        async () => {
+            return await controller.getTasks();
+        },
+        { maxRetries: 1 }
+    )
 );
 
 server.registerTool(
@@ -2339,9 +2700,12 @@ server.registerTool(
         description: 'Get valid transitions from current state. Useful for debugging state machine issues.',
         inputSchema: z.object({}),
     },
-    safeHandler(async () => {
-        return await controller.getAvailableTransitions();
-    })
+    safeHandler(
+        async () => {
+            return await controller.getAvailableTransitions();
+        },
+        { maxRetries: 1 }
+    )
 );
 
 server.registerTool(
@@ -2366,9 +2730,12 @@ server.registerTool(
         description: 'Read pending handoff from previous session. Call at start of new request to recover context.',
         inputSchema: z.object({}),
     },
-    safeHandler(async () => {
-        return await controller.getHandoff();
-    })
+    safeHandler(
+        async () => {
+            return await controller.getHandoff();
+        },
+        { maxRetries: 1 }
+    )
 );
 
 server.registerTool(
@@ -2393,20 +2760,23 @@ server.registerTool(
             'record_clarification, abandon) are ALWAYS allowed — they unlock the state.',
         inputSchema: z.object({}),
     },
-    safeHandler(async () => {
-        const state = await controller.getState();
-        const pendingStates = ['CLARIFICATION_PENDING', 'ROUTE_DECISION_PENDING', 'EXECUTION_DECISION_PENDING'];
-        if (pendingStates.includes(state.state)) {
-            return {
-                status: 'BLOCKED',
-                state: state.state,
-                revision: state.revision,
-                reason: `Cannot execute tools while in ${state.state}. Wait for user response first.`,
-                degraded: controller.degraded,
-            };
-        }
-        return { status: 'ALLOW', state: state.state, revision: state.revision, degraded: controller.degraded };
-    })
+    safeHandler(
+        async () => {
+            const state = await controller.getState();
+            const pendingStates = ['CLARIFICATION_PENDING', 'ROUTE_DECISION_PENDING', 'EXECUTION_DECISION_PENDING'];
+            if (pendingStates.includes(state.state)) {
+                return {
+                    status: 'BLOCKED',
+                    state: state.state,
+                    revision: state.revision,
+                    reason: `Cannot execute tools while in ${state.state}. Wait for user response first.`,
+                    degraded: controller.degraded,
+                };
+            }
+            return { status: 'ALLOW', state: state.state, revision: state.revision, degraded: controller.degraded };
+        },
+        { maxRetries: 1 }
+    )
 );
 
 server.registerTool(
@@ -2501,7 +2871,7 @@ function setupGracefulShutdown(ctrl) {
 }
 
 async function main() {
-    log('Starting ostacky-controller MCP v0.7.3...');
+    log('Starting ostacky-controller MCP v0.7.4...');
     log('State path:', { path: statePath });
     // Clean up stale tmp/lock files from previous runs
     cleanupTmpFiles(statePath);

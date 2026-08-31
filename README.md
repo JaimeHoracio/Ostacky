@@ -22,7 +22,7 @@ Después de instalar Ostacky (con `npx ostacky install`), necesitás iniciar Ope
 opencode
 ```
 
-Abre la interfaz de terminal interactiva. Seleccioná el agente `@Ostacky` desde el panel de agentes o escribí `/agent Ostacky`.
+Abre la interfaz de terminal interactiva. **Para elegir el agente Ostacky: usá `Tab` para navegar entre agentes** en el panel lateral, o escribí `/agent Ostacky` en el chat.
 
 ### Web UI — para usar desde el navegador
 
@@ -30,7 +30,7 @@ Abre la interfaz de terminal interactiva. Seleccioná el agente `@Ostacky` desde
 opencode web --port 4096
 ```
 
-Abre OpenCode en el navegador en `http://localhost:4096`. Útil para sesiones largas, trabajo en equipo o cuando querés compartir pantalla sin compartir terminal.
+Abre OpenCode en el navegador en `http://localhost:4096`. **Para elegir el agente Ostacky: abrí el combo/selector de agentes** en la barra superior y seleccioná "Ostacky". Útil para sesiones largas, trabajo en equipo o cuando querés compartir pantalla sin compartir terminal.
 
 Opciones útiles:
 
@@ -221,33 +221,33 @@ Tras instalar, el proyecto queda así:
 
 ```json
 {
-    "version": "0.7.3",
+    "version": "0.7.4",
     "lockedAt": "2025-01-01T00:00:00.000Z",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.7.3",
+    "tag": "v0.7.4",
     "agents": {
         "ostacky": {
-            "version": "0.7.3",
+            "version": "0.7.4",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "abc123..."
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.7.3",
+            "version": "0.7.4",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "def456..."
         },
         "opsx-sync": {
-            "version": "0.7.3",
+            "version": "0.7.4",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "ghi789..."
         }
     },
     "skills": {
-        "brainstorming": { "version": "0.7.3", ... },
-        "execution-mode-evaluation": { "version": "0.7.3", ... },
-        "openspec-propose": { "version": "0.7.3", ... }
+        "brainstorming": { "version": "0.7.4", ... },
+        "execution-mode-evaluation": { "version": "0.7.4", ... },
+        "openspec-propose": { "version": "0.7.4", ... }
     }
 }
 ```
@@ -259,10 +259,10 @@ Se recomienda agregar `ostacky-lock.json` al control de versiones para que el eq
 Al terminar la instalación, el flujo normal es:
 
 1. **Iniciar OpenCode** (si no está corriendo):
-    - **TUI:** `opencode` en tu terminal
-    - **Web:** `opencode web --port 4096` y abrí `http://localhost:4096`
+    - **TUI:** `opencode` en tu terminal → **usá `Tab` para navegar al agente Ostacky** en el panel lateral
+    - **Web:** `opencode web --port 4096` y abrí `http://localhost:4096` → **abrí el combo/selector de agentes** en la barra superior y elegí "Ostacky"
 2. OpenCode detecta automáticamente los archivos nuevos en `.opencode/` al iniciar, no necesita recarga manual.
-3. Para usar el agente **escribí `@Ostacky`** en el chat de OpenCode (TUI o web) y enviá tu mensaje. También podés seleccionarlo desde el selector de agentes si tu versión de OpenCode lo soporta.
+3. Para usar el agente **escribí `@Ostacky`** en el chat de OpenCode (TUI o web) y enviá tu mensaje. También podés seleccionarlo desde el selector de agentes (ver arriba cómo).
 
 ### Regenerar el stack manualmente
 
@@ -277,7 +277,7 @@ Es opcional y solo necesario si algo falló durante la instalación o si querés
 ## Seguridad
 
 - `opencode.jsonc` se versiona en el repo para compartir permisos y MCP de forma reproducible.
-- Las URLs de descarga usan **tags de GitHub** (ej. `v0.7.3`), nunca `main` — instalaciones reproducibles
+- Las URLs de descarga usan **tags de GitHub** (ej. `v0.7.4`), nunca `main` — instalaciones reproducibles
 - Cada path de archivo descargado es validado para prevenir **path traversal**
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
 - El cache local (`.opencode/cache/`) también valida integridad al servir archivos cacheados
@@ -287,6 +287,13 @@ Es opcional y solo necesario si algo falló durante la instalación o si querés
 - La configuración local de OpenCode (`opencode.jsonc`) bloquea lectura y escritura de `*.env` y `.secret/**` con `deny`.
 - La sesión sigue ejecutándose después del bloqueo porque `experimental.continue_loop_on_deny` está activado.
 - Para worktrees, el repo prefiere `.worktrees/` o `worktrees/` (ambos project-local).
+
+#### Patrones sensibles configurables (hardening-v2)
+
+- Variable `OSTACKY_SENSITIVE_PATTERNS` overridea los patrones por defecto (`**/.env*`, `**/.secrets/**`, `**/*.pem`, `**/*.key`, `**/.aws/**`, `**/.ssh/**`, `**/credentials.json`, `**/.npmrc`).
+- Ejemplo: `OSTACKY_SENSITIVE_PATTERNS="**/.env*,**/.secrets/**" bunx ostacky doctor` — `doctor` imprime el patrón efectivo.
+- Allowlist: `.env.example`, `.env.template`, `.env.sample` nunca se bloquean.
+- Fuente única: `src/security.ts` (`SENSITIVE_DEFAULT`, `isSensitive`, `BASH_SENSITIVE_RE`) — guard y controller usan la misma lógica (ver `doctor` para verificar).
 
 #### Aislamiento de worktrees (harness-prod-hardening)
 

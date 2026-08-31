@@ -17,7 +17,7 @@ import {
   runUninstallSkillCommand,
   runUninstallMcpCommand,
 } from "./prompts/index.js";
-import { existsSync, statSync, readFileSync } from "node:fs";
+import { existsSync, statSync, readFileSync, readdirSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { computeTreeHash, findOpenCodeDir } from "./fs.js";
 
@@ -106,6 +106,8 @@ async function runDoctorCommand() {
       if (parsed.codegraphBypassCount > 0) console.log(`⚠️ codegraphBypassCount=${parsed.codegraphBypassCount} (inefficient: codegraph bypass)`);
       if (parsed.stateOversizedCount > 0) console.log(`⚠️ stateOversizedCount=${parsed.stateOversizedCount} snapshots perdidos`);
       if (parsed.sensitiveAccess) console.log(`ℹ️ sensitiveAccess: allowed=${parsed.sensitiveAccess.allowed || 0} denied=${parsed.sensitiveAccess.denied || 0} blocked=${parsed.sensitiveAccess.blockedAttempts || 0}`);
+      if (parsed.sensitivePatterns) console.log(`ℹ️ sensitivePatterns: ${parsed.sensitivePatterns.join(", ")}`);
+      if (parsed.allowedFiles && Object.keys(parsed.allowedFiles).length) console.log(`ℹ️ allowedFiles: ${Object.keys(parsed.allowedFiles).join(", ")}`);
       if (parsed.deniedFiles && Object.keys(parsed.deniedFiles).length) {
         console.log(`ℹ️ denied files: ${Object.keys(parsed.deniedFiles).join(", ")} (denied by user)`);
       }
@@ -193,6 +195,65 @@ async function runDoctorCommand() {
       }
     } catch {}
   }
+
+  // cache health (hardening-v2 5.4 + 6.2)
+  try {
+    const cacheDir = join(opencodeDir, "cache", "codegraph");
+    if (!existsSync(cacheDir)) {
+      console.log("ℹ️ cache: no cache dir yet (ok)");
+    } else {
+      const files = readdirSync(cacheDir);
+      let total = 0;
+      for (const f of files) {
+        try { total += statSync(join(cacheDir, f)).size; } catch {}
+      }
+      const totalMB = (total / (1024 * 1024)).toFixed(2);
+      if (total > 50 * 1024 * 1024) {
+        console.log(`⚠️ cache: ${totalMB}MB >50MB — LRU cleanup needed`);
+        hasWarn = true;
+      } else {
+        console.log(`✅ cache: OK (${files.length} files, ${totalMB}MB)`);
+      }
+      // report cache metrics from state if present
+      try {
+        const s = JSON.parse(readFileSync(statePath, "utf-8"));
+        if (s.cacheHitCount !== undefined) {
+          console.log(`ℹ️ cacheHitCount=${s.cacheHitCount} cacheMissCount=${s.cacheMissCount || 0} tokenSavingEstimate=${s.tokenSavingEstimate || 0}`);
+        }
+      } catch {}
+    }
+  } catch (e) {
+    console.log(`⚠️ cache: check failed ${(e as Error).message}`);
+  }
+
+  // src/security.ts source-of-truth check (hardening-v2 D1)
+  try {
+    const secPath = join(cwd, "src", "security.ts");
+    if (!existsSync(secPath)) {
+      console.log("⚠️ src/security.ts: missing (source-of-truth)");
+      hasWarn = true;
+    } else {
+      const sec = readFileSync(secPath, "utf-8");
+      const hasSensitiveDefault = sec.includes("SENSITIVE_DEFAULT");
+      const hasBashRe = sec.includes("BASH_SENSITIVE_RE");
+      const hasIsSensitive = sec.includes("function isSensitive");
+      const hasExtract = sec.includes("extractPathsFromBash");
+      if (hasSensitiveDefault && hasBashRe && hasIsSensitive && hasExtract) {
+        console.log("✅ src/security.ts: source-of-truth OK");
+      } else {
+        console.log("⚠️ src/security.ts: missing exports (SENSITIVE_DEFAULT/BASH_SENSITIVE_RE/isSensitive/extractPathsFromBash)");
+        hasWarn = true;
+      }
+    }
+  } catch {}
+
+  // sensitiveAccess bash blocks check (hardening-v2 2.5)
+  try {
+    const s = JSON.parse(readFileSync(statePath, "utf-8"));
+    if (s.sensitiveAccess?.blockedAttempts > 0) {
+      console.log(`ℹ️ sensitiveAccess: blockedAttempts includes bash (${s.sensitiveAccess.blockedAttempts})`);
+    }
+  } catch {}
 
   if (hasError) process.exit(1);
   if (hasWarn) process.exit(0);
