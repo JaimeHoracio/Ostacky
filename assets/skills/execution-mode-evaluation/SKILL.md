@@ -25,13 +25,13 @@ Determinar el modo de ejecución óptimo entre **inline** y **subagent-driven** 
 
 ## Procedimiento
 
-### Paso 0: Verificar datos existentes en contexto
+### Paso 0: Verificar discovery-cache primero (ÚNICO entrypoint)
 
-Si ya tenés output de `codegraph_codegraph_explore` para el área del cambio **Y** ese output distingue archivos por task → **saltá al Paso 0.5**. Si no, ejecutá el Paso 1.
+**SHALL** llamar `src/discovery-cache.ts` `getDiscoverySnapshot(query)` y `getEngramDedup(query, requestId)` antes de cualquier `codegraph_codegraph_explore` o `engram_mem_search`. Si hit válido (TTL+gitDiffHash) → **reusar** `codegraph+engramHits` para construir `sharedFiles/fileClusters`; solo `codegraph_impact` para símbolos no cubiertos. Si miss o área difiere >30% → fetch fresco y `putDiscoverySnapshot`. Segunda llamada misma query en mismo `requestId` SHALL ser dedup (no `redundantCallCount`).
 
-### Paso 0.1: Consultar Engram por decisiones previas
+### Paso 0.1: Consultar Engram por decisiones previas (solo si no hay dedup hit)
 
-`engram_mem_search` con keywords del cambio (nombre del módulo, área afectada). Si existe una decisión de modo de ejecución anterior para un cambio similar, considerarla como referencia — no como vinculante. Las condiciones pueden haber cambiado.
+Si `getEngramDedup` fue miss, `engram_mem_search` con keywords del cambio. Si existe decisión previa, usar como referencia no vinculante.
 
 ### Paso 0.5: Early exit para cambios pequeños
 
@@ -48,14 +48,14 @@ Si el change tiene **≤2 tasks** Y **no comparten archivos entre sí** → devo
 }
 ```
 
-### Paso 1: Obtener datos de CodeGraph
+### Paso 1: Obtener datos de CodeGraph (solo si discovery-cache miss)
 
+Si Paso 0 fue hit → **SKIP este paso**, derivar `fileClusters/sharedFiles` del snapshot (`state.snapshots.codegraph` + `tasks.md`). Snapshot resultante SHALL usar `codegraphUsed:["discovery-cache"]` (válido, no genera `WARN:execution_without_codegraph` si `snapshots.codegraph` existe) y `reuseDiscovery:true`.
+Si miss:
 ```
 codegraph_codegraph_explore con query: "<área del cambio>"
 ```
-
-Si el output es muy general → `codegraph_impact` sobre símbolos centrales para blast radius preciso.
-Si CodeGraph no está inicializado → devolver `{ "recommendation": "INLINE", "confidence": 0.3, "reasons": ["CodeGraph no disponible"], "codegraphUsed": [] }`.
+Si muy general → `codegraph_impact` para blast radius. Si CodeGraph no inicializado → `{ "recommendation": "INLINE", "confidence": 0.3, "reasons": ["CodeGraph no disponible"], "codegraphUsed": [] }`.
 
 ### Paso 2: Construir mapa de dependencias
 
@@ -174,7 +174,7 @@ Para cada fase de `tasks.md`, evaluar intra-fase:
 | `expectedTaskIds` | **Obligatorio** cuando `taskCount>0` — gate del controller |
 | `taskCount` | Total tasks, debe coincidir con `expectedTaskIds.length` |
 
-**⚠️ Este skill provee ANÁLISIS, no autorización.** El coordinador muestra el snapshot al usuario y pide confirmación en lenguaje natural, luego espera la respuesta.
+**⚠️ Este skill provee ANÁLISIS, no autorización. Gate ANTES de persistir:** SHALL correr **en memoria primero**, derivar snapshot y **mostrar al usuario** `"Recomendación: INLINE/SUBAGENT por [razón], ~X líneas, clusters [...] ¿Procedo con este plan?"` y esperar. Solo si responde sí → `record_execution_analysis({snapshot, reuseDiscovery:true})` → `EXECUTION_DECISION_PENDING` → `consume_execution_decision`. Si responde no → `block({reason:"usuario rechazó plan"})` sin persistir. Si re-llamó `codegraph_explore` pudiendo reusar → `WARN:redundant_codegraph_call`.
 
 ## Ejemplo compacto
 

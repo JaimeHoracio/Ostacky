@@ -36,29 +36,29 @@ Do NOT invoke any implementation skill, write any code, or scaffold any project 
 
 ### Process
 
-1. **Check Engram** — `engram_mem_search` with keywords from the user's idea. Surface any prior design decisions or similar proposals.
-2. **Explore via CodeGraph** — `codegraph_codegraph_explore` on the affected area. Only `Read` files CodeGraph didn't cover.
-3. **Ask clarifying questions** — one at a time, understand purpose/constraints/success criteria
+1. **Check discovery-cache first** — `src/discovery-cache.ts` `getDiscoverySnapshot(query)` + `getEngramDedup(query, requestId)`. Si hit válido (TTL+gitDiffHash), **reusar** sin llamar tools. Solo si miss → `engram_mem_search` + `codegraph_codegraph_explore` y **SHALL `putDiscoverySnapshot`** antes de avanzar. No re-llamar si área difiere <30% del snapshot.
+2. **Ask clarifying questions** — one at a time, understand purpose/constraints/success criteria
 4. **Propose 2-3 approaches (hardening-v2 — SHALL)** — con tabla trade-offs (coste|riesgo|complejidad) + evidencia CodeGraph+Engram (+Context7 si librería) sin alucinar, YAGNI, y recomendación con razón; cada approach cita symbols existentes y mem_search hits verificables
 5. **Present design** — in sections scaled to complexity, get user approval after each section. **Gate post-brainstorming (hardening-v2):** tras presentar diseño, preguntar "¿Procedo con este diseño o querés ajustar algo?" y esperar confirmación explícita antes de `record_discovery`, `openspec-propose` o implementación directa
-6. **Write design doc** — save to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` and commit
+6. **Write design doc (output path condicional — router exclusivo):**
+   - Si trigger + `level 1+` no-downgradeable (`estLines>30` o `fileCount>2` o API pública) y change activo → escribir `openspec/changes/<id>/design.md` sección `## Alternatives Considered` con 2-3 approaches (tabla coste|riesgo|complejidad + evidencia CodeGraph+Engram), no `docs/`. No invocar `openspec-propose` separado — este es el diseño.
+   - Si trigger + `0/0+1` o `1+` downgradeable (`estLines<30`&&`fileCount==1`&&sin API) → solo `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` + gate único `¿Procedo?` → DIRECT sin change. SHALL sugerir downgrade: `"Esto parece 0+1 (~X líneas, 1 archivo). ¿Lo tratamos sin spec?"` y esperar.
+   - Gate post-brainstorming es **único**; no hay segundo `¿Procedo con spec?`. `get_audit` `WARN:duplicate_design_generated` si ambos artefactos mismo `requestId`.
 7. **Spec self-review** — check for placeholders, contradictions, ambiguity, scope
 8. **User reviews spec** — ask user to review before proceeding
 9. **Save to Engram** — `engram_mem_save` with the design decision and tradeoffs
 10. **Transition** — based on routing decision (see Transition Rules below)
 
-### Transition Rules
+### Transition Rules (router exclusivo — reemplaza SHALL secuencial)
 
-The next step depends on how the change was routed by Ostacky:
+| Trigger + Nivel | Output path | Next Step | Gate |
+|---|---|---|---|
+| `mejor forma\|tradeoff\|...` + `1+` no-downgradeable | `openspec/changes/<id>/design.md` `## Alternatives` | Fin brainstorming → `spec_complete` vía change | Único `¿Procedo?` |
+| `mejor forma\|tradeoff\|...` + `0/0+1` o `1+` downgradeable | `docs/superpowers/specs/...` solo | DIRECT | Único `¿Procedo?` + sugerencia downgrade explícita |
+| Sin trigger + claros | — | `openspec-propose` directo (no brainstorming) | — |
+| Sin trigger + vagos | — | Pregunta `¿brainstorming o spec?` | — |
 
-| Routing | Next Step | When |
-|---------|-----------|------|
-| **DIRECT** (Level 0/0+1) | **Implementación directa** (con gate de confirmación del usuario) | Small changes, no OpenSpec |
-| **SPEC** (Level 1+) | `openspec-propose` | Complex changes requiring OpenSpec artifacts |
-
-If you're unsure about routing, ask Ostacky or check the controller state.
-
-**Terminal state:** For DIRECT, present the design and get user approval before proceeding to implementation. For SPEC, invoke `openspec-propose`. Do NOT invoke implementation skills directly.
+`WARN:skipped_brainstorming` solo si trigger presente y se omite sin downgrade. `WARN:duplicate_design_generated` si ambos paths mismo `requestId`.
 
 ### Design Principles
 

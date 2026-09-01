@@ -14,7 +14,6 @@ import {
   installCodeGraph,
   setupOpenSpec,
   installEngram,
-  setupContext7,
 } from "../stack.js";
 import { ensureToolDirs, findBinaryInDir } from "../fs.js";
 import { onCancel, isGlobalScope } from "./helpers.js";
@@ -36,19 +35,13 @@ export async function doInstallStack(toolsDir?: string, projectRoot?: string): P
   spin.stop(os.success ? `✓ ${os.message}` : `✗ ${os.message}`);
   if (!os.success) allOk = false;
 
-  // 3. Engram
+  // 3. Engram (+ OstackyController plugin coherente local/global)
   spin.start("Instalando Engram...");
   const eng = await installEngram(toolsDir);
   spin.stop(eng.success ? `✓ ${eng.message}` : `✗ ${eng.message}`);
   if (!eng.success) allOk = false;
 
-  // 4. Context7
-  spin.start("Configurando Context7...");
-  const ctx = setupContext7(toolsDir);
-  spin.stop(ctx.success ? `✓ ${ctx.message}` : `✗ ${ctx.message}`);
-  if (!ctx.success) allOk = false;
-
-  // 5. Config
+  // 4. Config (incluye plugin controller)
   spin.start("Verificando configuración...");
   const { patchOpenCodeConfig } = await import("../config.js");
   const cfg = patchOpenCodeConfig(resolvedProjectRoot);
@@ -65,12 +58,12 @@ export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths): Pr
   const spin = p.spinner();
   let errors = 0;
 
-  // Scope global: tools siempre local, no crear tools globales. Saltar stack global.
+  // Scope global: tools y plugins siempre local (coherencia), no crear tools globales.
   const isGlobal = isGlobalScope(paths);
   if (!isGlobal) {
-    ensureToolDirs(paths.tools, ["codegraph", "engram", "context7"]);
+    ensureToolDirs(paths.tools, ["codegraph", "engram"]);
   } else {
-    p.log.info("Scope global detectado: el stack (CodeGraph/Engram) permanece siempre en <proyecto>/.opencode/tools — se omite instalación de stack global.");
+    p.log.info("Scope global detectado: el stack (CodeGraph/Engram) y plugins (ostacky-controller, engram) permanecen siempre en <proyecto>/.opencode — se omite instalación de stack global.");
     p.log.info("Para instalar el stack, ejecutá 'npx ostacky install-stack --scope local' dentro de cada proyecto.");
   }
 
@@ -124,10 +117,47 @@ export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths): Pr
     }
   }
 
+  // Asegurar ostacky-controller plugin coherente en plugins/ del scope elegido + local para global
+  try {
+    const { copyFileSync, mkdirSync, existsSync } = await import("fs");
+    const { join } = await import("path");
+    const { PACKAGE_ROOT } = await import("../github.js");
+    const { findProjectRoot } = await import("../fs.js");
+    const src = join(PACKAGE_ROOT, "assets", "plugins", "ostacky-plugin.ts");
+    const dest = join(paths.plugins, "ostacky-plugin.ts");
+    if (existsSync(src)) {
+      mkdirSync(paths.plugins, { recursive: true });
+      copyFileSync(src, dest);
+    }
+    // legacy fallback: si solo existe el nombre viejo, copiarlo también
+    const legacySrc = join(PACKAGE_ROOT, "assets", "plugins", "ostacky-controller.ts");
+    if (!existsSync(src) && existsSync(legacySrc)) {
+      mkdirSync(paths.plugins, { recursive: true });
+      copyFileSync(legacySrc, join(paths.plugins, "ostacky-controller.ts"));
+    }
+    const srcEng = join(PACKAGE_ROOT, "assets", "plugins", "engram.ts");
+    const destEng = join(paths.plugins, "engram.ts");
+    if (existsSync(srcEng)) {
+      mkdirSync(paths.plugins, { recursive: true });
+      copyFileSync(srcEng, destEng);
+    }
+    // Coherencia: si es global pero hay proyecto local, también copiar allí para hard-gate local
+    if (isGlobal) {
+      try {
+        const projRoot = findProjectRoot();
+        const localPlugins = join(projRoot, ".opencode", "plugins");
+        mkdirSync(localPlugins, { recursive: true });
+        if (existsSync(src)) copyFileSync(src, join(localPlugins, "ostacky-plugin.ts"));
+        else if (existsSync(legacySrc)) copyFileSync(legacySrc, join(localPlugins, "ostacky-controller.ts"));
+        if (existsSync(srcEng)) copyFileSync(srcEng, join(localPlugins, "engram.ts"));
+      } catch {}
+    }
+  } catch {}
+
   let stackOk = true;
   let missingTools: string[] = [];
   if (isGlobal) {
-    // En global no instalamos stack — se deja para install local por proyecto
+    // En global no instalamos binaries del stack — se deja para install local por proyecto
     stackOk = true;
   } else {
     p.log.info("Instalando stack de herramientas...");

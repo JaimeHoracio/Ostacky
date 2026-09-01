@@ -1,14 +1,13 @@
 # Ostacky
 
-Ostacky es un **agent harness** para [OpenCode](https://opencode.ai). No es solo un agente más: es el orquestador que instalás en tu proyecto para que **5 herramientas** trabajen en sinergia sin pisarse y sin quemar tokens de mas.
+Ostacky es un **agent harness** para [OpenCode](https://opencode.ai). No es solo un agente más: es el orquestador que instalás en tu proyecto para que **4 herramientas** trabajen en sinergia sin pisarse y sin quemar tokens de mas.
 
-| Herramienta                                               | Rol                 | Define                                        |
-| --------------------------------------------------------- | ------------------- | --------------------------------------------- |
-| [CodeGraph](https://github.com/colbymchenry/codegraph)    | Grafo de código     | DÓNDE está el código y a quién impacta        |
-| [OpenSpec](https://github.com/Fission-AI/OpenSpec/)       | Especificaciones    | QUÉ hay que construir y POR QUÉ               |
-| [Superpowers](https://github.com/obra/superpowers)        | Ejecución           | CÓMO se implementa, prueba y revisa           |
-| [Engram](https://github.com/Gentleman-Programming/engram) | Memoria persistente | QUÉ aprendimos en sesiones anteriores         |
-| [Context7](https://context7.com)                          | Documentación viva  | Documentación actualizada de librerías y APIs |
+| Herramienta                                               | Rol                 | Define                                 |
+| --------------------------------------------------------- | ------------------- | -------------------------------------- |
+| [CodeGraph](https://github.com/colbymchenry/codegraph)    | Grafo de código     | DÓNDE está el código y a quién impacta |
+| [OpenSpec](https://github.com/Fission-AI/OpenSpec/)       | Especificaciones    | QUÉ hay que construir y POR QUÉ        |
+| [Superpowers](https://github.com/obra/superpowers)        | Ejecución           | CÓMO se implementa, prueba y revisa    |
+| [Engram](https://github.com/Gentleman-Programming/engram) | Memoria persistente | QUÉ aprendimos en sesiones anteriores  |
 
 Ostacky las rutea según el **nivel de impacto del cambio** (Nivel 0, Nivel 0+1, Nivel 1+), priorizando siempre eficiencia de tokens y preguntándote antes de actuar. Para cambios grandes usa OpenSpec (spec-driven development); para cambios chicos ejecuta directo con Superpowers skills.
 
@@ -51,7 +50,7 @@ Opciones útiles:
 
 ## Stack
 
-Ostacky integra **5 herramientas** especializadas para que trabajen en conjunto sin pisarse:
+Ostacky integra **4 herramientas** especializadas para que trabajen en conjunto sin pisarse:
 
 ### Cómo trabajan en sinergia
 
@@ -59,7 +58,6 @@ Ostacky integra **5 herramientas** especializadas para que trabajen en conjunto 
 2. **OpenSpec** documenta requisitos, contratos y escenarios de aceptación (proposal → design → spec → tasks).
 3. **Superpowers** ejecuta con TDD, testing automatizado y review (brainstorming → plans → tdd → review).
 4. **Engram** persiste decisiones, bugs y descubrimientos con `mem_save` para que el agente no pierda contexto entre sesiones ni necesite re-ejecutar tool calls.
-5. **Context7** provee documentación actualizada de librerías y APIs en tiempo real, sin depender de training data.
 
 Ostacky decide **cuándo y cómo** usar cada herramienta según el **nivel de impacto** del cambio:
 
@@ -221,33 +219,33 @@ Tras instalar, el proyecto queda así:
 
 ```json
 {
-    "version": "0.7.4",
+    "version": "0.8.0",
     "lockedAt": "2025-01-01T00:00:00.000Z",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.7.4",
+    "tag": "v0.8.0",
     "agents": {
         "ostacky": {
-            "version": "0.7.4",
+            "version": "0.8.0",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "abc123..."
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.7.4",
+            "version": "0.8.0",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "def456..."
         },
         "opsx-sync": {
-            "version": "0.7.4",
+            "version": "0.8.0",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "ghi789..."
         }
     },
     "skills": {
-        "brainstorming": { "version": "0.7.4", ... },
-        "execution-mode-evaluation": { "version": "0.7.4", ... },
-        "openspec-propose": { "version": "0.7.4", ... }
+        "brainstorming": { "version": "0.8.0", ... },
+        "execution-mode-evaluation": { "version": "0.8.0", ... },
+        "openspec-propose": { "version": "0.8.0", ... }
     }
 }
 ```
@@ -277,7 +275,7 @@ Es opcional y solo necesario si algo falló durante la instalación o si querés
 ## Seguridad
 
 - `opencode.jsonc` se versiona en el repo para compartir permisos y MCP de forma reproducible.
-- Las URLs de descarga usan **tags de GitHub** (ej. `v0.7.4`), nunca `main` — instalaciones reproducibles
+- Las URLs de descarga usan **tags de GitHub** (ej. `v0.8.0`), nunca `main` — instalaciones reproducibles
 - Cada path de archivo descargado es validado para prevenir **path traversal**
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
 - El cache local (`.opencode/cache/`) también valida integridad al servir archivos cacheados

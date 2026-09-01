@@ -26,12 +26,12 @@ ostacky — Instalador de agentes, comandos, skills y MCPs para OpenCode
 
 Uso:
   npx ostacky [--scope local|global|auto]                    Menú interactivo (instalación completa, pregunta local vs global, default local)
-  npx ostacky install [--scope local|global|auto]            Instalar TODO (agente + skills + MCPs + CodeGraph + OpenSpec + Engram + Context7)
+  npx ostacky install [--scope local|global|auto]            Instalar TODO (agente + skills + MCPs + CodeGraph + OpenSpec + Engram)
   npx ostacky add agent [--scope local|global|auto]          Agregar agente(s)
   npx ostacky add command [--scope ...]        Agregar command(s)
   npx ostacky add skill [--scope ...]          Agregar skill(s)
   npx ostacky add mcp [--scope ...]            Agregar MCP server(s)
-  npx ostacky install-stack [--scope local|auto]      Instalar solo el stack de herramientas (CodeGraph, OpenSpec, Engram, Context7) — global bloquea con error
+  npx ostacky install-stack [--scope local|auto]      Instalar solo el stack de herramientas (CodeGraph, OpenSpec, Engram) — global bloquea con error
   npx ostacky uninstall-stack [--scope local|global|auto]    Remover la configuración del stack del proyecto
   npx ostacky doctor                           Diagnostica locks, tools, state health
   npx ostacky status [--json]                  Muestra estado del controller sin MCP
@@ -92,15 +92,30 @@ async function runDoctorCommand() {
     else { console.log(`❌ ${label}`); hasError = true; }
   };
 
-  // controller state
+  // controller state — plugin active detection (controller-mcp-to-pluggin)
+  const pluginPaths = [
+    join(cwd, "assets", "plugins", "ostacky-plugin.ts"),
+    join(opencodeDir, "plugins", "ostacky-plugin.ts"),
+    join(cwd, ".opencode", "plugins", "ostacky-plugin.ts"),
+    // legacy fallback (pre-0.8.2)
+    join(cwd, "assets", "plugins", "ostacky-controller.ts"),
+    join(opencodeDir, "plugins", "ostacky-controller.ts"),
+    join(cwd, ".opencode", "plugins", "ostacky-controller.ts"),
+  ]
+  const pluginActive = pluginPaths.some((p) => existsSync(p))
   try {
     if (!existsSync(statePath)) {
-      check("controller: state file missing", false, true);
+      if (pluginActive) console.log(`✅ controller: plugin active (no state yet)`)
+      else check("controller: state file missing", false, true);
     } else {
       const stat = statSync(statePath);
       const raw = readFileSync(statePath, "utf-8");
       const parsed = JSON.parse(raw);
-      check(`controller: OK (rev ${parsed.revision || 0} state ${parsed.state || "unknown"})`, true);
+      if (pluginActive) {
+        console.log(`✅ controller: plugin active (rev ${parsed.revision || 0} state ${parsed.state || "unknown"})`)
+      } else {
+        check(`controller: OK (rev ${parsed.revision || 0} state ${parsed.state || "unknown"})`, true);
+      }
       if (parsed.degraded) { console.log("⚠️ degraded: true (persistido)"); hasWarn = true; }
       if (parsed.degradedEditsCount > 0) console.log(`⚠️ degraded: confirmation not audited in controller (degradedEditsCount=${parsed.degradedEditsCount})`);
       if (parsed.codegraphBypassCount > 0) console.log(`⚠️ codegraphBypassCount=${parsed.codegraphBypassCount} (inefficient: codegraph bypass)`);

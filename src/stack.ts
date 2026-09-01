@@ -26,17 +26,18 @@ import {
 import { fetchLatestReleaseTag, PACKAGE_ROOT } from "./github.js";
 import type { OpenCodePaths } from "./types.js";
 
-// ─── Stack installation (tools: CodeGraph, OpenSpec, Engram, Context7) ─────
+// ─── Stack installation (tools: CodeGraph, OpenSpec, Engram) ─────
+// Context7 removido del stack — no se usa (ver README 4 herramientas).
 
 /**
  * Result of installing the full tool stack.
- * Each field represents the outcome of one component.
+ * Cada instalación queda coherente en local y global: el plugin controller se copia siempre a <proyecto>/.opencode/plugins
+ * aunque el scope sea global (el state vive por worktree, el plugin debe estar local para hard-gate).
  */
 export interface StackResult {
   codegraph: { success: boolean; message: string };
   openspec: { success: boolean; message: string };
   engram: { success: boolean; message: string };
-  context7: { success: boolean; message: string };
   config: { success: boolean; message: string };
 }
 
@@ -104,6 +105,19 @@ function copyEngramPlugin(projectRoot: string): void {
   }
   mkdirSync(pluginsDir, { recursive: true });
   copyFileSync(pluginSource, join(pluginsDir, "engram.ts"));
+}
+
+function copyOstackyControllerPlugin(projectRoot: string): void {
+  const pluginSource = join(PACKAGE_ROOT, "assets", "plugins", "ostacky-plugin.ts");
+  const pluginsDir = join(projectRoot, ".opencode", "plugins");
+  if (!existsSync(pluginSource)) {
+    throw new Error(`Plugin bundleado de OstackyController no encontrado: ${pluginSource}`);
+  }
+  mkdirSync(pluginsDir, { recursive: true });
+  copyFileSync(pluginSource, join(pluginsDir, "ostacky-plugin.ts"));
+  // Coherencia local/global: el plugin se escribe SIEMPRE en <proyecto>/.opencode/plugins
+  // aunque el scope sea global, porque el state vive por worktree y el hard-gate debe estar local.
+  // Opencode carga plugins de ambas ubicaciones (global + local), así que el global agent también ve el local.
 }
 
 /** Builds an Engram release URL using its platform-specific asset naming. */
@@ -386,6 +400,7 @@ export async function installEngram(toolsDir?: string): Promise<{ success: boole
   try {
     runTool(localBin, ["--version"], projectRoot, 10_000);
     copyEngramPlugin(projectRoot);
+    copyOstackyControllerPlugin(projectRoot);
     configureLocalTool(projectRoot, "engram", buildLocalMcpCommand(localBin, ["mcp"]));
   } catch (error) {
     return failAfterExtraction(`Engram fue instalado pero no se pudo verificar o configurar: ${(error as Error).message}`);
@@ -397,63 +412,20 @@ export async function installEngram(toolsDir?: string): Promise<{ success: boole
 }
 
 /**
- * Configures Context7 for OpenCode.
- * Registers the remote MCP server in opencode.jsonc and creates
- * .opencode/tools/context7/. Also attempts to run `npx ctx7 setup --opencode`
- * to install the local skill.
- */
-export function setupContext7(toolsDir?: string): { success: boolean; message: string } {
-  const location = resolveToolInstallLocation(toolsDir);
-  const { projectRoot } = location;
-  const ctx7ToolDir = join(location.toolsDir, "context7");
-  if (!existsSync(ctx7ToolDir)) mkdirSync(ctx7ToolDir, { recursive: true });
-
-  // Registrar el MCP server remoto en opencode.jsonc
-  try {
-    ensureMcpEntryAtProjectRoot(projectRoot, "context7", {
-      type: "remote",
-      url: "https://mcp.context7.com/mcp",
-      enabled: true,
-    });
-  } catch (error) {
-    return { success: false, message: `No se pudo registrar Context7: ${(error as Error).message}` };
-  }
-
-  // Intentar instalar el skill via ctx7 setup --opencode (no-fatal)
-  // Usar bunx si bun está disponible, sino npx
-  const useBun = isCommandAvailable("bun");
-  try {
-    const invocation = getCommandInvocation(useBun ? "bunx" : "npx", useBun
-      ? ["ctx7", "setup", "--opencode"]
-      : ["--yes", "ctx7", "setup", "--opencode"]);
-    execFileSync(invocation.command, invocation.args, {
-      stdio: "pipe",
-      timeout: 60_000,
-      cwd: projectRoot,
-    });
-    return { success: true, message: "Context7 configurado (MCP + skill instalado)" };
-  } catch {
-    // Si ctx7 setup falla, el MCP remoto ya está registrado — es suficiente
-    return {
-      success: true,
-      message: "Context7 MCP registrado (skill opcional no instalada — corrí `npx ctx7 setup --opencode` manualmente si la querés)",
-    };
-  }
-}
-
-/**
  * Orchestrator: installs and configures the full tool stack
- * (CodeGraph + OpenSpec + Engram + Context7 + Config patch).
+ * (CodeGraph + OpenSpec + Engram + Config patch + OstackyController plugin).
+ * Context7 removido del stack. Plugin controller se instala siempre local para coherencia.
  * If toolsDir is provided, each tool creates its subdirectory there.
  * Async because CodeGraph and Engram download binaries.
  */
 export async function installStack(toolsDir?: string): Promise<StackResult> {
   const { projectRoot } = resolveToolInstallLocation(toolsDir);
+  // Asegurar plugin controller aunque Engram falle — es hard-gate del flujo
+  try { copyOstackyControllerPlugin(projectRoot); } catch {}
   return {
     codegraph: await installCodeGraph(toolsDir),
     openspec: setupOpenSpec(projectRoot),
     engram: await installEngram(toolsDir),
-    context7: setupContext7(toolsDir),
     config: patchOpenCodeConfig(projectRoot),
   };
 }
@@ -492,16 +464,17 @@ export function uninstallEngramConfig(): { success: boolean; message: string } {
 
 /**
  * Removes all stack configuration from the project:
- * - mcp.codegraph, mcp.context7, mcp.engram entries from opencode.json
+ * - mcp.codegraph, mcp.engram entries from opencode.json (context7 ya no existe)
  * - .codegraph/ directory
  * - .opencode/tools/ directory
+ * - .opencode/plugins/ostacky-controller.ts y engram.ts (limpieza opcional)
  * Does NOT touch global binaries (codegraph, engram) or Engram data.
  */
 export function uninstallStackConfig(paths: OpenCodePaths): { success: boolean; message: string } {
   const projectRoot = dirname(paths.root);
   const removed: string[] = [];
 
-  // 1. Remover entradas MCP del stack de opencode.json
+  // 1. Remover entradas MCP del stack de opencode.json (context7 removido, limpiar si quedó)
   const configPath = findOpenCodeConfig(projectRoot);
   if (configPath) {
     const config = readOpenCodeConfig(configPath);
@@ -509,7 +482,7 @@ export function uninstallStackConfig(paths: OpenCodePaths): { success: boolean; 
       const mcp = config.mcp as Record<string, unknown> | undefined;
       let changed = false;
       if (mcp) {
-        for (const name of ["codegraph", "context7", "engram"]) {
+        for (const name of ["codegraph", "engram", "context7"]) {
           if (name in mcp) {
             delete mcp[name];
             removed.push(`mcp.${name}`);

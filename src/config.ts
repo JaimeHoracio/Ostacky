@@ -189,6 +189,13 @@ export function patchOpenCodeConfig(projectRoot: string = findProjectRoot()): { 
     changed = true;
   }
 
+  // Context7 removido del stack — limpiar si quedó de instalaciones previas
+  if (config.mcp && typeof config.mcp === "object" && "context7" in (config.mcp as Record<string, unknown>)) {
+    delete (config.mcp as Record<string, unknown>).context7;
+    if (Object.keys(config.mcp as Record<string, unknown>).length === 0) delete config.mcp;
+    changed = true;
+  }
+
   if (changed) {
     writeOpenCodeConfig(configPath, config);
     return { success: true, message: "Config actualizada (plugin legacy eliminado)" };

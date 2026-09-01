@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { sha256 } from "./security.js";
 
+// INTERNAL — único entrypoint es src/discovery-cache.ts getDiscoverySnapshot/putDiscoverySnapshot.
+// Este módulo es helper interno para discovery-cache, no API directa del agente.
 export const CACHE_TTL_MS = 60 * 60 * 1000; // 1h
 export const CACHE_MAX_BYTES = 50 * 1024 * 1024; // 50MB
 export const CACHE_DIR_NAME = "codegraph";
@@ -26,7 +28,9 @@ export function getGitHead(projectRoot: string): string | null {
 export function getGitDiffHash(projectRoot: string): string | null {
   try {
     const diff = execSync("git diff --name-only", { cwd: projectRoot, encoding: "utf-8" }).trim();
-    return diff ? sha256(diff) : "";
+    const status = execSync("git status --porcelain --untracked-files=all", { cwd: projectRoot, encoding: "utf-8" }).trim();
+    const combined = [diff, status].filter(Boolean).join("\n");
+    return combined ? sha256(combined) : "";
   } catch {
     return null;
   }
@@ -35,6 +39,7 @@ export function getGitDiffHash(projectRoot: string): string | null {
 /**
  * Returns cached CodeGraph result if valid, else null.
  * Valid if: exists, not expired (TTL 1h), git diff hash matches, and OSTACKY_CACHE_DISABLE !== "1".
+ * Internal: increments discoveryCacheHitCount/tokenSavingEstimate directly in state file (no MCP tool).
  */
 export function getCachedCodegraph(query: string, projectRoot: string): any | null {
   if (process.env.OSTACKY_CACHE_DISABLE === "1") return null;
@@ -49,12 +54,27 @@ export function getCachedCodegraph(query: string, projectRoot: string): any | nu
     if (Date.now() - data.ts > CACHE_TTL_MS) return null;
     const currentDiff = getGitDiffHash(projectRoot);
     if (data.gitDiffHash !== undefined && data.gitDiffHash !== currentDiff) return null;
-    // Also check HEAD change: if HEAD changed and cache is old, invalidate
-    // (we keep simple: diff hash already captures changes, HEAD change without diff still valid)
+    // internal metric bump (no MCP round-trip) — best-effort
+    try {
+      incrementCacheHit(projectRoot);
+    } catch {}
     return data.result ?? null;
   } catch {
     return null;
   }
+}
+
+function incrementCacheHit(projectRoot: string): void {
+  try {
+    const statePath = join(projectRoot, ".opencode", "ostacky-state.json");
+    if (!existsSync(statePath)) return;
+    const raw = readFileSync(statePath, "utf-8");
+    const state = JSON.parse(raw);
+    state.cacheHitCount = (state.cacheHitCount || 0) + 1;
+    state.discoveryCacheHitCount = (state.discoveryCacheHitCount || 0) + 1;
+    state.tokenSavingEstimate = (state.tokenSavingEstimate || 0) + 500;
+    writeFileSync(statePath, JSON.stringify(state, null, 2), "utf-8");
+  } catch {}
 }
 
 export function putCachedCodegraph(query: string, result: any, projectRoot: string): void {

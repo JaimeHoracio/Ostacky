@@ -30,7 +30,7 @@ export async function runInteractiveMenu(scope?: Scope | null) {
       { value: "command", label: "Instalar command" },
       { value: "skill", label: "Instalar skill" },
       { value: "mcp", label: "Instalar MCP server" },
-      { value: "stack", label: "Instalar stack de herramientas (CodeGraph, Engram, Context7)" },
+      { value: "stack", label: "Instalar stack de herramientas (CodeGraph, Engram)" },
       { value: "update", label: "Actualizar instalación" },
       { value: "uninstall", label: "Desinstalar" },
       { value: "exit", label: "Salir" },
@@ -71,7 +71,7 @@ export async function runInteractiveMenu(scope?: Scope | null) {
         p.outro("Cancelado.");
         break;
       }
-      ensureToolDirs(paths.tools, ["codegraph", "engram", "context7"]);
+      ensureToolDirs(paths.tools, ["codegraph", "engram"]);
       const stackOk = await doInstallStack(paths.tools, dirname(paths.root));
       if (!stackOk) process.exitCode = 1;
       p.outro(stackOk ? "Listo." : "Instalación parcial.");
@@ -160,7 +160,7 @@ export async function runInstallStackCommand(scope?: Scope | null) {
     process.exitCode = 1;
     return;
   }
-  ensureToolDirs(paths.tools, ["codegraph", "engram", "context7"]);
+  ensureToolDirs(paths.tools, ["codegraph", "engram"]);
   const stackOk = await doInstallStack(paths.tools, dirname(paths.root));
   if (!stackOk) process.exitCode = 1;
   p.outro(stackOk ? "Stack instalado." : "Stack instalado parcialmente.");
@@ -172,7 +172,7 @@ export async function runUninstallStackCommand(scope?: Scope | null) {
   if (!paths) { p.outro("Cancelado."); return; }
 
   const confirm = await p.confirm({
-    message: "¿Remover la configuración del stack (CodeGraph, Engram, Context7) del proyecto? Los binarios globales no se tocan.",
+    message: "¿Remover la configuración del stack (CodeGraph, Engram) del proyecto? Los binarios globales no se tocan.",
   });
   onCancel(confirm);
   if (!confirm) {

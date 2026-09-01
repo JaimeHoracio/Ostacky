@@ -54,86 +54,17 @@ const ENGRAM_TOOLS = new Set([
 ])
 
 // ─── Memory Instructions ─────────────────────────────────────────────────────
-// These get injected into the agent's context so it knows to call mem_save.
+// Lazy: full protocol lives in assets/docs/engram-protocol.md (on-demand via Read).
+// System injects only pointer + nudge, not full 1.2k. Source-of-truth: src/tiered.ts for isTrivial.
 
-const MEMORY_INSTRUCTIONS = `## Engram Persistent Memory — Protocol
+const MEMORY_POINTER = "Engram disponible — para formato mem_save/mem_search lee assets/docs/engram-protocol.md (on-demand). Usa mem_search proactivamente si el tema pudo verse antes."
+const MEMORY_INSTRUCTIONS_LAZY = `## Engram — pointer (lazy)
 
-You have access to Engram, a persistent memory system that survives across sessions and compactions.
+${MEMORY_POINTER}
 
-### WHEN TO SAVE (mandatory — not optional)
-
-Call \`mem_save\` IMMEDIATELY after any of these:
-- Bug fix completed
-- Architecture or design decision made
-- Non-obvious discovery about the codebase
-- Configuration change or environment setup
-- Pattern established (naming, structure, convention)
-- User preference or constraint learned
-
-Format for \`mem_save\`:
-- **title**: Verb + what — short, searchable (e.g. "Fixed N+1 query in UserList", "Chose Zustand over Redux")
-- **type**: bugfix | decision | architecture | discovery | pattern | config | preference
-- **scope**: \`project\` (default) | \`personal\`
-- **topic_key** (optional, recommended for evolving decisions): stable key like \`architecture/auth-model\`
-- **content**:
-  **What**: One sentence — what was done
-  **Why**: What motivated it (user request, bug, performance, etc.)
-  **Where**: Files or paths affected
-  **Learned**: Gotchas, edge cases, things that surprised you (omit if none)
-
-Topic rules:
-- Different topics must not overwrite each other (e.g. architecture vs bugfix)
-- Reuse the same \`topic_key\` to update an evolving topic instead of creating new observations
-- If unsure about the key, call \`mem_suggest_topic_key\` first and then reuse it
-- Use \`mem_update\` when you have an exact observation ID to correct
-
-### WHEN TO SEARCH MEMORY
-
-When the user asks to recall something — any variation of "remember", "recall", "what did we do",
-"how did we solve", or the equivalent in the user's language, or references to past work:
-1. First call \`mem_context\` — checks recent session history (fast, cheap)
-2. If not found, call \`mem_search\` with relevant keywords (FTS5 full-text search)
-3. If you find a match, use \`mem_get_observation\` for full untruncated content
-
-Also search memory PROACTIVELY when:
-- Starting work on something that might have been done before
-- The user mentions a topic you have no context on — check if past sessions covered it
-- The user's FIRST message references the project, a feature, or a problem — call \`mem_search\` with keywords from their message to check for prior work before responding
-
-### SESSION CLOSE PROTOCOL (mandatory)
-
-Before ending a session or saying "done" / "that's it", you MUST:
-1. Call \`mem_session_summary\` with this structure:
-
-## Goal
-[What we were working on this session]
-
-## Instructions
-[User preferences or constraints discovered — skip if none]
-
-## Discoveries
-- [Technical findings, gotchas, non-obvious learnings]
-
-## Accomplished
-- [Completed items with key details]
-
-## Next Steps
-- [What remains to be done — for the next session]
-
-## Relevant Files
-- path/to/file — [what it does or what changed]
-
-This is NOT optional. If you skip this, the next session starts blind.
-
-### AFTER COMPACTION
-
-If you see a message about compaction or context reset, or if you see "FIRST ACTION REQUIRED" in your context:
-1. IMMEDIATELY call \`mem_session_summary\` with the compacted summary content — this persists what was done before compaction
-2. Then call \`mem_context\` to recover any additional context from previous sessions
-3. Only THEN continue working
-
-Do not skip step 1. Without it, everything done before compaction is lost from memory.
-`
+Cuando necesites guardar/buscar, lee el protocolo completo con Read. No alucines formato.`
+// Compat: keep full for fallback if file missing — but never inject full in system.transform
+const MEMORY_INSTRUCTIONS = MEMORY_INSTRUCTIONS_LAZY
 
 // ─── HTTP Client ─────────────────────────────────────────────────────────────
 
@@ -269,6 +200,26 @@ export const Engram: Plugin = async (ctx) => {
   // We must not register them as top-level Engram sessions — they cause session
   // inflation (e.g. 170 sessions for 1 real conversation, issue #116).
   const subAgentSessions = new Set<string>()
+
+  // Tiered cache-friendly: single source of truth via src/tiered.ts
+  const trivialBySession = new Map<string, boolean>()
+  // isTrivial y getControllerState importados lógicamente desde src/tiered.ts
+  // Inlined para evitar import dinámico en plugin bundle — mantener regex idéntico a src/tiered.ts
+  function isTrivialMessage(msg: string, state: string): boolean {
+    if (!msg || state !== "DONE") return false
+    if (msg.trim().length >= 30) return false
+    if (!/^(hola|hey|gracias|buenas|hi|hello)\b/i.test(msg.trim())) return false
+    if (/(necesito|quiero|agregá|fix|bug|feature|auth|spec|implementar)/i.test(msg)) return false
+    return true
+  }
+  function getControllerState(directory: string): string {
+    try {
+      const statePath = process.env.OSTACKY_STATE_PATH || join(directory, ".opencode", "ostacky-state.json")
+      const raw = readFileSync(statePath, "utf-8")
+      const j = JSON.parse(raw)
+      return j.state ?? "DONE"
+    } catch { return "DONE" }
+  }
 
   /**
    * Ensure a session exists in engram. Idempotent — calls POST /sessions
@@ -407,6 +358,12 @@ export const Engram: Plugin = async (ctx) => {
 
       const finalContent = content || fallback
 
+      // Tiered: set trivial flag for system.transform lazy
+      try {
+        const state = getControllerState(ctx.directory)
+        trivialBySession.set(sessionId, isTrivialMessage(finalContent, state))
+      } catch {}
+
       // Only capture non-trivial prompts (>10 chars)
       if (finalContent.length > 10) {
         await ensureSession(sessionId)
@@ -465,13 +422,24 @@ export const Engram: Plugin = async (ctx) => {
     // messages that would break these models. See: GitHub issue #23.
 
     "experimental.chat.system.transform": async (input, output) => {
+      // Tiered lazy: SIEMPRE pointer (cache-friendly, ~1 línea). Full vive en assets/docs/engram-protocol.md on-demand.
+      const sessionId: string = (input as any).sessionID ?? ""
+      const isTrivial = trivialBySession.get(sessionId) ?? false
+      const state = getControllerState(ctx.directory)
+      const shouldBeTrivial = isTrivial && state === "DONE"
+      const pointer = shouldBeTrivial
+        ? "Engram disponible — detalles a demanda (usa mem_search si necesitas recordar)."
+        : MEMORY_POINTER
       if (output.system.length > 0) {
-        output.system[output.system.length - 1] += "\n\n" + MEMORY_INSTRUCTIONS
+        output.system[output.system.length - 1] += "\n\n" + pointer
       } else {
-        output.system.push(MEMORY_INSTRUCTIONS)
+        output.system.push(pointer)
       }
+      // No inyectar MEMORY_INSTRUCTIONS completo nunca — se lee on-demand via Read
 
       // ── Save nudge ──────────────────────────────────────────────────────────
+      // Skip nudge for trivial greeting (cache-friendly, no extra injection)
+      if (shouldBeTrivial) return
       // If it has been a long time since the last mem_save, append a reminder
       // to the system prompt so the agent notices. All fetches are fire-and-
       // forget with short timeouts — any failure silently skips the nudge.

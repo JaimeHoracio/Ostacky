@@ -118,13 +118,9 @@ const TRANSITIONS = {
         { via: 'abandon', to: 'BLOCKED' },
     ],
     DISCOVERY: [
-        { via: 'record_discovery', to: 'LEVEL_RESOLVED' },
+        { via: 'record_discovery', to: 'ROUTE_DECISION_PENDING' },
         { via: 'block', to: 'BLOCKED' },
         { via: 'abandon', to: 'BLOCKED' },
-    ],
-    LEVEL_RESOLVED: [
-        { via: 'proceed_to_route', to: 'ROUTE_DECISION_PENDING' },
-        { via: 'block', to: 'BLOCKED' },
     ],
     ROUTE_DECISION_PENDING: [
         { via: 'consume_route_decision', to: 'SPECIFICATION', choice: 'SPEC' },
@@ -329,7 +325,6 @@ const STATES = Object.freeze({
     INTERPRETATION_PENDING: 'INTERPRETATION_PENDING',
     CLARIFICATION_PENDING: 'CLARIFICATION_PENDING',
     DISCOVERY: 'DISCOVERY',
-    LEVEL_RESOLVED: 'LEVEL_RESOLVED',
     ROUTE_DECISION_PENDING: 'ROUTE_DECISION_PENDING',
     SPECIFICATION: 'SPECIFICATION',
     EXECUTION_ANALYSIS: 'EXECUTION_ANALYSIS',
@@ -375,6 +370,11 @@ const DEFAULT_STATE = Object.freeze({
     cacheHitCount: 0, // 5.4 hardening-v2
     cacheMissCount: 0,
     tokenSavingEstimate: 0,
+    discoveryCacheHitCount: 0, // mejora-acciones-controller F2
+    redundantCallCount: 0,
+    cacheMissWithoutPutCount: 0,
+    stateCheckCount: 0,
+    toolCallCount: 0,
     lastProposal: null, // 8.1
     allowedFiles: {}, // 9.2
     deniedFiles: {}, // 9.2
@@ -734,6 +734,10 @@ class OstackyController {
                     const redactRecursively = (obj) => {
                         if (!obj || typeof obj !== 'object') return;
                         for (const k of Object.keys(obj)) {
+                            if (k === 'tokenSavingEstimate') {
+                                if (typeof obj[k] === 'object') redactRecursively(obj[k]);
+                                continue;
+                            }
                             if (SENSITIVE_REDACT_RE.test(k)) {
                                 obj[k] = '[REDACTED]';
                             } else if (typeof obj[k] === 'string' && SENSITIVE_REDACT_RE.test(obj[k])) {
@@ -975,7 +979,6 @@ class OstackyController {
             INTERPRETATION_PENDING: 'Call start_request or proceed_to_discovery first.',
             CLARIFICATION_PENDING: 'Answer the clarification question, then call record_clarification.',
             DISCOVERY: 'Call record_discovery with a level classification.',
-            LEVEL_RESOLVED: 'Call proceed_to_route to move to route decision.',
             ROUTE_DECISION_PENDING: 'Call consume_route_decision with SPEC or DIRECT.',
             SPECIFICATION: 'Call spec_complete when specification is done.',
             EXECUTION_ANALYSIS: 'Call record_execution_analysis with a snapshot.',
@@ -1167,7 +1170,7 @@ class OstackyController {
             snapshots: { ...this.#state.snapshots, codegraph: compressedSnapshot },
             lastProposal,
         });
-        await this.#audit('LEVEL_RESOLVED', 'record_discovery', `level=${level}, default=${defaultChoice}`);
+        await this.#audit('ROUTE_DECISION_PENDING', 'record_discovery', `level=${level}, default=${defaultChoice}`);
         // 8.2: reasoning sin plan → WARN
         if (!shownToUser && !isTrivial) {
             const auditId = `aud-${Date.now()}-${this.#state.auditSeq}`;
@@ -1209,6 +1212,29 @@ class OstackyController {
                 auditId: lastAudit?.id || auditId,
             };
         }
+        // Router determinista: 1+ exige Alternatives si estLines>30||fileCount>2||hasAPI, sino downgrade
+        const fileCount = proposalFiles.length;
+        const hasAPI = !!(snapshot?.hasAPI || snapshot?.reasoning?.hasAPI || snapshot?.hasExplicitContract);
+        const estLinesVal = estLines || snapshot?.estLines || snapshot?.reasoning?.estLines || 0;
+        const isOnePlus = level === '1+';
+        const needsBrainstorming = isOnePlus && (estLinesVal > 30 || fileCount > 2 || hasAPI);
+        const isDowngradeable = isOnePlus && estLinesVal < 30 && fileCount === 1 && !hasAPI;
+        if (isOnePlus && needsBrainstorming) {
+            // mark that Alternatives required — will be checked in openspec-propose gate
+            this.#state._routerNeedsAlternatives = true;
+            this.#state._routerDowngradeSuggested = false;
+            log('info:router_brainstorming_required', { level, estLines: estLinesVal, fileCount, hasAPI });
+        } else if (isDowngradeable) {
+            this.#state._routerNeedsAlternatives = false;
+            this.#state._routerDowngradeSuggested = true;
+            log('info:router_downgrade_to_direct', { level, estLines: estLinesVal, fileCount, hasAPI });
+            // override defaultChoice to DIRECT for downgradeable
+            // keep stored defaultChoice as DIRECT already, but hint downgrade
+        } else {
+            this.#state._routerNeedsAlternatives = false;
+            this.#state._routerDowngradeSuggested = false;
+        }
+        await this.#persist();
         // 8.6: Bypass solo para CI
         if (process.env.OSTACKY_REQUIRE_CONFIRMATION === 'false' && this.#state.state === 'ROUTE_DECISION_PENDING') {
             await this.#audit('AUTO', 'auto-confirm (CI)', `auto-consume ${defaultChoice} for CI`);
@@ -1232,16 +1258,28 @@ class OstackyController {
             level,
             routeDecisionId: this.#state.routeDecisionId,
             defaultChoice,
+            routerNeedsAlternatives: this.#state._routerNeedsAlternatives || false,
+            routerDowngradeSuggested: this.#state._routerDowngradeSuggested || false,
         };
     }
 
     async proceedToRoute() {
         this.#load();
+        // deprecated alias: if already ROUTE_DECISION_PENDING, return no-op deprecated
+        if (this.#state.state === 'ROUTE_DECISION_PENDING') {
+            await this.#audit('WARN', 'proceed_to_route', 'deprecated: already in ROUTE_DECISION_PENDING');
+            return {
+                state: this.#state.state,
+                revision: this.#state.revision,
+                deprecated: true,
+                warning: 'proceed_to_route deprecated, use record_discovery directly',
+            };
+        }
         const to = this.#isAllowedTransition(this.#state.state, 'proceed_to_route');
         if (!to) return this.#makeError(`Cannot proceed to route from state ${this.#state.state}`, 'proceed_to_route');
         await this.#transition(to);
         await this.#audit('ROUTE_DECISION_PENDING', 'proceed_to_route');
-        return { state: this.#state.state, revision: this.#state.revision };
+        return { state: this.#state.state, revision: this.#state.revision, deprecated: true };
     }
 
     async abandon({ reason } = {}) {
@@ -1380,11 +1418,20 @@ class OstackyController {
         }
         // C2: warning if missing codegraphUsed+recommendation and not degraded — snapshot missing also counts
         // 1.7: early-exit with taskCount<=2 is valid without codegraphUsed, do not warn
-        const hasEvidence =
+        // mejora-acciones-controller F3: discovery-cache counts as valid evidence if discovery snapshot exists
+        const isDiscoveryCacheEvidence =
             snapshot &&
             Array.isArray(snapshot.codegraphUsed) &&
-            snapshot.codegraphUsed.length > 0 &&
-            snapshot.recommendation != null;
+            snapshot.codegraphUsed.includes('discovery-cache') &&
+            this.#state.snapshots.codegraph != null &&
+            Array.isArray(snapshot.expectedTaskIds) &&
+            snapshot.expectedTaskIds.length > 0;
+        const hasEvidence =
+            (snapshot &&
+                Array.isArray(snapshot.codegraphUsed) &&
+                snapshot.codegraphUsed.length > 0 &&
+                snapshot.recommendation != null) ||
+            isDiscoveryCacheEvidence;
         if (!hasEvidence && !this.#degraded && !isEarlyExitExec) {
             this.#state.codegraphBypassCount = (this.#state.codegraphBypassCount || 0) + 1;
             const auditId = `aud-${Date.now()}-${this.#state.auditSeq}`;
@@ -1728,6 +1775,11 @@ class OstackyController {
             toolTimeoutCount: this.#state.toolTimeoutCount || 0,
             lastToolDurationMs: this.#state.lastToolDurationMs || 0,
             stateDurationMs: this.#state.stateDurationMs || 0,
+            discoveryCacheHitCount: this.#state.discoveryCacheHitCount || 0,
+            redundantCallCount: this.#state.redundantCallCount || 0,
+            cacheMissWithoutPutCount: this.#state.cacheMissWithoutPutCount || 0,
+            stateCheckCount: this.#state.stateCheckCount || 0,
+            toolCallCount: this.#state.toolCallCount || 0,
         };
     }
 
@@ -1956,6 +2008,36 @@ class OstackyController {
                 if (e.code && e.code !== 'ENOENT') {
                     // ignore ENOENT (new file), but other errors considered stale
                 }
+            }
+        }
+        // mejora-acciones-controller: hash: prefix alias for validate_edit without full content
+        if (typeof content === 'string' && content.startsWith('hash:') && filePath) {
+            const hashArg = content.slice(5);
+            try {
+                const projectRoot = getProjectRoot(this.#statePath);
+                const absolutePath =
+                    filePath.startsWith('/') || /^[A-Za-z]:/.test(filePath)
+                        ? resolve(filePath)
+                        : resolve(projectRoot, filePath);
+                const currentHash = fastFingerprint(absolutePath);
+                if (
+                    currentHash &&
+                    hashArg === currentHash &&
+                    this.#state.lastValidated?.filePath === filePath &&
+                    this.#state.lastValidated?.hash === currentHash
+                ) {
+                    try {
+                        content = readFileSync(absolutePath, 'utf8');
+                    } catch {
+                        return { outcome: 'CONFLICT', reason: 'stale fingerprint', filePath };
+                    }
+                } else {
+                    this.#state.staleContentAttempts = (this.#state.staleContentAttempts || 0) + 1;
+                    await this.#persist();
+                    return { outcome: 'CONFLICT', reason: 'stale fingerprint', filePath };
+                }
+            } catch (e) {
+                return { outcome: 'CONFLICT', reason: 'hash validation failed' };
             }
         }
         // 5.3: optimization — si fastFingerprint no cambió, no re-enviar content completo
@@ -2289,14 +2371,13 @@ function safeHandler(fn, options = {}) {
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.7.4',
+    version: '0.8.0',
 });
 
 server.registerTool(
     'start_request',
     {
-        description:
-            'Start or resume a request. By default, resumes in-progress work (non-terminal states). Use force=true to always reset.',
+        description: 'Start or resume request',
         inputSchema: z.object({
             requestId: z.string().optional().describe('Unique request ID'),
             changeId: z.string().optional().describe('Optional change ID for OpenSpec tracking'),
@@ -2312,8 +2393,7 @@ server.registerTool(
 server.registerTool(
     'request_clarification',
     {
-        description:
-            'Pause execution to ask the user for clarification. Use when the request is too vague to classify. Transitions to CLARIFICATION_PENDING — you MUST stop and wait for user response.',
+        description: 'Request clarification',
         inputSchema: z.object({
             question: z.string().optional().describe('The clarification question'),
         }),
@@ -2327,7 +2407,7 @@ server.registerTool(
 server.registerTool(
     'record_clarification',
     {
-        description: 'Record that clarification was answered. Transitions to DISCOVERY.',
+        description: 'Record clarification',
         inputSchema: z.object({}),
     },
     safeHandler(async () => {
@@ -2339,8 +2419,7 @@ server.registerTool(
 server.registerTool(
     'record_discovery',
     {
-        description:
-            'Record discovery complete with level classification. From INTERPRETATION_PENDING goes to ROUTE_DECISION_PENDING. From DISCOVERY goes to LEVEL_RESOLVED.',
+        description: 'Record discovery (level)',
         inputSchema: z.object({
             level: z.enum(['0', '0+1', '1+']).describe('Impact level'),
             routeDecisionId: z.string().optional().describe('Unique route decision ID'),
@@ -2356,7 +2435,7 @@ server.registerTool(
 server.registerTool(
     'consume_route_decision',
     {
-        description: 'Consume the route decision (SPEC or DIRECT). Valid only in ROUTE_DECISION_PENDING.',
+        description: 'Consume route decision (SPEC/DIRECT)',
         inputSchema: z.object({
             decisionId: z.string().describe('Route decision ID from record_discovery'),
             choice: z.enum(['SPEC', 'DIRECT']).describe('Route choice'),
@@ -2371,7 +2450,7 @@ server.registerTool(
 server.registerTool(
     'spec_complete',
     {
-        description: 'Mark specification phase as complete. Transitions to EXECUTION_ANALYSIS.',
+        description: 'Spec complete',
         inputSchema: z.object({}),
     },
     safeHandler(async () => {
@@ -2383,7 +2462,7 @@ server.registerTool(
 server.registerTool(
     'record_execution_analysis',
     {
-        description: 'Record execution analysis with snapshot. Transitions to EXECUTION_DECISION_PENDING.',
+        description: 'Record execution analysis',
         inputSchema: z.object({
             executionDecisionId: z.string().optional().describe('Unique execution decision ID'),
             snapshot: z.any().optional().describe('Execution analysis snapshot'),
@@ -2398,7 +2477,7 @@ server.registerTool(
 server.registerTool(
     'consume_execution_decision',
     {
-        description: 'Consume the execution mode decision (INLINE or SUBAGENT_DRIVEN).',
+        description: 'Consume execution decision (INLINE/SUBAGENT)',
         inputSchema: z.object({
             decisionId: z.string().describe('Execution decision ID from record_execution_analysis'),
             mode: z.enum(['INLINE', 'SUBAGENT_DRIVEN']).describe('Execution mode'),
@@ -2431,7 +2510,7 @@ server.registerTool(
 server.registerTool(
     'sync_complete',
     {
-        description: 'Mark sync as complete. Transitions to DONE.',
+        description: 'Sync complete',
         inputSchema: z.object({}),
     },
     safeHandler(async () => {
@@ -2443,7 +2522,7 @@ server.registerTool(
 server.registerTool(
     'block',
     {
-        description: 'Transition to BLOCKED state with an optional reason.',
+        description: 'Block',
         inputSchema: z.object({
             reason: z.string().optional().describe('Reason for blocking'),
         }),
@@ -2457,7 +2536,7 @@ server.registerTool(
 server.registerTool(
     'replan',
     {
-        description: 'Replan from BLOCKED state back to INTERPRETATION_PENDING.',
+        description: 'Replan',
         inputSchema: z.object({
             reason: z.string().optional().describe('Reason for replanning'),
         }),
@@ -2503,11 +2582,11 @@ server.registerTool(
 server.registerTool(
     'get_audit',
     {
-        description: 'Get recent audit entries paginated. Read-only, truncated to 300 chars with unique id per entry.',
+        description: 'Get audit (paginated)',
         inputSchema: z.object({
             limit: z.number().optional().describe('Max entries (default 20)'),
             offset: z.number().optional().describe('Offset from end (default 0)'),
-            phase: z.string().optional().describe('Filter by phase (e.g. WARN, LEVEL_RESOLVED)'),
+            phase: z.string().optional().describe('Filter by phase (e.g. WARN, ROUTE_DECISION_PENDING)'),
             since: z.number().optional().describe('Filter by timestamp >= since'),
         }),
     },
@@ -2523,8 +2602,7 @@ server.registerTool(
 server.registerTool(
     'get_metrics',
     {
-        description:
-            'Get controller metrics read-only (revision, state, degraded, taskCounts, auditSize, stateFileSize, diskFreeMB, uptimeMs, stateOversizedCount, codegraphBypassCount)',
+        description: 'Get metrics',
         inputSchema: z.object({}),
     },
     safeHandler(
@@ -2539,28 +2617,28 @@ server.registerTool(
 server.registerTool(
     'record_cache_hit',
     {
-        description:
-            'Record a CodeGraph cache hit — increments cacheHitCount and tokenSavingEstimate. Call after reusing getCachedCodegraph result.',
+        description: 'Deprecated: cache hit',
         inputSchema: z.object({
             tokensSaved: z.number().optional().describe('Estimated tokens saved (default 500)'),
         }),
     },
     safeHandler(async ({ tokensSaved }) => {
-        log('tool:record_cache_hit', { tokensSaved });
-        return await controller.recordCacheHit({ tokensSaved });
+        log('tool:record_cache_hit', { tokensSaved, deprecated: true });
+        const r = await controller.recordCacheHit({ tokensSaved });
+        return { ...r, deprecated: true };
     })
 );
 
 server.registerTool(
     'record_cache_miss',
     {
-        description:
-            'Record a CodeGraph cache miss — increments cacheMissCount. Call after getCachedCodegraph returns null.',
+        description: 'Deprecated: cache miss',
         inputSchema: z.object({}),
     },
     safeHandler(async () => {
-        log('tool:record_cache_miss');
-        return await controller.recordCacheMiss();
+        log('tool:record_cache_miss', { deprecated: true });
+        const r = await controller.recordCacheMiss();
+        return { ...r, deprecated: true };
     })
 );
 
@@ -2584,7 +2662,7 @@ server.registerTool(
     'check_file_access',
     {
         description:
-            'Check if file is sensitive and requires ALLOW. Returns BLOCKED with decisionId if sensitive and not allowed.',
+            '[deprecated if plugin active] Check if file is sensitive and requires ALLOW. plugin enforces when active.',
         inputSchema: z.object({
             filePath: z.string().describe('File path to check'),
             reason: z.string().optional().describe('Reason for access'),
@@ -2592,6 +2670,21 @@ server.registerTool(
     },
     safeHandler(async ({ filePath, reason }) => {
         log('tool:check_file_access', { filePath });
+        try {
+            const pluginPath = join(process.cwd(), '.opencode', 'plugins', 'ostacky-plugin.ts');
+            const assetsPath = join(process.cwd(), 'assets', 'plugins', 'ostacky-plugin.ts');
+            const legacyPluginPath = join(process.cwd(), '.opencode', 'plugins', 'ostacky-controller.ts');
+            const legacyAssetsPath = join(process.cwd(), 'assets', 'plugins', 'ostacky-controller.ts');
+            if (
+                existsSync(pluginPath) ||
+                existsSync(assetsPath) ||
+                existsSync(legacyPluginPath) ||
+                existsSync(legacyAssetsPath)
+            ) {
+                const res = await controller.checkFileAccess({ filePath, reason });
+                return { ...res, deprecated: true, hint: 'plugin enforces' };
+            }
+        } catch {}
         return await controller.checkFileAccess({ filePath, reason });
     })
 );
@@ -2599,7 +2692,7 @@ server.registerTool(
 server.registerTool(
     'consume_file_access_decision',
     {
-        description: 'Consume file access decision: ALLOW or DENY. Persists allowedFiles/deniedFiles.',
+        description: 'Consume file access decision',
         inputSchema: z.object({
             decisionId: z.string().describe('Decision ID from check_file_access'),
             choice: z.enum(['ALLOW', 'DENY']).describe('Choice'),
@@ -2614,20 +2707,19 @@ server.registerTool(
 server.registerTool(
     'proceed_to_route',
     {
-        description:
-            'Proceed from LEVEL_RESOLVED to ROUTE_DECISION_PENDING after discovery is confirmed. Only valid from LEVEL_RESOLVED — call this after asking the user about the route decision.',
+        description: 'Proceed to route (deprecated)',
         inputSchema: z.object({}),
     },
     safeHandler(async () => {
-        log('tool:proceed_to_route');
-        return await controller.proceedToRoute();
+        log('tool:proceed_to_route deprecated');
+        return { deprecated: true, state: 'ROUTE_DECISION_PENDING' };
     })
 );
 
 server.registerTool(
     'abandon',
     {
-        description: 'Abandon the current request. Transitions to BLOCKED from most states, or to DONE from BLOCKED.',
+        description: 'Abandon request',
         inputSchema: z.object({
             reason: z.string().optional().describe('Reason for abandoning'),
         }),
@@ -2669,7 +2761,7 @@ server.registerTool(
 server.registerTool(
     'get_state',
     {
-        description: 'Get the current controller state (reads persistent store).',
+        description: 'Get state',
         inputSchema: z.object({}),
     },
     safeHandler(
@@ -2683,7 +2775,7 @@ server.registerTool(
 server.registerTool(
     'get_tasks',
     {
-        description: 'Get current task states.',
+        description: 'Get tasks',
         inputSchema: z.object({}),
     },
     safeHandler(
@@ -2697,7 +2789,7 @@ server.registerTool(
 server.registerTool(
     'get_available_transitions',
     {
-        description: 'Get valid transitions from current state. Useful for debugging state machine issues.',
+        description: 'Get available transitions',
         inputSchema: z.object({}),
     },
     safeHandler(
@@ -2727,7 +2819,7 @@ server.registerTool(
 server.registerTool(
     'get_handoff',
     {
-        description: 'Read pending handoff from previous session. Call at start of new request to recover context.',
+        description: 'Get handoff',
         inputSchema: z.object({}),
     },
     safeHandler(
@@ -2741,7 +2833,7 @@ server.registerTool(
 server.registerTool(
     'clear_handoff',
     {
-        description: 'Mark handoff as consumed after the agent has loaded the context.',
+        description: 'Clear handoff',
         inputSchema: z.object({}),
     },
     safeHandler(async () => {
@@ -2753,15 +2845,19 @@ server.registerTool(
     'check_pending_state',
     {
         description:
-            'Check if agent is in a pending state waiting for user input. ' +
-            'MUST be called before ANY tool call when controller is available. ' +
-            'Returns ALLOW or BLOCKED with reason. ' +
-            'EXCEPTION: controller tools (consume_route_decision, consume_execution_decision, ' +
-            'record_clarification, abandon) are ALWAYS allowed — they unlock the state.',
+            '[deprecated] Check if in pending state. Returns ALLOW/BLOCKED. plugin enforces — deprecated:true if plugin active',
         inputSchema: z.object({}),
     },
     safeHandler(
         async () => {
+            // If plugin active, delegate to hint
+            try {
+                const pluginPath = join(process.cwd(), '.opencode', 'plugins', 'ostacky-controller.ts');
+                const assetsPath = join(process.cwd(), 'assets', 'plugins', 'ostacky-controller.ts');
+                if (existsSync(pluginPath) || existsSync(assetsPath)) {
+                    return { deprecated: true, hint: 'plugin enforces', status: 'ALLOW' };
+                }
+            } catch {}
             const state = await controller.getState();
             const pendingStates = ['CLARIFICATION_PENDING', 'ROUTE_DECISION_PENDING', 'EXECUTION_DECISION_PENDING'];
             if (pendingStates.includes(state.state)) {
@@ -2782,21 +2878,11 @@ server.registerTool(
 server.registerTool(
     'validate_edit',
     {
-        description:
-            'Validate an edit against current file content. Returns EDITABLE, ALREADY_APPLIED, or CONFLICT. ' +
-            'Call BEFORE executing an edit tool. Only valid in EXECUTING_INLINE or EXECUTING_SUBAGENTS states. ' +
-            'IMPORTANT: content parameter is REQUIRED. Read the file first, then pass the full content.',
+        description: '[deprecated] Validate edit',
         inputSchema: z.object({
             oldString: z.string().describe('The exact string to find in content (must be unique).'),
             newString: z.string().describe('The replacement string.'),
-            content: z
-                .string()
-                .describe(
-                    'REQUIRED — The full file content. ' +
-                        'You MUST read the file first with the Read tool, then pass the complete content here. ' +
-                        'Example: call Read on the file, store the output, then call validate_edit with that content. ' +
-                        'Without this parameter, validate_edit will fail.'
-                ),
+            content: z.string().describe('Required: full file content or hash:<fp> if fingerprint unchanged.'),
             taskId: z.string().optional().describe('Optional task ID for tracking.'),
             filePath: z.string().optional().describe('Optional file path for traversal validation.'),
         }),
@@ -2809,6 +2895,20 @@ server.registerTool(
             hasContent: !!content,
             filePath,
         });
+        try {
+            const pluginPath = join(process.cwd(), '.opencode', 'plugins', 'ostacky-plugin.ts');
+            const assetsPath = join(process.cwd(), 'assets', 'plugins', 'ostacky-plugin.ts');
+            const legacyPluginPath = join(process.cwd(), '.opencode', 'plugins', 'ostacky-controller.ts');
+            const legacyAssetsPath = join(process.cwd(), 'assets', 'plugins', 'ostacky-controller.ts');
+            if (
+                existsSync(pluginPath) ||
+                existsSync(assetsPath) ||
+                existsSync(legacyPluginPath) ||
+                existsSync(legacyAssetsPath)
+            ) {
+                return { deprecated: true, hint: 'plugin enforces' };
+            }
+        } catch {}
         if (typeof content !== 'string' || typeof oldString !== 'string' || typeof newString !== 'string') {
             return {
                 outcome: 'CONFLICT',
@@ -2871,7 +2971,7 @@ function setupGracefulShutdown(ctrl) {
 }
 
 async function main() {
-    log('Starting ostacky-controller MCP v0.7.4...');
+    log('Starting ostacky-controller MCP v0.8.0...');
     log('State path:', { path: statePath });
     // Clean up stale tmp/lock files from previous runs
     cleanupTmpFiles(statePath);
