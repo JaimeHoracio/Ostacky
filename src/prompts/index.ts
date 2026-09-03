@@ -1,18 +1,19 @@
 import * as p from "@clack/prompts";
-import { dirname, join } from "path";
-import { existsSync } from "fs";
-import { ensureToolDirs, getOpenCodeDirForScope } from "../fs.js";
+import { dirname } from "path";
+import { ensureToolDirs } from "../fs.js";
 import type { Scope } from "../fs.js";
 import { loadManifest, loadLatestManifest, printPostInstallSteps, resolveOpenCodePaths, isGlobalScope, onCancel } from "./helpers.js";
 import { doInstallAll, doInstallStack } from "./install.js";
 import { doAddAgent, doAddCommand, doAddSkill, doAddMcp } from "./add.js";
 import { doUpdate } from "./update.js";
 import { doUninstall, doUninstallAgentByName, doUninstallCommandByName, doUninstallSkillByName, doUninstallMcpByName } from "./uninstall.js";
+import { ensureOpencodeInstalled } from "../opencode.js";
 
 export { printPostInstallSteps } from "./helpers.js";
 
 export async function runInteractiveMenu(scope?: Scope | null) {
   p.intro(" OpenCode Installer ");
+  await ensureOpencodeInstalled();
 
   const manifest = await loadManifest();
   const paths = await resolveOpenCodePaths(scope ?? null);
@@ -95,6 +96,7 @@ export async function runInteractiveMenu(scope?: Scope | null) {
 
 export async function runInstallCommand(scope?: Scope | null) {
   p.intro(" OpenCode Installer ");
+  await ensureOpencodeInstalled();
   const manifest = await loadManifest();
   const paths = await resolveOpenCodePaths(scope ?? null);
   if (!paths) { p.outro("Cancelado."); return; }
@@ -105,6 +107,7 @@ export async function runInstallCommand(scope?: Scope | null) {
 
 export async function runAddAgentCommand(scope?: Scope | null) {
   p.intro(" OpenCode Installer ");
+  await ensureOpencodeInstalled();
   const manifest = await loadManifest();
   const paths = await resolveOpenCodePaths(scope ?? null);
   if (!paths) { p.outro("Cancelado."); return; }
@@ -115,6 +118,7 @@ export async function runAddAgentCommand(scope?: Scope | null) {
 
 export async function runAddCommandCommand(scope?: Scope | null) {
   p.intro(" OpenCode Installer ");
+  await ensureOpencodeInstalled();
   const manifest = await loadManifest();
   const paths = await resolveOpenCodePaths(scope ?? null);
   if (!paths) { p.outro("Cancelado."); return; }
@@ -125,6 +129,7 @@ export async function runAddCommandCommand(scope?: Scope | null) {
 
 export async function runAddSkillCommand(scope?: Scope | null) {
   p.intro(" OpenCode Installer ");
+  await ensureOpencodeInstalled();
   const manifest = await loadManifest();
   const paths = await resolveOpenCodePaths(scope ?? null);
   if (!paths) { p.outro("Cancelado."); return; }
@@ -135,6 +140,7 @@ export async function runAddSkillCommand(scope?: Scope | null) {
 
 export async function runAddMcpCommand(scope?: Scope | null) {
   p.intro(" OpenCode Installer ");
+  await ensureOpencodeInstalled();
   const manifest = await loadManifest();
   const paths = await resolveOpenCodePaths(scope ?? null);
   if (!paths) { p.outro("Cancelado."); return; }
@@ -144,6 +150,7 @@ export async function runAddMcpCommand(scope?: Scope | null) {
 }
 
 export async function runInstallStackCommand(scope?: Scope | null) {
+  await ensureOpencodeInstalled();
   if (scope === "global") {
     p.log.error("install-stack requiere scope local; el stack vive en <proyecto>/.opencode/tools");
     p.outro("Usá: npx ostacky install-stack --scope local");
@@ -193,6 +200,7 @@ export async function runUninstallStackCommand(scope?: Scope | null) {
 
 export async function runUpdateCommand(scope?: Scope | null) {
   p.intro(" OpenCode Installer ");
+  await ensureOpencodeInstalled();
   const manifest = await loadLatestManifest();
   const paths = await resolveOpenCodePaths(scope ?? null);
   if (!paths) { p.outro("Cancelado."); return; }

@@ -38,14 +38,16 @@ async function doUninstallTotal(paths: OpenCodePaths) {
   for (const name of Object.keys(lockfile.mcpServers ?? {})) {
     pathsToDelete.push(join(paths.mcp, name));
   }
+  // Safe-delete: solo lo trackeado en lockfile. Preview muestra scope para evitar borrar scope equivocado.
+  // Plugins Ostacky-owned (ostacky-plugin.ts, engram.ts + legacy guard/controller) se informan aparte.
 
   p.note(
-    pathsToDelete.join("\n"),
-    `Se eliminarán ${pathsToDelete.length} archivo(s) / directorio(s)`
+    [`Scope: ${paths.root}`, ...pathsToDelete].join("\n"),
+    `Se eliminarán ${pathsToDelete.length} item(s) trackeados en lockfile (safe-delete)`
   );
 
   const confirm = await p.confirm({
-    message: `¿Confirmar desinstalación de ${pathsToDelete.length} item(s)?`,
+    message: `¿Confirmar desinstalación de ${pathsToDelete.length} item(s) en ${paths.root}?`,
   });
   onCancel(confirm);
   if (!confirm) {
@@ -54,7 +56,7 @@ async function doUninstallTotal(paths: OpenCodePaths) {
   }
 
   uninstallAll(paths);
-  p.log.success(`${pathsToDelete.length} item(s) eliminado(s).`);
+  p.log.success(`${pathsToDelete.length} item(s) eliminado(s) + plugins Ostacky-owned limpiados.`);
 
   const cleanEngram = await p.confirm({
     message: "¿Deseas remover la configuración de Engram del proyecto (mcp.engram)?",

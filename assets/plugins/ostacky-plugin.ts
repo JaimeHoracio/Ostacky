@@ -20,6 +20,10 @@ import { isTrivial } from "../../src/tiered.ts"
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const MAX_STATE_FILE_SIZE = 2 * 1024 * 1024
+const PING_INTERVAL_MS = 60_000
+const IDLE_THRESHOLD_MS = 45_000
+const PURPLE_TENUE = "\x1b[38;5;183m"
+const PURPLE_RESET = "\x1b[0m"
 
 const STATES = Object.freeze({
   INTERPRETATION_PENDING: "INTERPRETATION_PENDING",
@@ -254,6 +258,9 @@ function isCodegraphAvailable(directory: string): boolean {
 const trivialBySession = new Map<string, boolean>()
 // Track discovery hit per requestId to avoid blocking after hit
 const discoveryHitByRequest = new Map<string, boolean>()
+// ─── Heartbeat ping — evita sensación de trancado en tareas largas ──
+let lastPingTs = 0
+let pingInterval: ReturnType<typeof setInterval> | null = null
 
 // ─── Plugin ──────────────────────────────────────────────────────────────────
 
@@ -266,6 +273,30 @@ export const OstackyController: Plugin = async (ctx) => {
 
   let lastCheck: { revision: number; result: string } | null = null
   let checkCount = 0
+
+  // Heartbeat ping — purple tenue, evita sensación de trancado en tareas largas
+  if (!pingInterval) {
+    pingInterval = setInterval(async () => {
+      try {
+        const s = readState(ctx.directory)
+        if (!s || !["EXECUTING_INLINE", "EXECUTING_SUBAGENTS", "SYNC"].includes(s.state)) return
+        const now = Date.now()
+        const lastHeartbeat = s.lastHeartbeat || s.ts || now
+        const idle = now - lastHeartbeat
+        if (idle < IDLE_THRESHOLD_MS) return
+        if (now - lastPingTs < PING_INTERVAL_MS) return
+        lastPingTs = now
+        const completed = Object.values(s.tasks || {}).filter((t: any) => t.status === "COMPLETED").length
+        const total = s.expectedTaskCount ?? s.expectedTasks?.length ?? "?"
+        const pending = Array.isArray(s.expectedTasks) ? s.expectedTasks.filter((id: string) => !s.tasks?.[id] || s.tasks[id].status !== "COMPLETED").length : "?"
+        const msg = `🟣 ${PURPLE_TENUE}[OSTACKY]${PURPLE_RESET} ⏳ Sigo trabajando — ${s.state} • ${completed}/${total} (${pending} pendientes) • hace ${Math.round(idle/1000)}s sin output`
+        try { await (ctx as any).client?.tui?.showToast?.({ body: { message: msg, variant: "info" } } as any) } catch {}
+        try { await (ctx as any).client?.app?.log?.({ body: { service: "ostacky-ping", level: "info", message: msg } } as any) } catch {}
+        try { const st = readState(ctx.directory); if (st) { (st as any).lastPingTs = now; persistState(ctx.directory, st) } } catch {}
+      } catch {}
+    }, 30_000)
+    if (pingInterval && typeof (pingInterval as any).unref === 'function') (pingInterval as any).unref()
+  }
 
   return {
     // ── Tiered: suffix hint on user message (cache-friendly, no system replace) ──
@@ -527,6 +558,18 @@ export const OstackyController: Plugin = async (ctx) => {
           const s = readState((input as any).ctx?.directory ?? "")
         } catch {}
       }
+      // Heartbeat + color purple tenue: Ostacky vs modelo (fácil)
+      try {
+        const dir = ctx.directory
+        const s = readState(dir)
+        if (s) {
+          s.lastHeartbeat = Date.now()
+          try { persistState(dir, s) } catch {}
+          if (["EXECUTING_INLINE", "EXECUTING_SUBAGENTS", "SYNC"].includes(s.state) && output && typeof output.title === "string" && output.title && !output.title.includes("🟣")) {
+            output.title = `🟣 ${PURPLE_TENUE}[OSTACKY]${PURPLE_RESET} ${output.title}`
+          }
+        }
+      } catch {}
     },
 
     // ── Observable tools (MCP thin replacement) ──
@@ -620,6 +663,11 @@ export const OstackyController: Plugin = async (ctx) => {
           discoveryHitByRequest.delete(sid)
         }
       }
+    },
+
+    dispose: async () => {
+      try { if (pingInterval) clearInterval(pingInterval) } catch {}
+      pingInterval = null
     },
 
     "experimental.session.compacting": async (input: any, output: any) => {

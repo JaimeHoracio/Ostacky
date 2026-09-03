@@ -467,8 +467,9 @@ export function uninstallEngramConfig(): { success: boolean; message: string } {
  * - mcp.codegraph, mcp.engram entries from opencode.json (context7 ya no existe)
  * - .codegraph/ directory
  * - .opencode/tools/ directory
- * - .opencode/plugins/ostacky-controller.ts y engram.ts (limpieza opcional)
+ * - .opencode/plugins/ostacky-plugin.ts y engram.ts (legacy guard/controller también)
  * Does NOT touch global binaries (codegraph, engram) or Engram data.
+ * Safe-delete: nunca borra plugins custom, solo allowlist Ostacky-owned.
  */
 export function uninstallStackConfig(paths: OpenCodePaths): { success: boolean; message: string } {
   const projectRoot = dirname(paths.root);

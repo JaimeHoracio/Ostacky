@@ -117,9 +117,9 @@ export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths): Pr
     }
   }
 
-  // Asegurar ostacky-controller plugin coherente en plugins/ del scope elegido + local para global
+  // Plugins: ostacky-plugin.ts + engram.ts (guard deprecated y eliminado, legacy ostacky-controller.ts no se instala)
   try {
-    const { copyFileSync, mkdirSync, existsSync } = await import("fs");
+    const { copyFileSync, mkdirSync, existsSync, rmSync } = await import("fs");
     const { join } = await import("path");
     const { PACKAGE_ROOT } = await import("../github.js");
     const { findProjectRoot } = await import("../fs.js");
@@ -129,11 +129,10 @@ export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths): Pr
       mkdirSync(paths.plugins, { recursive: true });
       copyFileSync(src, dest);
     }
-    // legacy fallback: si solo existe el nombre viejo, copiarlo también
-    const legacySrc = join(PACKAGE_ROOT, "assets", "plugins", "ostacky-controller.ts");
-    if (!existsSync(src) && existsSync(legacySrc)) {
-      mkdirSync(paths.plugins, { recursive: true });
-      copyFileSync(legacySrc, join(paths.plugins, "ostacky-controller.ts"));
+    // Cleanup legacy: remover guard y controller viejos si quedaron de instalaciones previas
+    for (const legacy of ["ostacky-guard.ts", "ostacky-controller.ts"]) {
+      const lp = join(paths.plugins, legacy);
+      if (existsSync(lp)) try { rmSync(lp, { force: true }); } catch {}
     }
     const srcEng = join(PACKAGE_ROOT, "assets", "plugins", "engram.ts");
     const destEng = join(paths.plugins, "engram.ts");
@@ -141,15 +140,18 @@ export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths): Pr
       mkdirSync(paths.plugins, { recursive: true });
       copyFileSync(srcEng, destEng);
     }
-    // Coherencia: si es global pero hay proyecto local, también copiar allí para hard-gate local
+    // Coherencia: si es global pero hay proyecto local, también copiar allí para hard-gate local y limpiar legacy
     if (isGlobal) {
       try {
         const projRoot = findProjectRoot();
         const localPlugins = join(projRoot, ".opencode", "plugins");
         mkdirSync(localPlugins, { recursive: true });
         if (existsSync(src)) copyFileSync(src, join(localPlugins, "ostacky-plugin.ts"));
-        else if (existsSync(legacySrc)) copyFileSync(legacySrc, join(localPlugins, "ostacky-controller.ts"));
         if (existsSync(srcEng)) copyFileSync(srcEng, join(localPlugins, "engram.ts"));
+        for (const legacy of ["ostacky-guard.ts", "ostacky-controller.ts"]) {
+          const lp = join(localPlugins, legacy);
+          if (existsSync(lp)) try { rmSync(lp, { force: true }); } catch {}
+        }
       } catch {}
     }
   } catch {}

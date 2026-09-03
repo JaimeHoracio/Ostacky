@@ -20,6 +20,7 @@ import {
 import { existsSync, statSync, readFileSync, readdirSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { computeTreeHash, findOpenCodeDir } from "./fs.js";
+import { ensureOpencodeInstalled } from "./opencode.js";
 
 const HELP = `
 ostacky — Instalador de agentes, comandos, skills y MCPs para OpenCode
@@ -302,6 +303,17 @@ async function runStatusCommand(args: string[]) {
 
 
 async function main() {
+  // Gate obligatorio: verificar OpenCode como primer paso (según SO) antes de instalar
+  // Solo para flujos de instalación; doctor/status/uninstall no requieren OpenCode
+  const needsOpencode =
+    !cmd || // menú interactivo sin args → npx ostacky
+    cmd === "install" ||
+    cmd === "install-stack" ||
+    cmd === "update" ||
+    (cmd === "add" && ["agent", "command", "skill", "mcp"].includes(subcmd ?? ""));
+  if (needsOpencode) {
+    await ensureOpencodeInstalled();
+  }
   switch (cmd) {
     case "install":
       await runInstallCommand(scope);

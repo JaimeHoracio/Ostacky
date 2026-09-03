@@ -229,7 +229,7 @@ export async function probeMcpServer(
                 params: {
                     protocolVersion: '2025-03-26',
                     capabilities: {},
-                    clientInfo: { name: 'ostacky-installer', version: '0.8.0' },
+                    clientInfo: { name: 'ostacky-installer', version: '0.8.1' },
                 },
             });
         });
@@ -650,13 +650,15 @@ export function uninstallAll(paths: OpenCodePaths): void {
         uninstallMcpServer(name, paths);
     }
 
-    // Also scan mcp/ directory for servers not in lockfile (legacy installs)
-    if (existsSync(paths.mcp)) {
-        for (const entry of readdirSync(paths.mcp)) {
-            const dirPath = join(paths.mcp, entry);
-            if (statSync(dirPath).isDirectory()) {
-                uninstallMcpServer(entry, paths);
-            }
+    // Safe-delete: NO borrar MCPs fuera del lockfile (evita borrar componentes previos del usuario).
+    // Solo limpiar plugins Ostacky-owned allowlist (incluye legacy guard/controller) — nunca borrar plugins custom.
+    const ostackyPlugins = ['ostacky-plugin.ts', 'engram.ts', 'ostacky-guard.ts', 'ostacky-controller.ts'];
+    for (const file of ostackyPlugins) {
+        const fp = join(paths.plugins, file);
+        if (existsSync(fp)) {
+            try {
+                unlinkSync(fp);
+            } catch {}
         }
     }
 

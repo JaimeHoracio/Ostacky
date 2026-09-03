@@ -116,7 +116,9 @@ npx ostacky install --scope global  # ~/.config/opencode (XDG/APPDATA en Windows
 npx ostacky install --scope auto    # local si existe .opencode/.git, si no global
 ```
 
-Descarga todos los agentes y commands definidos en el manifest y los escribe en `.opencode/` (scope `local`) o en `~/.config/opencode` (`global`). Herramientas (`tools/`) siempre quedan en `<proyecto>/.opencode/tools`.
+Descarga todos los agentes y commands definidos en el manifest y los escribe en `.opencode/` (scope `local`) o en `~/.config/opencode` (`global`). Además copia los plugins **Ostacky-owned** `ostacky-plugin.ts` + `engram.ts` en `.opencode/plugins/` (el legacy `ostacky-guard.ts` fue fusionado en `ostacky-plugin.ts` y ya no se instala; `ostacky-controller.ts` legacy se limpia automáticamente si quedó de una instalación previa).
+
+> **Coherencia local/global:** aunque elijas `global`, los plugins y herramientas (`tools/` con CodeGraph/Engram) permanecen siempre en `<proyecto>/.opencode` local para el hard-gate por worktree. En global solo se escribe el scope global + un espejo local de plugins. Para stack completo por proyecto ejecutá `npx ostacky install --scope local` dentro de cada repo.
 
 ### Agregar agentes o commands individualmente
 
@@ -148,15 +150,21 @@ Solo descarga los items que cambiaron de versión.
 ### Desinstalar
 
 ```bash
-npx ostacky uninstall
+npx ostacky uninstall                          # pregunta local vs global, luego qué borrar
+npx ostacky uninstall --scope local            # fuerza scope local
+npx ostacky uninstall --scope global           # fuerza scope global
+npx ostacky uninstall --scope auto             # auto
 ```
 
-Borra todos los archivos instalados (los listados en `.opencode/ostacky-lock.json`). Antes de borrar, muestra un preview con los paths a eliminar y pide confirmación.
+**Safe-delete:** solo borra lo trackeado en `.opencode/ostacky-lock.json` (agentes, commands, skills, MCPs) — nunca toca componentes previos del usuario que no estén en el lockfile. Antes de borrar muestra preview con `Scope: <ruta>` + lista de paths y pide confirmación. Los plugins Ostacky-owned (`ostacky-plugin.ts`, `engram.ts` + legacy `ostacky-guard.ts`/`ostacky-controller.ts` si quedaron) se limpian automáticamente via allowlist, nunca se borran plugins custom.
+
+> Si el lockfile no existe o está vacío → `No hay nada instalado.` y no borra nada.
 
 #### Desinstalar un agente puntual
 
 ```bash
-npx ostacky uninstall agent <nombre>
+npx ostacky uninstall agent <nombre>           # también admite --scope local|global|auto
+npx ostacky uninstall agent                    # sin nombre → selector de instalados
 ```
 
 Por ejemplo:
@@ -168,7 +176,8 @@ npx ostacky uninstall agent ostacky
 #### Desinstalar un command puntual
 
 ```bash
-npx ostacky uninstall command <nombre>
+npx ostacky uninstall command <nombre>         # también admite --scope
+npx ostacky uninstall command                  # sin nombre → selector
 ```
 
 Por ejemplo:
@@ -179,6 +188,15 @@ npx ostacky uninstall command install-stack
 
 Si no especificás el nombre, el CLI te muestra un selector con los items instalados para que elijas cuáles desinstalar (puede ser uno o varios).
 
+#### Desinstalar todo el stack (tools + config)
+
+```bash
+npx ostacky uninstall-stack                    # pregunta scope, limpia mcp.codegraph/engram de opencode.json + .codegraph/ + .opencode/tools/
+npx ostacky uninstall-stack --scope local
+```
+
+No toca binarios globales ni datos de Engram, solo la configuración del proyecto.
+
 ### Otros
 
 ```bash
@@ -188,7 +206,7 @@ npx ostacky --help      # muestra la ayuda
 
 ## Estructura generada
 
-Tras instalar, el proyecto queda así:
+Tras instalar (`--scope local`), el proyecto queda así:
 
 ```
 .opencode/
@@ -212,43 +230,62 @@ Tras instalar, el proyecto queda así:
 │   ├── using-superpowers/
 │   ├── writing-skills/
 │   └── graceful-degradation/
-└── ostacky-lock.json          ← versiones instaladas (agentes, commands y skills)
+├── plugins/
+│   ├── ostacky-plugin.ts      ← controller hard-gate (fusiona guard legacy)
+│   └── engram.ts              ← plugin Engram
+├── mcp/
+│   ├── ostacky-controller/    ← MCP thin (observabilidad)
+│   └── openspec/
+├── tools/
+│   ├── codegraph/bin/codegraph
+│   └── engram/bin/engram
+├── cache/codegraph/           ← cache local CodeGraph/Discovery
+├── ostacky-state.json         ← estado por worktree (aislado)
+└── ostacky-lock.json          ← versiones instaladas (agentes, commands, skills, mcpServers)
 ```
+
+> `assets/plugins/ostacky-guard.ts` fue **fusionado en `ostacky-plugin.ts` y eliminado** (re-export legacy). Fresh install solo escribe `ostacky-plugin.ts` + `engram.ts`; si venís de una versión previa con `ostacky-guard.ts` o `ostacky-controller.ts` legacy, el installer los elimina automáticamente.
 
 ### ostacky-lock.json
 
 ```json
 {
-    "version": "0.8.0",
+    "version": "0.8.1",
     "lockedAt": "2025-01-01T00:00:00.000Z",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.8.0",
+    "tag": "v0.8.1",
     "agents": {
         "ostacky": {
-            "version": "0.8.0",
+            "version": "0.8.1",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "abc123..."
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.8.0",
+            "version": "0.8.1",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "def456..."
         },
         "opsx-sync": {
-            "version": "0.8.0",
+            "version": "0.8.1",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "ghi789..."
         }
     },
     "skills": {
-        "brainstorming": { "version": "0.8.0", ... },
-        "execution-mode-evaluation": { "version": "0.8.0", ... },
-        "openspec-propose": { "version": "0.8.0", ... }
+        "brainstorming": { "version": "0.8.1", ... },
+        "execution-mode-evaluation": { "version": "0.8.1", ... },
+        "openspec-propose": { "version": "0.8.1", ... }
+    },
+    "mcpServers": {
+        "ostacky-controller": { "version": "0.8.1", ... },
+        "openspec": { "version": "0.8.1", ... }
     }
 }
 ```
+
+`plugins/` (`ostacky-plugin.ts`, `engram.ts`) y `tools/` **no** se trackean en el lockfile — son allowlist Ostacky-owned y se gestionan via `uninstall` (allowlist) y `uninstall-stack`.
 
 Se recomienda agregar `ostacky-lock.json` al control de versiones para que el equipo instale exactamente las mismas versiones.
 
@@ -275,7 +312,7 @@ Es opcional y solo necesario si algo falló durante la instalación o si querés
 ## Seguridad
 
 - `opencode.jsonc` se versiona en el repo para compartir permisos y MCP de forma reproducible.
-- Las URLs de descarga usan **tags de GitHub** (ej. `v0.8.0`), nunca `main` — instalaciones reproducibles
+- Las URLs de descarga usan **tags de GitHub** (ej. `v0.8.1`), nunca `main` — instalaciones reproducibles
 - Cada path de archivo descargado es validado para prevenir **path traversal**
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
 - El cache local (`.opencode/cache/`) también valida integridad al servir archivos cacheados
@@ -291,7 +328,7 @@ Es opcional y solo necesario si algo falló durante la instalación o si querés
 - Variable `OSTACKY_SENSITIVE_PATTERNS` overridea los patrones por defecto (`**/.env*`, `**/.secrets/**`, `**/*.pem`, `**/*.key`, `**/.aws/**`, `**/.ssh/**`, `**/credentials.json`, `**/.npmrc`).
 - Ejemplo: `OSTACKY_SENSITIVE_PATTERNS="**/.env*,**/.secrets/**" bunx ostacky doctor` — `doctor` imprime el patrón efectivo.
 - Allowlist: `.env.example`, `.env.template`, `.env.sample` nunca se bloquean.
-- Fuente única: `src/security.ts` (`SENSITIVE_DEFAULT`, `isSensitive`, `BASH_SENSITIVE_RE`) — guard y controller usan la misma lógica (ver `doctor` para verificar).
+- Fuente única: `src/security.ts` (`SENSITIVE_DEFAULT`, `isSensitive`, `BASH_SENSITIVE_RE`) — `ostacky-plugin.ts` importa de ahí (legacy `ostacky-guard.ts` eliminado, fusionado en el plugin). Ver `doctor` para verificar.
 
 #### Aislamiento de worktrees (harness-prod-hardening)
 
