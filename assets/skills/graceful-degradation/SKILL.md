@@ -20,7 +20,6 @@ When critical tools are unavailable, this skill provides a systematic approach t
 | CodeGraph | MCP server | Engram → Read + Glob | No structural analysis, manual exploration |
 | Engram | MCP server | Continue without memory | No persistence across sessions |
 | Controller | MCP server | Inline validation + manual state | No state machine, no edit validation |
-| Context7 | MCP server (remote) | Skip documentation | No external API docs |
 
 ## Detection
 
@@ -108,12 +107,6 @@ Incluso en degraded, el guard de credenciales sigue activo (hard gate incluso en
 - No state persistence across crashes
 - No pending state enforcement (check_pending_state unavailable)
 
-### Without Context7
-
-**Impact:** Minimal — only affects external API documentation lookups.
-
-**Workflow:** Proceed normally. Use existing knowledge.
-
 ## Communication Protocol
 
 ### Status Report Format
@@ -141,7 +134,6 @@ Herramientas disponibles:
 ✅ Controller — ping OK
 ❌ CodeGraph — timeout 10s
 ✅ Engram — disponible
-✅ Context7 — disponible
 
 ¿Continuar con lectura manual de archivos?
 ```
@@ -154,7 +146,6 @@ Herramientas disponibles:
 ❌ Controller — no responde
 ❌ CodeGraph — no instalado
 ❌ Engram — timeout 5s
-✅ Context7 — disponible (pero sin docs relevantes)
 
 Modo básico: sin validación de edits, sin memoria persistente, sin análisis estructural.
 ¿Continuar o cancelar?

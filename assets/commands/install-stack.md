@@ -1,17 +1,17 @@
 ---
-description: Instala CodeGraph, skills curadas, OpenSpec, Engram y Context7 localmente para OpenCode únicamente
+description: Instala CodeGraph, skills curadas, OpenSpec y Engram localmente para OpenCode únicamente
 agent: build
 ---
 
 Instala el stack tecnológico de desarrollo para OpenCode. **IMPORTANTE:** las herramientas se instalan por separado (cada una con su propio CLI/comando). `npx ostacky install` solo instala el agente y commands de Ostacky en `.opencode/`. Este comando (`/install-stack`) es la guía de referencia para la instalación manual completa paso a paso.
 
-**Nota:** A partir de v0.8.1, `npx ostacky install` ya instala automáticamente el stack completo (CodeGraph, OpenSpec, Engram, Context7, MCPs bundleados) además del agente y skills. Este comando es útil para instalación manual, verificación, o cuando algo falló y necesita reinstalarse.
+**Nota:** A partir de v0.8.2, `npx ostacky install` ya instala automáticamente el stack completo (CodeGraph, OpenSpec, Engram, MCPs bundleados) además del agente y skills. Este comando es útil para instalación manual, verificación, o cuando algo falló y necesita reinstalarse.
 
 **RESTRICCIÓN ABSOLUTA:** instalar ÚNICAMENTE para OpenCode. Está terminantemente prohibido crear o modificar archivos en `.claude/`, `.kiro/`, `.cursor/`, `.gemini/`, `.codex/`, `.antigravity/`, `.windsurf/` o cualquier otro directorio de plataformas externas.
 
-**Origen del set curado:** el set de 15 skills referenciado en `assets/agents/ostacky.md` está bundleado en `assets/skills/` dentro del paquete npm. Context7 agrega su propio skill vía `npx ctx7 setup --opencode`. La definición del set y su trazabilidad viven en `manifest.json` y `.opencode/ostacky-lock.json`.
+**Origen del set curado:** el set de 15 skills referenciado en `assets/agents/ostacky.md` está bundleado en `assets/skills/` dentro del paquete npm. La definición del set y su trazabilidad viven en `manifest.json` y `.opencode/ostacky-lock.json`.
 
-## Scope de instalación — local vs global (desde v0.8.1)
+## Scope de instalación — local vs global (desde v0.8.2)
 
 `npx ostacky install` soporta `--scope local|global|auto` (también `--scope=...`):
 
@@ -164,7 +164,7 @@ Ostacky automáticamente detecta la ausencia del controller y opera en modo degr
 
 ## Paso 2 — Skills curadas (bundleadas)
 
-Las **15 skills curadas** están bundleadas dentro del paquete Ostacky en `assets/skills/`. No se descargan ni clonan; ya vienen en el paquete npm. Context7 agrega su propia skill aparte (Paso 6).
+Las **15 skills curadas** están bundleadas dentro del paquete Ostacky en `assets/skills/`. No se descargan ni clonan; ya vienen en el paquete npm.
 
 Copiá cada skill bundleada a `.opencode/skills/<nombre>/` preservando la estructura interna (incluyendo `SKILL.md` y cualquier subdirectorio como `scripts/` o `references/`):
 
@@ -213,11 +213,6 @@ Leé `opencode.json` (o `opencode.jsonc`) en la raíz del proyecto.
         "engram": {
             "type": "local",
             "command": [".opencode/tools/engram/bin/engram", "mcp"],
-            "enabled": true
-        },
-        "context7": {
-            "type": "remote",
-            "url": "https://mcp.context7.com/mcp",
             "enabled": true
         },
         "ostacky-controller": {
@@ -353,99 +348,6 @@ rm -rf ~/.engram/
 
 ---
 
-## Paso 6 — Context7
-
-[Context7](https://context7.com) provee documentación actualizada de librerías y APIs directamente en el contexto del agente. Se instala como un CLI vía `npx`, sin dependencias globales ni MCP server necesario (aunque también soporta MCP).
-
-**RESTRICCIÓN:** configurar ÚNICAMENTE para OpenCode. Está terminantemente prohibido crear archivos en `.claude/`, `.kiro/`, `.cursor/`, `.gemini/`, `.codex/`, `.antigravity/`, `.windsurf/` o cualquier otro directorio de plataformas externas.
-
-### Verificar instalación actual
-
-Chequeá si Context7 ya está configurado para OpenCode:
-
-```bash
-ls -la .opencode/skills/context7/ 2>/dev/null || echo "no-instalado"
-```
-
-También podés verificar si el MCP server de Context7 está en `opencode.json`:
-
-```bash
-grep -c "context7" opencode.json 2>/dev/null || echo "no-configurado"
-```
-
-### Instalar
-
-**Opción recomendada — setup automático (CLI + skills):**
-
-```bash
-npx ctx7 setup --opencode
-```
-
-Este comando:
-
-- Autentica vía OAuth y genera una API key
-- Instala un skill en `.opencode/skills/context7/` que el agente Ostacky usa automáticamente
-- Pregunta si preferís modo CLI + Skills o MCP
-- **NO** toca `.claude/`, `.cursor/`, `.gemini/` ni ninguna otra plataforma
-
-**Alternativa — solo MCP (si preferís el server remoto):**
-
-Agregá manualmente la entrada MCP en `opencode.json`:
-
-```json
-{
-    "mcp": {
-        "context7": {
-            "type": "remote",
-            "url": "https://mcp.context7.com/mcp"
-        }
-    }
-}
-```
-
-Si tenés una API key de Context7 (recomendado para mejores rate limits):
-
-```json
-{
-    "mcp": {
-        "context7": {
-            "type": "remote",
-            "url": "https://mcp.context7.com/mcp",
-            "headers": {
-                "CONTEXT7_API_KEY": "{env:CONTEXT7_API_KEY}"
-            }
-        }
-    }
-}
-```
-
-### Desinstalar
-
-Para remover la configuración generada por `npx ctx7 setup`:
-
-```bash
-npx ctx7 remove
-```
-
-Esto elimina el skill y la configuración de Context7. Si instalaste el CLI globalmente con `npm install -g ctx7`, también necesitás:
-
-```bash
-npm uninstall -g ctx7
-```
-
-Para remover la entrada MCP manual, editá `opencode.json` y eliminá el bloque `mcp.context7`.
-
-### Cómo lo usa Ostacky
-
-El skill de Context7 instalado le indica al agente Ostacky que use Context7 automáticamente cuando necesite documentación de librerías, APIs o frameworks. También se puede invocar explícitamente:
-
-```
-usá context7 para mostrarme la API de autenticación de Supabase
-use context7 to find Next.js 15 app router examples
-```
-
----
-
 ## Estructura de herramientas
 
 Cada herramienta se instala en su propia carpeta dentro de `.opencode/` para mantener una instalación limpia y aislada. El installer crea automáticamente `.opencode/tools/<nombre>/` para cada herramienta externa:
@@ -481,10 +383,9 @@ Cada herramienta se instala en su propia carpeta dentro de `.opencode/` para man
 │   ├── using-superpowers/
 │   ├── writing-skills/
 │   └── graceful-degradation/
-├── tools/           # Config y archivos de herramientas externas
-│   ├── codegraph/   # Config de CodeGraph (AGENTS.md si codegraph lo crea)
-│   ├── engram/      # Config project-local de Engram
-│   └── context7/    # Config de Context7
+├── tools/           # Binarios locales de herramientas externas
+│   ├── codegraph/   # Binario local de CodeGraph
+│   └── engram/      # Binario local de Engram
 └── plugins/         # Plugins de OpenCode
 ```
 
@@ -493,24 +394,23 @@ Cada herramienta se instala en su propia carpeta dentro de `.opencode/` para man
 - `.codegraph/` (índice de CodeGraph) vive en la raíz del proyecto — CodeGraph lo espera ahí.
 - El binario de CodeGraph es **local al proyecto** en `.opencode/tools/codegraph/bin/`; en Windows puede ser `codegraph.cmd`. No se instala globalmente.
 - El binario de Engram es **local al proyecto** en `.opencode/tools/engram/bin/engram` (o `engram.exe` en Windows). No se instala globalmente.
-- Context7 se registra como MCP remoto en `opencode.jsonc`. Su skill opcional se instala via `npx ctx7 setup --opencode` en `.opencode/skills/context7/`.
+- El binary de CodeGraph y Engram vive siempre en `<proyecto>/.opencode/tools/` por reproducibilidad, nunca global.
 - El controller publicado se bundlea como un único `index.js`; durante desarrollo el installer instala sus dependencias en staging y valida el servidor antes de activarlo.
 
 ## Verificación final
 
 Confirmá que:
 
-1. `.opencode/skills/` contiene las 15 skills curadas y opcionalmente `context7/` si se instaló con `npx ctx7 setup --opencode`
+1. `.opencode/skills/` contiene las 15 skills curadas
 2. `.opencode/commands/` contiene los commands bundleados por Ostacky (`install-stack`, `opsx-sync`) y los 4 commands generados por OpenSpec (`opsx-apply`, `opsx-archive`, `opsx-explore`, `opsx-propose`) si OpenSpec fue inicializado
-3. `opencode.json` (o `.jsonc`) tiene los bloques MCP: `codegraph`, `engram`, `context7`, `ostacky-controller` — sin campo `plugin`
+3. `opencode.json` (o `.jsonc`) tiene los bloques MCP: `codegraph`, `engram`, `ostacky-controller` — sin campo `plugin`
 4. `.codegraph/` existe en la raíz del proyecto (índice local de CodeGraph)
 5. El launcher local de CodeGraph funciona (`codegraph.cmd --version` en Windows o `codegraph --version` en Unix)
 6. El binario local de Engram funciona (`engram.exe --version` en Windows o `engram --version` en Unix)
-7. Context7 configurado: `mcp.context7` presente en `opencode.jsonc` y/o `.opencode/skills/context7/SKILL.md` existe
-8. OpenSpec generó sus commands/skills para OpenCode mediante `openspec init --tools opencode`
-9. `.opencode/tools/` contiene subdirectorios para `codegraph/`, `engram/` y `context7/`
-10. **NO existen** archivos generados en `.claude/`, `.kiro/`, `.cursor/`, `.gemini/`, `.codex/` ni ningún directorio de otra plataforma
-11. Un `AGENTS.md` preexistente en la raíz del proyecto se preserva sin cambios
+7. OpenSpec generó sus commands/skills para OpenCode mediante `openspec init --tools opencode` (si se usó)
+8. `.opencode/tools/` contiene subdirectorios para `codegraph/` y `engram/`
+9. **NO existen** archivos generados en `.claude/`, `.kiro/`, `.cursor/`, `.gemini/`, `.codex/` ni ningún directorio de otra plataforma
+10. Un `AGENTS.md` preexistente en la raíz del proyecto se preserva sin cambios
 
 Reportá el estado de cada componente con ✓ o ✗.
 

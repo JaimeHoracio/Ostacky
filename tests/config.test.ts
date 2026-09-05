@@ -141,20 +141,20 @@ describe('ensureMcpEntryAtProjectRoot', () => {
             configPath,
             JSON.stringify({
                 mcp: {
-                    context7: { type: 'remote', url: 'https://custom.example/mcp' },
+                    'my-custom-mcp': { type: 'remote', url: 'https://custom.example/mcp' },
                 },
             }),
             'utf-8'
         );
 
-        ensureMcpEntryAtProjectRoot(TEST_ROOT, 'context7', {
+        ensureMcpEntryAtProjectRoot(TEST_ROOT, 'my-custom-mcp', {
             type: 'remote',
-            url: 'https://mcp.context7.com/mcp',
+            url: 'https://mcp.example.com/mcp',
             enabled: true,
         });
 
         const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-        expect(config.mcp.context7).toEqual({
+        expect(config.mcp['my-custom-mcp']).toEqual({
             type: 'remote',
             url: 'https://custom.example/mcp',
         });

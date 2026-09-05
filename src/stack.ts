@@ -27,7 +27,7 @@ import { fetchLatestReleaseTag, PACKAGE_ROOT } from "./github.js";
 import type { OpenCodePaths } from "./types.js";
 
 // ─── Stack installation (tools: CodeGraph, OpenSpec, Engram) ─────
-// Context7 removido del stack — no se usa (ver README 4 herramientas).
+// Stack de 4 herramientas (ver README).
 
 /**
  * Result of installing the full tool stack.
@@ -59,11 +59,20 @@ function resolveToolInstallLocation(toolsDir?: string): ToolInstallLocation {
 
 function runTool(binary: string, args: string[], cwd?: string, timeout = 30_000): void {
   const invocation = getCommandInvocation(binary, args);
-  execFileSync(invocation.command, invocation.args, {
-    cwd,
-    stdio: "pipe",
-    timeout,
-  });
+  try {
+    execFileSync(invocation.command, invocation.args, {
+      cwd,
+      stdio: "pipe",
+      timeout,
+    });
+  } catch (error) {
+    const err = error as Error & { stdout?: Buffer; stderr?: Buffer; status?: number };
+    const stdout = err.stdout ? Buffer.from(err.stdout).toString().trim() : "";
+    const stderr = err.stderr ? Buffer.from(err.stderr).toString().trim() : "";
+    const detail = [stderr, stdout].filter(Boolean).join("\n") || err.message;
+    const invocationStr = `${invocation.command} ${invocation.args.join(" ")}`;
+    throw new Error(`${detail} (invocación: ${invocationStr}, cwd: ${cwd ?? process.cwd()})`);
+  }
 }
 
 function findToolBinary(toolDir: string, name: string): string | null {
@@ -170,7 +179,7 @@ export async function installCodeGraph(toolsDir?: string): Promise<{ success: bo
     }
   }
 
-  // Descargar el binario si no está o se corrompió
+  // Descargar el binario si no está o se corrompió — patrón resiliente copiado de Engram (strip 0 + búsqueda recursiva)
   if (!localBin) {
     const tag = await fetchLatestReleaseTag("colbymchenry/codegraph");
     if (!tag) {
@@ -182,18 +191,37 @@ export async function installCodeGraph(toolsDir?: string): Promise<{ success: bo
     const ext = process.platform === "win32" ? "zip" : "tar.gz";
     const url = `https://github.com/colbymchenry/codegraph/releases/download/${tag}/codegraph-${target}.${ext}`;
     try {
-      archivePromotion = await downloadAndExtractWithRetry(url, cgToolDir, 1, 180_000, 2);
+      // Engram usa strip 0 y búsqueda recursiva: tolera cambios de estructura del zip entre releases
+      archivePromotion = await downloadAndExtractWithRetry(url, cgToolDir, 0, 180_000, 2);
     } catch (e) {
       return {
         success: false,
         message: `Error descargando CodeGraph ${tag}: ${(e as Error).message}`,
       };
     }
-    localBin = findToolBinary(cgToolDir, "codegraph");
-    if (!localBin) {
+    const expectedBin = join(cgToolDir, "bin", getExecutableName("codegraph"));
+    let found = findToolBinary(cgToolDir, "codegraph");
+    if (!found) found = findBinaryInDir(cgToolDir, "codegraph");
+    if (!found) {
       return failAfterExtraction(`Descarga de CodeGraph ${tag} completada pero no se encontró el binario en ${join(cgToolDir, "bin")}.`);
     }
-    if (process.platform !== "win32") {
+    // Asegurar bin en ubicación esperada (copiar si vino en otra ruta dentro del archive)
+    try {
+      if (found !== expectedBin) {
+        mkdirSync(join(cgToolDir, "bin"), { recursive: true });
+        if (found.toLowerCase().endsWith(".cmd") && expectedBin.toLowerCase().endsWith(".exe")) {
+          localBin = found;
+        } else {
+          copyFileSync(found, expectedBin);
+          localBin = expectedBin;
+        }
+      } else {
+        localBin = found;
+      }
+    } catch (error) {
+      return failAfterExtraction(`CodeGraph fue descargado pero no se pudo materializar el binario local: ${(error as Error).message}`);
+    }
+    if (process.platform !== "win32" && localBin) {
       try { chmodSync(localBin, 0o755); } catch {}
     }
   }
@@ -204,12 +232,13 @@ export async function installCodeGraph(toolsDir?: string): Promise<{ success: bo
     return failAfterExtraction(`CodeGraph fue extraído pero no se puede ejecutar: ${(error as Error).message}`);
   }
 
-  // Inicializar el índice de CodeGraph en el proyecto
+  // Inicializar el índice de CodeGraph en el proyecto — con diagnóstico mejorado (copiado de robustez de Engram)
   let indexWarning: string | null = null;
   try {
     runTool(localBin, ["init", "-i"], projectRoot, 120_000);
   } catch (error) {
-    indexWarning = `El índice no se pudo inicializar todavía: ${(error as Error).message}`;
+    const msg = (error as Error).message;
+    indexWarning = `El índice no se pudo inicializar todavía: ${msg}. Sugerencia: ejecutá manualmente \`${localBin} init -i\` en ${projectRoot} o \`npx ostacky install-stack --scope local\` para reintentar. Si el path del binario (${localBin}) apunta a ${cgToolDir} y esperabas otro proyecto, verificá que corriste el comando dentro del proyecto correcto (con .git) y con --scope local.`;
   }
 
   // Registrar directamente evita que `codegraph install` cree o mueva archivos
@@ -414,7 +443,7 @@ export async function installEngram(toolsDir?: string): Promise<{ success: boole
 /**
  * Orchestrator: installs and configures the full tool stack
  * (CodeGraph + OpenSpec + Engram + Config patch + OstackyController plugin).
- * Context7 removido del stack. Plugin controller se instala siempre local para coherencia.
+ * Plugin controller se instala siempre local para coherencia.
  * If toolsDir is provided, each tool creates its subdirectory there.
  * Async because CodeGraph and Engram download binaries.
  */
@@ -464,7 +493,7 @@ export function uninstallEngramConfig(): { success: boolean; message: string } {
 
 /**
  * Removes all stack configuration from the project:
- * - mcp.codegraph, mcp.engram entries from opencode.json (context7 ya no existe)
+ * - mcp.codegraph, mcp.engram entries from opencode.json
  * - .codegraph/ directory
  * - .opencode/tools/ directory
  * - .opencode/plugins/ostacky-plugin.ts y engram.ts (legacy guard/controller también)
@@ -475,7 +504,7 @@ export function uninstallStackConfig(paths: OpenCodePaths): { success: boolean; 
   const projectRoot = dirname(paths.root);
   const removed: string[] = [];
 
-  // 1. Remover entradas MCP del stack de opencode.json (context7 removido, limpiar si quedó)
+  // 1. Remover entradas MCP del stack de opencode.json
   const configPath = findOpenCodeConfig(projectRoot);
   if (configPath) {
     const config = readOpenCodeConfig(configPath);
@@ -483,7 +512,7 @@ export function uninstallStackConfig(paths: OpenCodePaths): { success: boolean; 
       const mcp = config.mcp as Record<string, unknown> | undefined;
       let changed = false;
       if (mcp) {
-        for (const name of ["codegraph", "engram", "context7"]) {
+        for (const name of ["codegraph", "engram"]) {
           if (name in mcp) {
             delete mcp[name];
             removed.push(`mcp.${name}`);

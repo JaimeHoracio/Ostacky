@@ -119,6 +119,7 @@ npx ostacky install --scope auto    # local si existe .opencode/.git, si no glob
 Descarga todos los agentes y commands definidos en el manifest y los escribe en `.opencode/` (scope `local`) o en `~/.config/opencode` (`global`). Además copia los plugins **Ostacky-owned** `ostacky-plugin.ts` + `engram.ts` en `.opencode/plugins/` (el legacy `ostacky-guard.ts` fue fusionado en `ostacky-plugin.ts` y ya no se instala; `ostacky-controller.ts` legacy se limpia automáticamente si quedó de una instalación previa).
 
 > **Coherencia local/global:** aunque elijas `global`, los plugins y herramientas (`tools/` con CodeGraph/Engram) permanecen siempre en `<proyecto>/.opencode` local para el hard-gate por worktree. En global solo se escribe el scope global + un espejo local de plugins. Para stack completo por proyecto ejecutá `npx ostacky install --scope local` dentro de cada repo.
+> **Windows — dónde se instala realmente:** `global` es `%APPDATA%\opencode` (`C:\Users\<vos>\AppData\Roaming\opencode`), **no** `C:\Users\<vos>\.opencode`. Si ves `C:\Users\...\ .opencode\tools\codegraph` y esperabas `D:\mi-proyecto\.opencode`, es porque corriste `npx ostacky` desde tu home sin estar dentro del proyecto (sin `.git`). Hacé `cd` al proyecto y re-ejecutá con `--scope local`; el log ahora muestra `projectRoot` y `toolsDir` explícitos para evitar confusión.
 
 ### Agregar agentes o commands individualmente
 
@@ -250,37 +251,37 @@ Tras instalar (`--scope local`), el proyecto queda así:
 
 ```json
 {
-    "version": "0.8.1",
+    "version": "0.8.2",
     "lockedAt": "2025-01-01T00:00:00.000Z",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.8.1",
+    "tag": "v0.8.2",
     "agents": {
         "ostacky": {
-            "version": "0.8.1",
+            "version": "0.8.2",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "abc123..."
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.8.1",
+            "version": "0.8.2",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "def456..."
         },
         "opsx-sync": {
-            "version": "0.8.1",
+            "version": "0.8.2",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "ghi789..."
         }
     },
     "skills": {
-        "brainstorming": { "version": "0.8.1", ... },
-        "execution-mode-evaluation": { "version": "0.8.1", ... },
-        "openspec-propose": { "version": "0.8.1", ... }
+        "brainstorming": { "version": "0.8.2", ... },
+        "execution-mode-evaluation": { "version": "0.8.2", ... },
+        "openspec-propose": { "version": "0.8.2", ... }
     },
     "mcpServers": {
-        "ostacky-controller": { "version": "0.8.1", ... },
-        "openspec": { "version": "0.8.1", ... }
+        "ostacky-controller": { "version": "0.8.2", ... },
+        "openspec": { "version": "0.8.2", ... }
     }
 }
 ```
@@ -312,7 +313,7 @@ Es opcional y solo necesario si algo falló durante la instalación o si querés
 ## Seguridad
 
 - `opencode.jsonc` se versiona en el repo para compartir permisos y MCP de forma reproducible.
-- Las URLs de descarga usan **tags de GitHub** (ej. `v0.8.1`), nunca `main` — instalaciones reproducibles
+- Las URLs de descarga usan **tags de GitHub** (ej. `v0.8.2`), nunca `main` — instalaciones reproducibles
 - Cada path de archivo descargado es validado para prevenir **path traversal**
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
 - El cache local (`.opencode/cache/`) también valida integridad al servir archivos cacheados
@@ -368,6 +369,8 @@ CodeGraph está instalado en `.opencode/tools/codegraph/bin/codegraph` y se conf
 | `.opencode/tools/codegraph/bin/codegraph sync`                                             | Sincroniza cambios incrementales al grafo                   |
 | `.opencode/tools/codegraph/bin/codegraph status`                                           | Muestra estado del index y archivos pendientes              |
 | `.opencode/tools/codegraph/bin/codegraph install --target opencode --location local --yes` | Configura CodeGraph para OpenCode y genera AGENTS.md        |
+
+> **Windows:** si ves `Command failed: cmd.exe /d /c call ... codegraph.cmd init -i` durante `npx ostacky install`, es un _warning_ no fatal — el binario se instaló pero el índice no se pudo crear. Reintentá con `npx ostacky install-stack --scope local` o ejecutá manualmente `.opencode\tools\codegraph\bin\codegraph.exe init -i` (o `codegraph.cmd` si no hay `.exe`) dentro del proyecto. Desde v0.8.2 el instalador usa el patrón resiliente de Engram (strip 0 + búsqueda recursiva) y loguea `projectRoot|toolsDir` para diagnosticar scope.
 
 ## Licencia
 

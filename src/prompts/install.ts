@@ -22,6 +22,17 @@ export async function doInstallStack(toolsDir?: string, projectRoot?: string): P
   const spin = p.spinner();
   let allOk = true;
   const resolvedProjectRoot = projectRoot ?? dirname(dirname(toolsDir ?? join(process.cwd(), ".opencode", "tools")));
+  const resolvedToolsDir = toolsDir ?? join(resolvedProjectRoot, ".opencode", "tools");
+  p.log.info(`Stack → projectRoot: ${resolvedProjectRoot} | toolsDir: ${resolvedToolsDir}`);
+  // Advertencia si parece instalación en home sin proyecto (confusión local vs global)
+  try {
+    const { homedir } = await import("os");
+    const home = homedir();
+    const inHome = resolvedProjectRoot.replace(/\\/g, "/") === home.replace(/\\/g, "/");
+    if (inHome && !existsSync(join(home, ".git"))) {
+      p.log.warn(`Estás instalando el stack en tu home (${home}). Si esperabas instalar en un proyecto, hacé cd al proyecto y usá --scope local.`);
+    }
+  } catch {}
 
   // 1. CodeGraph
   spin.start("Instalando CodeGraph...");
@@ -60,6 +71,7 @@ export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths): Pr
 
   // Scope global: tools y plugins siempre local (coherencia), no crear tools globales.
   const isGlobal = isGlobalScope(paths);
+  p.log.info(`Scope → ${isGlobal ? "global" : "local"} | opencodeDir: ${paths.root} | tools: ${paths.tools}`);
   if (!isGlobal) {
     ensureToolDirs(paths.tools, ["codegraph", "engram"]);
   } else {
