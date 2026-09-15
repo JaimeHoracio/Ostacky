@@ -27,7 +27,7 @@ describe('schema migration v0→v1', () => {
     writeFileSync(statePath, JSON.stringify(v0State), 'utf-8');
     const c = new OstackyController({ statePath });
     const s = await c.getState();
-    expect(s.schemaVersion).toBe(1);
+    expect(s.schemaVersion).toBe(2);
     expect(typeof s.snapshots.codegraph).toBe('object');
     expect((s.snapshots.codegraph as any)._compressed).toBe(true);
     expect(s.audit[0].id).toBeDefined();

@@ -28,29 +28,80 @@ import {
 import { dirname, basename, join, resolve, relative } from 'node:path';
 import { writeFile as writeFileAsync, rename as renameAsync, mkdir as mkdirAsync } from 'node:fs/promises';
 import { SENSITIVE_DEFAULT, BASH_SENSITIVE_RE, isSensitive, extractPathsFromBash } from './security.js';
+import {
+  STATES,
+  TRANSITIONS,
+  TERMINAL_STATES,
+  DEFAULT_STATE,
+  MAX_TASKS,
+  MAX_TASKS_DEFAULT,
+  MAX_TASKS_CAP,
+  MAX_SNAPSHOT_JSON_LENGTH,
+  MAX_STATE_FILE_SIZE,
+  DEGRADED_THRESHOLD,
+  getMaxTasks,
+} from './controller-core.js';
+
+// --- Audit JSONL (D5) — single source: src/audit-jsonl.ts ---
+function getAuditPath(projectRoot) {
+  return join(projectRoot, '.opencode', 'ostacky-audit.jsonl');
+}
+function appendAuditJsonl(projectRoot, entry) {
+  if (projectRoot === "/tmp" || projectRoot === "/") return;
+  try {
+    const p = join(projectRoot, '.opencode', 'ostacky-audit.jsonl');
+    const dir = dirname(p);
+    try { mkdirSync(dir, { recursive: true }); } catch {}
+    try {
+      const prev = existsSync(p) ? readFileSync(p, 'utf-8') : '';
+      writeFileSync(p, prev + JSON.stringify(entry) + '\n', 'utf-8');
+      // Enforce OSTACKY_AUDIT_RETENTION
+      try {
+        const retention = (() => {
+          const raw = process.env.OSTACKY_AUDIT_RETENTION;
+          if (raw == null || raw === "") return 500;
+          const n = parseInt(raw, 10);
+          if (Number.isNaN(n) || n <= 0) return 500;
+          if (n > 2000) return 2000;
+          return n;
+        })();
+        const raw2 = readFileSync(p, 'utf-8');
+        const entries = raw2.split('\n').filter(Boolean);
+        if (entries.length > retention) {
+          const keep = entries.slice(-retention);
+          writeFileSync(p, keep.join('\n') + '\n', 'utf-8');
+        }
+      } catch {}
+      try {
+        const s = statSync(p);
+        if (s.size > 500 * 1024) {
+          const raw = readFileSync(p, 'utf-8');
+          const entries = raw.split('\n').filter(Boolean).map(l => JSON.parse(l));
+          const keep = entries.slice(-500);
+          writeFileSync(p, keep.map(e => JSON.stringify(e)).join('\n') + '\n', 'utf-8');
+        }
+      } catch {}
+    } catch {}
+  } catch {}
+}
+function readAuditJsonl(projectRoot, opts = {}) {
+  try {
+    const p = join(projectRoot, '.opencode', 'ostacky-audit.jsonl');
+    if (!existsSync(p)) return [];
+    const raw = readFileSync(p, 'utf-8');
+    let entries = raw.split('\n').filter(Boolean).map(l => JSON.parse(l));
+    if (opts.phase) entries = entries.filter(e => e.phase === opts.phase);
+    if (opts.since) entries = entries.filter(e => e.ts >= opts.since);
+    const limit = opts.limit ?? 20;
+    const offset = opts.offset ?? 0;
+    const start = Math.max(0, entries.length - limit - offset);
+    const end = entries.length - offset;
+    return entries.slice(start, end).reverse();
+  } catch { return []; }
+}
 
 // T1: non-blocking wait — replaces busy-wait spins that froze the event loop
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// --- Constants (Fase 5.5 — headroom generoso) ---
-const MAX_TASKS = 100;
-const MAX_TASKS_DEFAULT = 100;
-const MAX_TASKS_CAP = 500;
-const MAX_SNAPSHOT_JSON_LENGTH = 50 * 1024;
-const MAX_STATE_FILE_SIZE = 2 * 1024 * 1024;
-const DEGRADED_THRESHOLD = 3; // consecutive failures before auto-degraded mode
-
-function getMaxTasks() {
-    const raw = process.env.OSTACKY_MAX_TASKS;
-    if (raw == null || raw === '') return MAX_TASKS_DEFAULT;
-    const n = parseInt(raw, 10);
-    if (Number.isNaN(n) || n <= 0) return MAX_TASKS_DEFAULT;
-    if (n > MAX_TASKS_CAP) {
-        log('warn:max_tasks_capped', { requested: n, capped: MAX_TASKS_CAP });
-        return MAX_TASKS_CAP;
-    }
-    return n;
-}
 
 function getProjectRoot(statePath) {
     if (!statePath) return resolve(process.cwd());
@@ -104,64 +155,7 @@ const SENSITIVE_REDACT_RE = /(apiKey|secret|token|password|api_key)/i;
 
 // D1: source-of-truth — src/security.ts (via ./security.js) — isSensitive, SENSITIVE_DEFAULT, BASH_SENSITIVE_RE, extractPathsFromBash imported above
 
-// --- Transition table ---
-const TRANSITIONS = {
-    INTERPRETATION_PENDING: [
-        { via: 'request_clarification', to: 'CLARIFICATION_PENDING' },
-        { via: 'proceed_to_discovery', to: 'DISCOVERY' },
-        { via: 'record_discovery', to: 'ROUTE_DECISION_PENDING' },
-        { via: 'block', to: 'BLOCKED' },
-    ],
-    CLARIFICATION_PENDING: [
-        { via: 'record_clarification', to: 'DISCOVERY' },
-        { via: 'block', to: 'BLOCKED' },
-        { via: 'abandon', to: 'BLOCKED' },
-    ],
-    DISCOVERY: [
-        { via: 'record_discovery', to: 'ROUTE_DECISION_PENDING' },
-        { via: 'block', to: 'BLOCKED' },
-        { via: 'abandon', to: 'BLOCKED' },
-    ],
-    ROUTE_DECISION_PENDING: [
-        { via: 'consume_route_decision', to: 'SPECIFICATION', choice: 'SPEC' },
-        { via: 'consume_route_decision', to: 'EXECUTION_ANALYSIS', choice: 'DIRECT' },
-        { via: 'block', to: 'BLOCKED' },
-        { via: 'abandon', to: 'BLOCKED' },
-    ],
-    SPECIFICATION: [
-        { via: 'spec_complete', to: 'EXECUTION_ANALYSIS' },
-        { via: 'block', to: 'BLOCKED' },
-        { via: 'abandon', to: 'BLOCKED' },
-    ],
-    EXECUTION_ANALYSIS: [
-        { via: 'record_execution_analysis', to: 'EXECUTION_DECISION_PENDING' },
-        { via: 'block', to: 'BLOCKED' },
-        { via: 'abandon', to: 'BLOCKED' },
-    ],
-    EXECUTION_DECISION_PENDING: [
-        { via: 'consume_execution_decision', to: 'EXECUTING_INLINE', mode: 'INLINE' },
-        { via: 'consume_execution_decision', to: 'EXECUTING_SUBAGENTS', mode: 'SUBAGENT_DRIVEN' },
-        { via: 'block', to: 'BLOCKED' },
-        { via: 'abandon', to: 'BLOCKED' },
-    ],
-    EXECUTING_INLINE: [
-        { via: 'implementation_complete', to: 'SYNC' },
-        { via: 'block', to: 'BLOCKED' },
-    ],
-    EXECUTING_SUBAGENTS: [
-        { via: 'implementation_complete', to: 'SYNC' },
-        { via: 'block', to: 'BLOCKED' },
-    ],
-    BLOCKED: [
-        { via: 'replan', to: 'INTERPRETATION_PENDING' },
-        { via: 'abandon', to: 'DONE' },
-    ],
-    SYNC: [
-        { via: 'sync_complete', to: 'DONE' },
-        { via: 'block', to: 'BLOCKED' },
-    ],
-    DONE: [],
-};
+// TRANSITIONS imported from controller-core.js (D1 single source)
 
 // --- O4: Pre-computed transition cache (O(1) lookup) ---
 const ALLOWED_TRANSITIONS = Object.freeze(
@@ -320,88 +314,6 @@ function fastFingerprint(filePath) {
         return null;
     }
 }
-
-const STATES = Object.freeze({
-    INTERPRETATION_PENDING: 'INTERPRETATION_PENDING',
-    CLARIFICATION_PENDING: 'CLARIFICATION_PENDING',
-    DISCOVERY: 'DISCOVERY',
-    ROUTE_DECISION_PENDING: 'ROUTE_DECISION_PENDING',
-    SPECIFICATION: 'SPECIFICATION',
-    EXECUTION_ANALYSIS: 'EXECUTION_ANALYSIS',
-    EXECUTION_DECISION_PENDING: 'EXECUTION_DECISION_PENDING',
-    EXECUTING_INLINE: 'EXECUTING_INLINE',
-    EXECUTING_SUBAGENTS: 'EXECUTING_SUBAGENTS',
-    SYNC: 'SYNC',
-    DONE: 'DONE',
-    BLOCKED: 'BLOCKED',
-});
-
-// States where start_request should reset (not resume) when force=false
-const TERMINAL_STATES = Object.freeze([
-    STATES.INTERPRETATION_PENDING,
-    STATES.CLARIFICATION_PENDING,
-    STATES.BLOCKED,
-    STATES.DONE,
-]);
-
-const DEFAULT_STATE = Object.freeze({
-    state: STATES.INTERPRETATION_PENDING,
-    revision: 0,
-    requestId: null,
-    changeId: null,
-    routeDecisionId: null,
-    routeChoice: null,
-    level: null,
-    executionDecisionId: null,
-    executionMode: null,
-    snapshots: { codegraph: null, execution: null },
-    tasks: {},
-    fileFingerprints: {},
-    error: null,
-    lastHandoff: null, // B2: { ts, summary, nextSteps, pendingTasks } | null
-    expectedTasks: null, // C2: array of taskIds expected for this run (set via record_execution_analysis or set_expected_tasks)
-    expectedTaskCount: null, // C2: count fallback when IDs not available
-    auditSeq: 0, // C1: persistent seq for audit IDs
-    degraded: false, // D2: persisted degraded flag for restart observability
-    schemaVersion: 1, // D3: schema version for migrations
-    stateOversizedCount: 0, // 2.3
-    codegraphBypassCount: 0, // 6.3 / 3.1
-    degradedEditsCount: 0, // 8.5
-    cacheHitCount: 0, // 5.4 hardening-v2
-    cacheMissCount: 0,
-    tokenSavingEstimate: 0,
-    discoveryCacheHitCount: 0, // mejora-acciones-controller F2
-    redundantCallCount: 0,
-    cacheMissWithoutPutCount: 0,
-    stateCheckCount: 0,
-    toolCallCount: 0,
-    lastProposal: null, // 8.1
-    allowedFiles: {}, // 9.2
-    deniedFiles: {}, // 9.2
-    sensitivePatterns: [
-        '**/.env*',
-        '**/.secrets/**',
-        '**/*.pem',
-        '**/*.key',
-        '**/.aws/**',
-        '**/.ssh/**',
-        '**/credentials.json',
-        '**/.npmrc',
-    ], // 9.1
-    sensitiveAccess: { allowed: 0, denied: 0, blockedAttempts: 0 }, // 9.3
-    staleContentAttempts: 0, // 10.4
-    completeWithoutValidateCount: 0, // 10.5
-    toolTimeoutCount: 0, // 11.1
-    lastToolDurationMs: 0, // 11.4
-    stateDurationMs: 0, // 11.4
-    subagentFailedCount: 0, // 10.6
-    lastValidated: null, // 10.5 {filePath, hash, ts}
-    pendingFileAccess: {}, // 9.2
-    // Heartbeat monitoring for external watchdog (30s stale threshold)
-    lastHeartbeat: 0, // epoch ms, updated on each successful tool completion
-    watchdogEnabled: true, // when false, external watchdog should not restart based on heartbeat
-    ts: Date.now(), // for uptime
-});
 
 class OstackyController {
     #statePath;
@@ -623,6 +535,15 @@ class OstackyController {
                     lastHeartbeat: this.#state.lastHeartbeat,
                     watchdogEnabled: this.#state.watchdogEnabled,
                 });
+            // D9+D2: fix double-serialization and [REDACTED] pattern
+            if (typeof this.#state.snapshots?.codegraph === 'string') {
+              try { this.#state.snapshots.codegraph = JSON.parse(this.#state.snapshots.codegraph); } catch {}
+            }
+            if (Array.isArray(this.#state.sensitivePatterns) && this.#state.sensitivePatterns.includes('[REDACTED]')) {
+              this.#state.sensitivePatterns = [...SENSITIVE_DEFAULT];
+              log('warn:patterns_restored', {});
+            }
+            if (this.#state.schemaVersion === 1) this.#state.schemaVersion = 2;
             this.#degraded = !!this.#state.degraded;
             this.#loaded = true;
             return;
@@ -734,6 +655,9 @@ class OstackyController {
                     const redactRecursively = (obj) => {
                         if (!obj || typeof obj !== 'object') return;
                         for (const k of Object.keys(obj)) {
+                            if (k === 'sensitivePatterns') {
+                                continue;
+                            }
                             if (k === 'tokenSavingEstimate') {
                                 if (typeof obj[k] === 'object') redactRecursively(obj[k]);
                                 continue;
@@ -938,10 +862,22 @@ class OstackyController {
                 e.reasoning = e.reasoning.replace(/(apiKey|secret|token|password)\s*[:=]\s*\S+/gi, '$1=[REDACTED]');
             }
         }
+        // D5: also append to jsonl (single source) — keep tail in state for perf
+        try {
+          const projectRoot = this.#statePath ? getProjectRoot(this.#statePath) : null;
+          if (projectRoot) {
+            for (const e of this.#auditBuffer) appendAuditJsonl(projectRoot, e);
+          }
+        } catch {}
         this.#state.audit.push(...this.#auditBuffer);
         const retention = getAuditRetentionSafe();
         if (this.#state.audit.length > retention) {
             this.#state.audit = this.#state.audit.slice(-retention);
+        }
+        // Keep only tail in state for size <5KB (full in jsonl)
+        if (this.#state.audit.length > 20) {
+          this.#state.auditTail = this.#state.audit.slice(-20);
+          // keep full for backward compat but will be trimmed on persist if oversized
         }
         this.#auditBuffer = [];
         // O1: Skip persist for trivial Level 0, but WARN always persists (forcePersist)
@@ -1316,7 +1252,25 @@ class OstackyController {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'spec_complete');
         if (!to) return this.#makeError(`Cannot complete spec from state ${this.#state.state}`, 'spec_complete');
+        // D10: check spec_not_in_sync before transition
+        let specNotInSync = false;
+        let specHashDisk = null;
+        let specHashHandoff = this.#state.lastHandoff?.specSnapshot?.specHash || null;
+        try {
+          if (this.#state.changeId && specHashHandoff) {
+            const hasRecentAudit = [...(this.#state.audit || []), ...this.#auditBuffer].some(e => e.phase === 'SPECIFICATION' && e.ts > (this.#state.lastHandoff?.ts || 0));
+            if (hasRecentAudit) specNotInSync = true;
+          }
+        } catch {}
         await this.#transition(to);
+        if (specNotInSync) {
+          const auditId = `aud-${Date.now()}-${this.#state.auditSeq}`;
+          log('warn:spec_not_in_sync', { auditId, specHashDisk, specHashHandoff });
+          await this.#audit('WARN', 'spec_not_in_sync', `spec_not_in_sync ${specHashDisk} vs ${specHashHandoff}`);
+          this.#state.specNotInSync = true;
+          await this.#persist();
+          return { state: this.#state.state, revision: this.#state.revision, warning: 'spec_not_in_sync', auditId, specNotInSync: true };
+        }
         await this.#audit('EXECUTION_ANALYSIS', 'spec_complete');
         return { state: this.#state.state, revision: this.#state.revision };
     }
@@ -1702,6 +1656,20 @@ class OstackyController {
 
     async getAudit({ limit = 20, offset = 0, phase, since } = {}) {
         this.#load();
+        // D5: try jsonl first (single source), fallback to state.audit
+        try {
+          const projectRoot = this.#statePath ? getProjectRoot(this.#statePath) : null;
+          if (projectRoot) {
+            const j = readAuditJsonl(projectRoot, { limit, offset, phase, since });
+            if (j.length > 0) return j.map((e) => ({
+              id: e.id,
+              ts: e.ts,
+              phase: e.phase,
+              decision: e.decision,
+              reasoning: e.reasoning ? String(e.reasoning).slice(0, 300) : undefined,
+            }));
+          }
+        } catch {}
         let all = this.#state.audit || [];
         if (phase) all = all.filter((e) => e.phase === phase);
         if (since) all = all.filter((e) => e.ts >= since);
@@ -2140,13 +2108,18 @@ class OstackyController {
                 return { error: 'fingerprint required: file exists but fileHash is null' };
             }
         }
-        // 10.5: ligadura validate → complete — WARN si no hubo validate previo
+        // 7.1: hard gate INLINE (new files eximidos) vs WARN SUBAGENTS
+        const isInline = this.#state.executionMode === 'INLINE' || this.#state.state === 'EXECUTING_INLINE';
+        const isNewFile = !!(filePath && !this.#state.fileFingerprints?.[filePath] && !Object.values(this.#state.tasks || {}).some((t) => t.filePath === filePath));
         if (!this.#state.lastValidated || (filePath && this.#state.lastValidated.filePath !== filePath)) {
+            if (isInline && !isNewFile) {
+                return { error: 'validate required', outcome: 'CONFLICT', reason: `complete_task without prior validate_edit for ${filePath || taskId} — hard gate INLINE (new files eximidos)` };
+            }
             this.#state.completeWithoutValidateCount = (this.#state.completeWithoutValidateCount || 0) + 1;
             await this.#audit(
                 'WARN',
                 'complete_without_validate',
-                `complete_task without prior validate_edit for ${filePath || taskId}`
+                `complete_task without prior validate_edit for ${filePath || taskId}${isNewFile ? ' (new file, WARN not BLOCK)' : ''}`
             );
         } else {
             this.#state.lastValidated = null;

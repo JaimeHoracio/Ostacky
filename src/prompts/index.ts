@@ -2,7 +2,7 @@ import * as p from "@clack/prompts";
 import { dirname } from "path";
 import { ensureToolDirs } from "../fs.js";
 import type { Scope } from "../fs.js";
-import { loadManifest, loadLatestManifest, printPostInstallSteps, resolveOpenCodePaths, isGlobalScope, onCancel } from "./helpers.js";
+import { loadManifest, loadLatestManifest, printPostInstallSteps, resolveOpenCodePaths, onCancel } from "./helpers.js";
 import { doInstallAll, doInstallStack } from "./install.js";
 import { doAddAgent, doAddCommand, doAddSkill, doAddMcp } from "./add.js";
 import { doUpdate } from "./update.js";
@@ -66,12 +66,6 @@ export async function runInteractiveMenu(scope?: Scope | null) {
       p.outro("Listo.");
       break;
     case "stack": {
-      if (isGlobalScope(paths)) {
-        p.log.error("install-stack requiere scope local; el stack vive en <proyecto>/.opencode/tools");
-        p.log.info(`Elegiste global (${paths.root}) — el stack debe instalarse por proyecto local.`);
-        p.outro("Cancelado.");
-        break;
-      }
       ensureToolDirs(paths.tools, ["codegraph", "engram"]);
       const stackOk = await doInstallStack(paths.tools, dirname(paths.root));
       if (!stackOk) process.exitCode = 1;
@@ -151,22 +145,9 @@ export async function runAddMcpCommand(scope?: Scope | null) {
 
 export async function runInstallStackCommand(scope?: Scope | null) {
   await ensureOpencodeInstalled();
-  if (scope === "global") {
-    p.log.error("install-stack requiere scope local; el stack vive en <proyecto>/.opencode/tools");
-    p.outro("Usá: npx ostacky install-stack --scope local");
-    process.exitCode = 1;
-    return;
-  }
   p.intro(" OpenCode Installer — Stack ");
   const paths = await resolveOpenCodePaths(scope ?? null);
   if (!paths) { p.outro("Cancelado."); return; }
-  if (isGlobalScope(paths)) {
-    p.log.error("install-stack requiere scope local; el stack vive en <proyecto>/.opencode/tools");
-    p.log.info(`Scope resuelto a global (${paths.root}) — el stack debe instalarse por proyecto local.`);
-    p.outro("Cancelado.");
-    process.exitCode = 1;
-    return;
-  }
   ensureToolDirs(paths.tools, ["codegraph", "engram"]);
   const stackOk = await doInstallStack(paths.tools, dirname(paths.root));
   if (!stackOk) process.exitCode = 1;

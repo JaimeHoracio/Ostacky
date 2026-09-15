@@ -16,6 +16,7 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, statSyn
 import { join, dirname, basename, resolve, relative } from "node:path"
 import { SENSITIVE_DEFAULT, BASH_SENSITIVE_RE, isSensitive, extractPathsFromBash } from "../../src/security.ts"
 import { isTrivial } from "../../src/tiered.ts"
+import { STATES, TRANSITIONS, DEFAULT_STATE } from "./controller-core.ts"
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -25,127 +26,7 @@ const IDLE_THRESHOLD_MS = 45_000
 const PURPLE_TENUE = "\x1b[38;5;183m"
 const PURPLE_RESET = "\x1b[0m"
 
-const STATES = Object.freeze({
-  INTERPRETATION_PENDING: "INTERPRETATION_PENDING",
-  CLARIFICATION_PENDING: "CLARIFICATION_PENDING",
-  DISCOVERY: "DISCOVERY",
-  ROUTE_DECISION_PENDING: "ROUTE_DECISION_PENDING",
-  SPECIFICATION: "SPECIFICATION",
-  EXECUTION_ANALYSIS: "EXECUTION_ANALYSIS",
-  EXECUTION_DECISION_PENDING: "EXECUTION_DECISION_PENDING",
-  EXECUTING_INLINE: "EXECUTING_INLINE",
-  EXECUTING_SUBAGENTS: "EXECUTING_SUBAGENTS",
-  SYNC: "SYNC",
-  DONE: "DONE",
-  BLOCKED: "BLOCKED",
-} as const)
-
-const TRANSITIONS: Record<string, Array<{ via: string; to: string; choice?: string; mode?: string }>> = {
-  INTERPRETATION_PENDING: [
-    { via: "request_clarification", to: "CLARIFICATION_PENDING" },
-    { via: "proceed_to_discovery", to: "DISCOVERY" },
-    { via: "record_discovery", to: "ROUTE_DECISION_PENDING" },
-    { via: "block", to: "BLOCKED" },
-  ],
-  CLARIFICATION_PENDING: [
-    { via: "record_clarification", to: "DISCOVERY" },
-    { via: "block", to: "BLOCKED" },
-    { via: "abandon", to: "BLOCKED" },
-  ],
-  DISCOVERY: [
-    { via: "record_discovery", to: "ROUTE_DECISION_PENDING" },
-    { via: "block", to: "BLOCKED" },
-    { via: "abandon", to: "BLOCKED" },
-  ],
-  ROUTE_DECISION_PENDING: [
-    { via: "consume_route_decision", to: "SPECIFICATION", choice: "SPEC" },
-    { via: "consume_route_decision", to: "EXECUTION_ANALYSIS", choice: "DIRECT" },
-    { via: "block", to: "BLOCKED" },
-    { via: "abandon", to: "BLOCKED" },
-  ],
-  SPECIFICATION: [
-    { via: "spec_complete", to: "EXECUTION_ANALYSIS" },
-    { via: "block", to: "BLOCKED" },
-    { via: "abandon", to: "BLOCKED" },
-  ],
-  EXECUTION_ANALYSIS: [
-    { via: "record_execution_analysis", to: "EXECUTION_DECISION_PENDING" },
-    { via: "block", to: "BLOCKED" },
-    { via: "abandon", to: "BLOCKED" },
-  ],
-  EXECUTION_DECISION_PENDING: [
-    { via: "consume_execution_decision", to: "EXECUTING_INLINE", mode: "INLINE" },
-    { via: "consume_execution_decision", to: "EXECUTING_SUBAGENTS", mode: "SUBAGENT_DRIVEN" },
-    { via: "block", to: "BLOCKED" },
-    { via: "abandon", to: "BLOCKED" },
-  ],
-  EXECUTING_INLINE: [
-    { via: "implementation_complete", to: "SYNC" },
-    { via: "block", to: "BLOCKED" },
-  ],
-  EXECUTING_SUBAGENTS: [
-    { via: "implementation_complete", to: "SYNC" },
-    { via: "block", to: "BLOCKED" },
-  ],
-  BLOCKED: [
-    { via: "replan", to: "INTERPRETATION_PENDING" },
-    { via: "abandon", to: "DONE" },
-  ],
-  SYNC: [
-    { via: "sync_complete", to: "DONE" },
-    { via: "block", to: "BLOCKED" },
-  ],
-  DONE: [],
-}
-
-const DEFAULT_STATE: any = {
-  state: STATES.INTERPRETATION_PENDING,
-  revision: 0,
-  requestId: null,
-  changeId: null,
-  routeDecisionId: null,
-  routeChoice: null,
-  level: null,
-  executionDecisionId: null,
-  executionMode: null,
-  snapshots: { codegraph: null, execution: null },
-  tasks: {},
-  fileFingerprints: {},
-  error: null,
-  lastHandoff: null,
-  expectedTasks: null,
-  expectedTaskCount: null,
-  auditSeq: 0,
-  degraded: false,
-  schemaVersion: 1,
-  stateOversizedCount: 0,
-  codegraphBypassCount: 0,
-  degradedEditsCount: 0,
-  cacheHitCount: 0,
-  cacheMissCount: 0,
-  tokenSavingEstimate: 0,
-  discoveryCacheHitCount: 0,
-  redundantCallCount: 0,
-  cacheMissWithoutPutCount: 0,
-  stateCheckCount: 0,
-  toolCallCount: 0,
-  lastProposal: null,
-  allowedFiles: {},
-  deniedFiles: {},
-  sensitivePatterns: SENSITIVE_DEFAULT,
-  sensitiveAccess: { allowed: 0, denied: 0, blockedAttempts: 0 },
-  staleContentAttempts: 0,
-  completeWithoutValidateCount: 0,
-  toolTimeoutCount: 0,
-  lastToolDurationMs: 0,
-  stateDurationMs: 0,
-  subagentFailedCount: 0,
-  lastValidated: null,
-  pendingFileAccess: {},
-  lastHeartbeat: 0,
-  watchdogEnabled: true,
-  ts: Date.now(),
-}
+// DEFAULT_STATE imported from controller-core.ts
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -558,13 +439,20 @@ export const OstackyController: Plugin = async (ctx) => {
           const s = readState((input as any).ctx?.directory ?? "")
         } catch {}
       }
-      // Heartbeat + color purple tenue: Ostacky vs modelo (fácil)
+      // Heartbeat + color purple tenue: Ostacky vs modelo (fácil) — single-writer: plugin memo, no persist cada tool (D10)
+      let lastHeartbeatMem = 0
       try {
         const dir = ctx.directory
         const s = readState(dir)
         if (s) {
-          s.lastHeartbeat = Date.now()
-          try { persistState(dir, s) } catch {}
+          const now = Date.now()
+          lastHeartbeatMem = now
+          // Single-writer: solo persiste si OSTACKY_PLUGIN_PERSIST=1 o idle>30s o state cambió
+          const shouldPersist = process.env.OSTACKY_PLUGIN_PERSIST === "1" || (now - (s.lastHeartbeat || 0) > 30000)
+          if (shouldPersist) {
+            s.lastHeartbeat = now
+            try { persistState(dir, s) } catch {}
+          }
           if (["EXECUTING_INLINE", "EXECUTING_SUBAGENTS", "SYNC"].includes(s.state) && output && typeof output.title === "string" && output.title && !output.title.includes("🟣")) {
             output.title = `🟣 ${PURPLE_TENUE}[OSTACKY]${PURPLE_RESET} ${output.title}`
           }

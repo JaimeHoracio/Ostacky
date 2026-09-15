@@ -15,8 +15,8 @@ import {
   setupOpenSpec,
   installEngram,
 } from "../stack.js";
-import { ensureToolDirs, findBinaryInDir } from "../fs.js";
-import { onCancel, isGlobalScope } from "./helpers.js";
+import { ensureToolDirs, findBinaryInDir, ensureGitignore } from "../fs.js";
+import { onCancel } from "./helpers.js";
 
 export async function doInstallStack(toolsDir?: string, projectRoot?: string): Promise<boolean> {
   const spin = p.spinner();
@@ -46,7 +46,7 @@ export async function doInstallStack(toolsDir?: string, projectRoot?: string): P
   spin.stop(os.success ? `✓ ${os.message}` : `✗ ${os.message}`);
   if (!os.success) allOk = false;
 
-  // 3. Engram (+ OstackyController plugin coherente local/global)
+  // 3. Engram (+ OstackyController plugin)
   spin.start("Instalando Engram...");
   const eng = await installEngram(toolsDir);
   spin.stop(eng.success ? `✓ ${eng.message}` : `✗ ${eng.message}`);
@@ -62,6 +62,12 @@ export async function doInstallStack(toolsDir?: string, projectRoot?: string): P
   if (!allOk) {
     p.log.warn("Algunos componentes requieren atención. Revisá los mensajes de error arriba.");
   }
+  // Automatizar .gitignore (no fatal, siempre local)
+  try {
+    const gi = ensureGitignore(resolvedProjectRoot);
+    if (gi.created) p.log.info(`.gitignore creado con patrones Ostacky`);
+    else if (gi.updated) p.log.info(`.gitignore actualizado: ${gi.patternsAdded.join(", ")}`);
+  } catch {}
   return allOk;
 }
 
@@ -69,15 +75,8 @@ export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths): Pr
   const spin = p.spinner();
   let errors = 0;
 
-  // Scope global: tools y plugins siempre local (coherencia), no crear tools globales.
-  const isGlobal = isGlobalScope(paths);
-  p.log.info(`Scope → ${isGlobal ? "global" : "local"} | opencodeDir: ${paths.root} | tools: ${paths.tools}`);
-  if (!isGlobal) {
-    ensureToolDirs(paths.tools, ["codegraph", "engram"]);
-  } else {
-    p.log.info("Scope global detectado: el stack (CodeGraph/Engram) y plugins (ostacky-controller, engram) permanecen siempre en <proyecto>/.opencode — se omite instalación de stack global.");
-    p.log.info("Para instalar el stack, ejecutá 'npx ostacky install-stack --scope local' dentro de cada proyecto.");
-  }
+  p.log.info(`Scope → local | opencodeDir: ${paths.root} | tools: ${paths.tools}`);
+  ensureToolDirs(paths.tools, ["codegraph", "engram"]);
 
   for (const agent of manifest.agents) {
     spin.start(`Descargando agente: ${agent.name}  (${agent.version})`);
@@ -152,37 +151,18 @@ export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths): Pr
       mkdirSync(paths.plugins, { recursive: true });
       copyFileSync(srcEng, destEng);
     }
-    // Coherencia: si es global pero hay proyecto local, también copiar allí para hard-gate local y limpiar legacy
-    if (isGlobal) {
-      try {
-        const projRoot = findProjectRoot();
-        const localPlugins = join(projRoot, ".opencode", "plugins");
-        mkdirSync(localPlugins, { recursive: true });
-        if (existsSync(src)) copyFileSync(src, join(localPlugins, "ostacky-plugin.ts"));
-        if (existsSync(srcEng)) copyFileSync(srcEng, join(localPlugins, "engram.ts"));
-        for (const legacy of ["ostacky-guard.ts", "ostacky-controller.ts"]) {
-          const lp = join(localPlugins, legacy);
-          if (existsSync(lp)) try { rmSync(lp, { force: true }); } catch {}
-        }
-      } catch {}
-    }
   } catch {}
 
   let stackOk = true;
   let missingTools: string[] = [];
-  if (isGlobal) {
-    // En global no instalamos binaries del stack — se deja para install local por proyecto
-    stackOk = true;
-  } else {
-    p.log.info("Instalando stack de herramientas...");
-    stackOk = await doInstallStack(paths.tools, dirname(paths.root));
-    if (!stackOk) errors++;
+  p.log.info("Instalando stack de herramientas...");
+  stackOk = await doInstallStack(paths.tools, dirname(paths.root));
+  if (!stackOk) errors++;
 
-    const codegraphDir = join(paths.tools, "codegraph");
-    const engramDir = join(paths.tools, "engram");
-    if (!existsSync(codegraphDir) || !findBinaryInDir(codegraphDir, "codegraph")) missingTools.push("CodeGraph");
-    if (!existsSync(engramDir) || !findBinaryInDir(engramDir, "engram")) missingTools.push("Engram");
-  }
+  const codegraphDir = join(paths.tools, "codegraph");
+  const engramDir = join(paths.tools, "engram");
+  if (!existsSync(codegraphDir) || !findBinaryInDir(codegraphDir, "codegraph")) missingTools.push("CodeGraph");
+  if (!existsSync(engramDir) || !findBinaryInDir(engramDir, "engram")) missingTools.push("Engram");
 
   if (missingTools.length > 0) {
     p.log.warn(
@@ -196,6 +176,14 @@ export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths): Pr
   } else {
     p.log.warn(`Instalación parcial: ${errors} componente(s) requieren atención.`);
   }
+
+  // Automatizar .gitignore (no fatal)
+  try {
+    const projectRoot = dirname(paths.root);
+    const gi = ensureGitignore(projectRoot);
+    if (gi.created) p.log.info(`.gitignore creado con patrones Ostacky`);
+    else if (gi.updated) p.log.info(`.gitignore actualizado: ${gi.patternsAdded.join(", ")}`);
+  } catch {}
 
   return errors === 0 && stackOk && missingTools.length === 0;
 }

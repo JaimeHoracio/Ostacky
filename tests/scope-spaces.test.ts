@@ -3,7 +3,6 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import {
-  getGlobalOpenCodeDir,
   getOpenCodeDirForScope,
   parseScopeArg,
   getCommandInvocation,
@@ -28,34 +27,8 @@ afterEach(() => {
   }
 });
 
-describe('scope — Windows Desktop con espacios', () => {
-  it('getGlobalOpenCodeDir respeta XDG_CONFIG_HOME (Unix) y APPDATA (win32)', () => {
-    const prevXdg = process.env.XDG_CONFIG_HOME;
-    const prevAppData = process.env.APPDATA;
-    try {
-      process.env.XDG_CONFIG_HOME = '/tmp/my custom config';
-      expect(getGlobalOpenCodeDir('linux', '/home/test')).toBe('/tmp/my custom config/opencode');
-      expect(getGlobalOpenCodeDir('darwin', '/home/test')).toBe('/tmp/my custom config/opencode');
-
-      process.env.APPDATA = 'C:\\Users\\Jaime Horacio\\AppData\\Roaming';
-      // homedir with space: C:\Users\Jaime Horacio
-      expect(getGlobalOpenCodeDir('win32', 'C:\\Users\\Jaime Horacio')).toBe(
-        'C:\\Users\\Jaime Horacio\\AppData\\Roaming\\opencode'
-      );
-      // fallback to homedir/AppData/Roaming when APPDATA no está
-      delete process.env.APPDATA;
-      expect(getGlobalOpenCodeDir('win32', 'C:\\Users\\Jaime Horacio')).toBe(
-        'C:\\Users\\Jaime Horacio\\AppData\\Roaming\\opencode'
-      );
-    } finally {
-      if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
-      else process.env.XDG_CONFIG_HOME = prevXdg;
-      if (prevAppData === undefined) delete process.env.APPDATA;
-      else process.env.APPDATA = prevAppData;
-    }
-  });
-
-  it('getOpenCodeDirForScope prioriza local y maneja cwd con espacios', () => {
+describe('scope — solo local (global removido) con espacios', () => {
+  it('getOpenCodeDirForScope siempre retorna local aunque cwd tenga espacios', () => {
     const spacedCwd = join(tmpRoot, 'My Project');
     mkdirSync(spacedCwd, { recursive: true });
     mkdirSync(join(spacedCwd, '.git'), { recursive: true });
@@ -63,24 +36,19 @@ describe('scope — Windows Desktop con espacios', () => {
     const local = getOpenCodeDirForScope('local', spacedCwd);
     expect(local).toBe(join(spacedCwd, '.opencode'));
 
-    const autoWithGit = getOpenCodeDirForScope('auto', spacedCwd);
-    expect(autoWithGit).toBe(join(spacedCwd, '.opencode'));
-
-    // auto sin .git ni .opencode → global
+    // local siempre local, no hay global
     const emptySpaced = join(tmpRoot, 'Empty Project With Spaces');
     mkdirSync(emptySpaced, { recursive: true });
-    const autoEmpty = getOpenCodeDirForScope('auto', emptySpaced);
-    expect(autoEmpty).toBe(getGlobalOpenCodeDir());
-
-    // global siempre es global, aunque cwd tenga espacios
-    const globalDir = getOpenCodeDirForScope('global', spacedCwd);
-    expect(globalDir).toBe(getGlobalOpenCodeDir());
+    // sin .git ni .opencode → findProjectRoot fallback to cwd → local
+    const localEmpty = getOpenCodeDirForScope('local', emptySpaced);
+    expect(localEmpty).toBe(join(emptySpaced, '.opencode'));
   });
 
-  it('parseScopeArg soporta --scope local y --scope=global en cualquier posición', () => {
+  it('parseScopeArg solo acepta local; global/auto retornan legacy marker para error educativo', () => {
     expect(parseScopeArg(['node', 'cli', '--scope', 'local'])).toBe('local');
-    expect(parseScopeArg(['node', 'cli', '--scope=global'])).toBe('global');
-    expect(parseScopeArg(['node', 'cli', 'install', '--scope', 'auto'])).toBe('auto');
+    // global/auto ahora retornan marker legacy (cli hace exit educativo)
+    expect(parseScopeArg(['node', 'cli', '--scope=global'])).toBe('__legacy_global__');
+    expect(parseScopeArg(['node', 'cli', 'install', '--scope', 'auto'])).toBe('__legacy_auto__');
     expect(parseScopeArg(['node', 'cli', 'install', '--scope=local', 'extra'])).toBe('local');
     expect(parseScopeArg(['node', 'cli', 'install'])).toBe(null);
     expect(parseScopeArg(['node', 'cli', '--scope', 'invalid'])).toBe(null);
@@ -153,12 +121,11 @@ describe('scope — Windows Desktop con espacios', () => {
     expect(raw).toContain('"C:\\\\Program Files\\\\nodejs\\\\node.exe"');
   });
 
-  it('tools permanecen locales aunque cwd tenga espacios — getOpenCodeDirForScope no mueve tools a global', () => {
+  it('tools permanecen locales aunque cwd tenga espacios — getOpenCodeDirForScope siempre local', () => {
     const spacedProj = join(tmpRoot, 'Desktop', 'My Project With Spaces');
     mkdirSync(spacedProj, { recursive: true });
     const localTools = join(getOpenCodeDirForScope('local', spacedProj), 'tools');
-    const globalTools = join(getGlobalOpenCodeDir(), 'tools');
     expect(localTools).toContain('My Project With Spaces');
-    expect(localTools).not.toBe(globalTools);
+    expect(localTools).not.toBe(join(tmpdir(), 'tools'));
   });
 });

@@ -110,16 +110,13 @@ Detecta automáticamente el directorio `.opencode/` del proyecto (o lo crea) y m
 ### Instalar todo
 
 ```bash
-npx ostacky install                 # local por defecto (pregunta si querés global)
-npx ostacky install --scope local   # <proyecto>/.opencode
-npx ostacky install --scope global  # ~/.config/opencode (XDG/APPDATA en Windows)
-npx ostacky install --scope auto    # local si existe .opencode/.git, si no global
+npx ostacky install                 # siempre local en <proyecto>/.opencode
+npx ostacky install --scope local   # <proyecto>/.opencode (único scope soportado)
 ```
 
-Descarga todos los agentes y commands definidos en el manifest y los escribe en `.opencode/` (scope `local`) o en `~/.config/opencode` (`global`). Además copia los plugins **Ostacky-owned** `ostacky-plugin.ts` + `engram.ts` en `.opencode/plugins/` (el legacy `ostacky-guard.ts` fue fusionado en `ostacky-plugin.ts` y ya no se instala; `ostacky-controller.ts` legacy se limpia automáticamente si quedó de una instalación previa).
+Descarga todos los agentes y commands definidos en el manifest y los escribe en `<proyecto>/.opencode`. Además copia los plugins **Ostacky-owned** `ostacky-plugin.ts` + `engram.ts` en `.opencode/plugins/` (el legacy `ostacky-guard.ts` fue fusionado en `ostacky-plugin.ts` y ya no se instala; `ostacky-controller.ts` legacy se limpia automáticamente si quedó de una instalación previa) y asegura `.gitignore` con ` .opencode/tools/, .codegraph/, .opencode/cache/, ostacky-state.json*`.
 
-> **Coherencia local/global:** aunque elijas `global`, los plugins y herramientas (`tools/` con CodeGraph/Engram) permanecen siempre en `<proyecto>/.opencode` local para el hard-gate por worktree. En global solo se escribe el scope global + un espejo local de plugins. Para stack completo por proyecto ejecutá `npx ostacky install --scope local` dentro de cada repo.
-> **Windows — dónde se instala realmente:** `global` es `%APPDATA%\opencode` (`C:\Users\<vos>\AppData\Roaming\opencode`), **no** `C:\Users\<vos>\.opencode`. Si ves `C:\Users\...\ .opencode\tools\codegraph` y esperabas `D:\mi-proyecto\.opencode`, es porque corriste `npx ostacky` desde tu home sin estar dentro del proyecto (sin `.git`). Hacé `cd` al proyecto y re-ejecutá con `--scope local`; el log ahora muestra `projectRoot` y `toolsDir` explícitos para evitar confusión.
+> **Instalación siempre local:** Ostacky vive por proyecto/worktree (CodeGraph index `.codegraph/` y `ostacky-state.json` aislados). Si ves `C:\Users\...\ .opencode\tools\codegraph` y esperabas `D:\mi-proyecto\.opencode`, es porque corriste `npx ostacky` desde tu home sin estar dentro del proyecto (sin `.git`). Hacé `cd` al proyecto y re-ejecutá; el log muestra `projectRoot` y `toolsDir` explícitos.
 
 ### Agregar agentes o commands individualmente
 
@@ -151,10 +148,8 @@ Solo descarga los items que cambiaron de versión.
 ### Desinstalar
 
 ```bash
-npx ostacky uninstall                          # pregunta local vs global, luego qué borrar
+npx ostacky uninstall                          # qué borrar en <proyecto>/.opencode
 npx ostacky uninstall --scope local            # fuerza scope local
-npx ostacky uninstall --scope global           # fuerza scope global
-npx ostacky uninstall --scope auto             # auto
 ```
 
 **Safe-delete:** solo borra lo trackeado en `.opencode/ostacky-lock.json` (agentes, commands, skills, MCPs) — nunca toca componentes previos del usuario que no estén en el lockfile. Antes de borrar muestra preview con `Scope: <ruta>` + lista de paths y pide confirmación. Los plugins Ostacky-owned (`ostacky-plugin.ts`, `engram.ts` + legacy `ostacky-guard.ts`/`ostacky-controller.ts` si quedaron) se limpian automáticamente via allowlist, nunca se borran plugins custom.
@@ -164,7 +159,7 @@ npx ostacky uninstall --scope auto             # auto
 #### Desinstalar un agente puntual
 
 ```bash
-npx ostacky uninstall agent <nombre>           # también admite --scope local|global|auto
+npx ostacky uninstall agent <nombre>           # también admite --scope local
 npx ostacky uninstall agent                    # sin nombre → selector de instalados
 ```
 
@@ -177,7 +172,7 @@ npx ostacky uninstall agent ostacky
 #### Desinstalar un command puntual
 
 ```bash
-npx ostacky uninstall command <nombre>         # también admite --scope
+npx ostacky uninstall command <nombre>         # también admite --scope local
 npx ostacky uninstall command                  # sin nombre → selector
 ```
 
@@ -192,7 +187,7 @@ Si no especificás el nombre, el CLI te muestra un selector con los items instal
 #### Desinstalar todo el stack (tools + config)
 
 ```bash
-npx ostacky uninstall-stack                    # pregunta scope, limpia mcp.codegraph/engram de opencode.json + .codegraph/ + .opencode/tools/
+npx ostacky uninstall-stack                    # limpia mcp.codegraph/engram de opencode.json + .codegraph/ + .opencode/tools/
 npx ostacky uninstall-stack --scope local
 ```
 

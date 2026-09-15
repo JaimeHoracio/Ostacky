@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { sha256 } from "./security.js";
-import { getCacheDir, CACHE_TTL_MS, CACHE_MAX_BYTES, getGitDiffHash, getGitHead, getCacheKey } from "./cache-codegraph.js";
+import { getCacheDir, CACHE_TTL_MS, CACHE_MAX_BYTES, getGitDiffHash, getGitHead, getCacheKey, enforceCacheLimit } from "./cache-codegraph.js";
 
 export const DISCOVERY_CACHE_PREFIX = "discovery-";
 
@@ -79,17 +79,43 @@ export function getDiscoverySnapshot(query: string, projectRoot: string): Discov
   }
 }
 
-function incrementDiscoveryHit(projectRoot: string): void {
+// Batch discovery hits — coalesce per projectRoot, flush after 1s or on next put
+const pendingDiscoveryHits = new Map<string, number>();
+const pendingDiscoveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function flushPendingDiscoveryHits(projectRoot: string): void {
+  const pending = pendingDiscoveryHits.get(projectRoot);
+  if (!pending) return;
+  pendingDiscoveryHits.delete(projectRoot);
+  const timer = pendingDiscoveryTimers.get(projectRoot);
+  if (timer) {
+    clearTimeout(timer);
+    pendingDiscoveryTimers.delete(projectRoot);
+  }
   try {
     const statePath = join(projectRoot, ".opencode", "ostacky-state.json");
     if (!existsSync(statePath)) return;
     const raw = readFileSync(statePath, "utf-8");
     const state = JSON.parse(raw);
-    state.cacheHitCount = (state.cacheHitCount || 0) + 1;
-    state.discoveryCacheHitCount = (state.discoveryCacheHitCount || 0) + 1;
-    state.tokenSavingEstimate = (state.tokenSavingEstimate || 0) + 500;
+    state.cacheHitCount = (state.cacheHitCount || 0) + pending;
+    state.discoveryCacheHitCount = (state.discoveryCacheHitCount || 0) + pending;
+    state.tokenSavingEstimate = (state.tokenSavingEstimate || 0) + 500 * pending;
     writeFileSync(statePath, JSON.stringify(state, null, 2), "utf-8");
   } catch {}
+}
+
+function incrementDiscoveryHit(projectRoot: string): void {
+  const prev = pendingDiscoveryHits.get(projectRoot) ?? 0;
+  pendingDiscoveryHits.set(projectRoot, prev + 1);
+  if (!pendingDiscoveryTimers.has(projectRoot)) {
+    const t = setTimeout(() => flushPendingDiscoveryHits(projectRoot), 1000);
+    if (typeof (t as any).unref === "function") (t as any).unref();
+    pendingDiscoveryTimers.set(projectRoot, t);
+  }
+}
+
+export function flushDiscoveryHits(projectRoot: string): void {
+  flushPendingDiscoveryHits(projectRoot);
 }
 
 export function putDiscoverySnapshot(
@@ -98,6 +124,7 @@ export function putDiscoverySnapshot(
   projectRoot: string
 ): void {
   if (process.env.OSTACKY_CACHE_DISABLE === "1") return;
+  try { flushPendingDiscoveryHits(projectRoot); } catch {}
   const dir = getCacheDir(projectRoot);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   try {
@@ -113,31 +140,6 @@ export function putDiscoverySnapshot(
     ts: Date.now(),
   };
   writeFileSync(path, JSON.stringify(data), "utf-8");
-}
-
-function enforceCacheLimit(dir: string): void {
-  try {
-    const files = readdirSync(dir);
-    let total = 0;
-    const entries: { file: string; size: number; mtime: number }[] = [];
-    for (const f of files) {
-      const fp = join(dir, f);
-      try {
-        const s = statSync(fp);
-        total += s.size;
-        entries.push({ file: fp, size: s.size, mtime: s.mtimeMs });
-      } catch {}
-    }
-    if (total <= CACHE_MAX_BYTES) return;
-    entries.sort((a, b) => a.mtime - b.mtime);
-    for (const e of entries) {
-      try {
-        unlinkSync(e.file);
-        total -= e.size;
-        if (total <= CACHE_MAX_BYTES) break;
-      } catch {}
-    }
-  } catch {}
 }
 
 /**

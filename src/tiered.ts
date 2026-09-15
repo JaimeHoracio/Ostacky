@@ -1,9 +1,22 @@
 /**
- * Tiered helpers — single source of truth for trivial detection.
+ * Tiered helpers — single source of truth for trivial detection y niveles.
  *
  * Ambos plugins (ostacky-plugin.ts y engram.ts) importan de acá.
  * No duplicar regex. Cache-friendly: isTrivial no muta system[0], solo decide hint.
+ * LEVEL_THRESHOLDS es la única definición de niveles (D6).
  */
+
+export const LEVEL_THRESHOLDS = {
+  "0": { maxFiles: 1, maxLines: 15, hasAPI: false, desc: "1 archivo, sin API, <15 líneas" },
+  "0+1": { maxFiles: 2, maxLines: 30, hasAPI: false, desc: "1-2 archivos, sin API, <30 líneas" },
+  "1+": { maxFiles: Infinity, maxLines: Infinity, hasAPI: true, desc: "API, deps, >30 líneas, cross-module" },
+} as const;
+
+export function classifyLevel({ fileCount, estLines, hasAPI }: { fileCount: number; estLines: number; hasAPI: boolean }): "0" | "0+1" | "1+" {
+  if (hasAPI || estLines > 30 || fileCount > 2) return "1+";
+  if (estLines > 15 || fileCount > 1) return "0+1";
+  return "0";
+}
 
 export function isTrivial(msg: string, state: string): boolean {
   if (!msg || state !== "DONE") return false

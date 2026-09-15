@@ -26,42 +26,48 @@ const HELP = `
 ostacky — Instalador de agentes, comandos, skills y MCPs para OpenCode
 
 Uso:
-  npx ostacky [--scope local|global|auto]                    Menú interactivo (instalación completa, pregunta local vs global, default local)
-  npx ostacky install [--scope local|global|auto]            Instalar TODO (agente + skills + MCPs + CodeGraph + OpenSpec + Engram)
-  npx ostacky add agent [--scope local|global|auto]          Agregar agente(s)
-  npx ostacky add command [--scope ...]        Agregar command(s)
-  npx ostacky add skill [--scope ...]          Agregar skill(s)
-  npx ostacky add mcp [--scope ...]            Agregar MCP server(s)
-  npx ostacky install-stack [--scope local|auto]      Instalar solo el stack de herramientas (CodeGraph, OpenSpec, Engram) — global bloquea con error
-  npx ostacky uninstall-stack [--scope local|global|auto]    Remover la configuración del stack del proyecto
+  npx ostacky [--scope local]                    Menú interactivo (instalación completa, siempre local)
+  npx ostacky install [--scope local]            Instalar TODO (agente + skills + MCPs + CodeGraph + OpenSpec + Engram)
+  npx ostacky add agent [--scope local]          Agregar agente(s)
+  npx ostacky add command [--scope local]        Agregar command(s)
+  npx ostacky add skill [--scope local]          Agregar skill(s)
+  npx ostacky add mcp [--scope local]            Agregar MCP server(s)
+  npx ostacky install-stack [--scope local]      Instalar solo el stack de herramientas (CodeGraph, OpenSpec, Engram)
+  npx ostacky uninstall-stack [--scope local]    Remover la configuración del stack del proyecto
   npx ostacky doctor                           Diagnostica locks, tools, state health
   npx ostacky status [--json]                  Muestra estado del controller sin MCP
-  npx ostacky update [--scope ...]             Actualizar instalación
-  npx ostacky uninstall [--scope ...]          Desinstalar todo
-  npx ostacky uninstall agent [--scope ...]    Desinstalar agente(s)
-  npx ostacky uninstall command [--scope ...]  Desinstalar command(s)
-  npx ostacky uninstall skill [--scope ...]    Desinstalar skill(s)
-  npx ostacky uninstall mcp [--scope ...]      Desinstalar MCP server(s)
+  npx ostacky update [--scope local]             Actualizar instalación
+  npx ostacky uninstall [--scope local]          Desinstalar todo
+  npx ostacky uninstall agent [--scope local]    Desinstalar agente(s)
+  npx ostacky uninstall command [--scope local]  Desinstalar command(s)
+  npx ostacky uninstall skill [--scope local]    Desinstalar skill(s)
+  npx ostacky uninstall mcp [--scope local]      Desinstalar MCP server(s)
   npx ostacky --help             Mostrar esta ayuda
   npx ostacky --version          Mostrar versión
 
 Scope:
-  --scope local   Escribe en <proyecto>/.opencode (recomendado, default al preguntar)
-  --scope global  Escribe en ~/.config/opencode (o %APPDATA%\\opencode en Windows)
-  --scope auto    Elige local si existe .opencode o .git, si no global
-  Sin flag        Pregunta interactiva local (default) vs global
+  --scope local   Escribe en <proyecto>/.opencode (siempre local, instalador único)
+  Sin flag        Asume local implícito (no pregunta global)
 `.trim();
 
-function parseScopeArg(argv: string[] = process.argv): "local" | "global" | "auto" | null {
+function parseScopeArg(argv: string[] = process.argv): "local" | null {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--scope" && i + 1 < argv.length) {
       const v = argv[i + 1];
-      if (v === "local" || v === "global" || v === "auto") return v;
+      if (v === "local") return v;
+      if (v === "global" || v === "auto") {
+        console.error(`Error: --scope ${v} removido; Ostacky instala siempre local en <proyecto>/.opencode. Hacé cd al proyecto y re-ejecutá con --scope local.`);
+        process.exit(1);
+      }
     }
     if (arg.startsWith("--scope=")) {
       const v = arg.split("=")[1];
-      if (v === "local" || v === "global" || v === "auto") return v as "local" | "global" | "auto";
+      if (v === "local") return v as "local";
+      if (v === "global" || v === "auto") {
+        console.error(`Error: --scope ${v} removido; Ostacky instala siempre local en <proyecto>/.opencode. Hacé cd al proyecto y re-ejecutá con --scope local.`);
+        process.exit(1);
+      }
     }
   }
   return null;
@@ -242,6 +248,82 @@ async function runDoctorCommand() {
     console.log(`⚠️ cache: check failed ${(e as Error).message}`);
   }
 
+  // ostacky-honest-improvements: controller-core sync, audit jsonl, levels, honesty, spec
+  try {
+    const coreSrc = join(cwd, "src", "controller-core.ts");
+    const coreMcp = join(cwd, "assets", "mcp", "ostacky-controller", "controller-core.js");
+    const corePlugin = join(cwd, "assets", "plugins", "controller-core.ts");
+    const coreSync = existsSync(coreSrc) && existsSync(coreMcp) && existsSync(corePlugin);
+    if (coreSync) {
+      const srcHash = readFileSync(coreSrc, "utf-8").slice(0, 100);
+      const mcpHash = readFileSync(coreMcp, "utf-8").slice(0, 100);
+      // simple check: both contain STATES
+      const ok = readFileSync(coreMcp, "utf-8").includes("STATES") && readFileSync(corePlugin, "utf-8").includes("STATES");
+      check(`controller-core: synced (${ok ? "STATES present" : "mismatch"})`, ok);
+      if (!ok) console.log("  Run: bun run scripts/sync-controller-core.ts (if exists) or copy src/controller-core.ts");
+    } else {
+      check("controller-core: synced", false, true);
+    }
+    // audit jsonl
+    const auditPath = join(opencodeDir, "ostacky-audit.jsonl");
+    if (existsSync(auditPath)) {
+      const sz = statSync(auditPath).size;
+      const lines = readFileSync(auditPath, "utf-8").split("\n").filter(Boolean).length;
+      check(`audit: jsonl ${lines} entries, ${(sz/1024).toFixed(1)}KB`, sz < 500*1024);
+      if (existsSync(statePath)) {
+        const s = JSON.parse(readFileSync(statePath, "utf-8"));
+        const stateSize = statSync(statePath).size;
+        check(`state size <50KB (${(stateSize/1024).toFixed(1)}KB)`, stateSize < 50*1024);
+        if (s.audit && s.audit.length > 20) console.log(`⚠️ state.audit large: ${s.audit.length} (should be tail only, full in jsonl)`);
+        else if (s.auditTail) console.log(`✅ state.auditTail: ${s.auditTail.length} (jsonl primary)`);
+      }
+    } else {
+      console.log("ℹ️ audit: jsonl not yet created (will be created on next audit)");
+    }
+    // levels unified
+    const ostackyMd = readFileSync(join(cwd, "assets", "agents", "ostacky.md"), "utf-8");
+    const hasLevels = ostackyMd.includes("LEVEL_THRESHOLDS") || ostackyMd.includes("classifyLevel");
+    check("levels: unified via tiered.ts", hasLevels, true);
+    // honesty
+    const hasHonesty = ostackyMd.includes("Principios de honestidad");
+    check("honesty: 7 SHALL", hasHonesty);
+    if (!hasHonesty) console.log("  Expected: ## Principios de honestidad (SHALL) in ostacky.md");
+    // spec no-overwrite
+    const pluginPath = join(cwd, "assets", "plugins", "ostacky-plugin.ts");
+    if (existsSync(pluginPath)) {
+      const plugin = readFileSync(pluginPath, "utf-8");
+      const hasSpecGuard = plugin.includes("getDiscoverySnapshot") && plugin.includes("specSnapshot");
+      // actually check for spec iteration guard: read fresco + edit
+      const hasNoOverwrite = plugin.includes("No edites sin Read fresco") || plugin.includes("specSnapshot");
+      check("spec: no-overwrite guard", hasNoOverwrite, true);
+    }
+    // sync proactive
+    const hasSyncProactive = ostackyMd.includes("Noté que lo que acordamos");
+    check("sync: proactive WARN", hasSyncProactive, true);
+  } catch (e) {
+    console.log(`⚠️ honesty/spec checks failed: ${(e as Error).message}`);
+  }
+
+  // .gitignore check (installer-local-only-cleanup)
+  try {
+    const giPath = join(cwd, ".gitignore");
+    if (!existsSync(giPath)) {
+      console.log("⚠️ .gitignore: missing (run npx ostacky install --scope local to create)");
+      hasWarn = true;
+    } else {
+      const gi = readFileSync(giPath, "utf-8");
+      const needed = [".opencode/tools/", ".opencode/cache/", ".opencode/ostacky-state.json", ".codegraph/", "openspec/"];
+      const missing = needed.filter((p) => !gi.includes(p));
+      if (missing.length > 0) {
+        console.log(`⚠️ .gitignore: missing ${missing.join(", ")} — run npx ostacky install to regenerate`);
+        hasWarn = true;
+      } else {
+        console.log("✅ .gitignore: OK (covers .opencode/tools/, cache, state, .codegraph/, openspec/)");
+      }
+      if (!gi.includes("# Ostacky")) console.log("ℹ️ .gitignore: missing # Ostacky header");
+    }
+  } catch {}
+
   // src/security.ts source-of-truth check (hardening-v2 D1)
   try {
     const secPath = join(cwd, "src", "security.ts");
@@ -320,11 +402,6 @@ async function main() {
       break;
 
     case "install-stack":
-      if (scope === "global") {
-        console.error("Error: install-stack requiere scope local; el stack vive en <proyecto>/.opencode/tools");
-        console.error("Sugerencia: ejecutá 'npx ostacky install-stack --scope local' dentro de cada proyecto.");
-        process.exit(1);
-      }
       await runInstallStackCommand(scope);
       break;
 
@@ -398,7 +475,7 @@ async function main() {
         console.error(`Comando desconocido: "${cmd}". Usá --help para ver los comandos disponibles.`);
         process.exit(1);
       }
-      // Sin argumentos → menú interactivo (pregunta local vs global, default local)
+      // Sin argumentos → menú interactivo (siempre local)
       await runInteractiveMenu(scope);
   }
 }

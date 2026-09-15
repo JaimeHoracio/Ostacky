@@ -12,13 +12,12 @@ import {
   renameSync,
 } from "fs";
 import { createHash } from "crypto";
-import { join, resolve, dirname, relative, basename, win32 } from "path";
+import { join, resolve, dirname, relative, basename } from "path";
 import { execFileSync } from "child_process";
-import { homedir } from "os";
 import { sha256 } from "./security.js";
 import type { OpenCodePaths } from "./types.js";
 
-export type Scope = "local" | "global" | "auto";
+export type Scope = "local";
 
 export const USER_AGENT = "ostacky-installer";
 
@@ -68,54 +67,36 @@ export function findProjectRoot(startDir: string = process.cwd()): string {
 }
 
 /**
- * Global OpenCode config directory (verified empíricamente: `~/.config/opencode` en Unix/WSL,
- * `%APPDATA%\\opencode` en win32, respeta XDG_CONFIG_HOME).
- */
-export function getGlobalOpenCodeDir(platform: string = process.platform, home: string = homedir()): string {
-  if (platform === "win32") {
-    const appData = process.env.APPDATA ?? win32.join(home, "AppData", "Roaming");
-    return win32.join(appData, "opencode");
-  }
-  const xdg = process.env.XDG_CONFIG_HOME ?? join(home, ".config");
-  return join(xdg, "opencode");
-}
-
-/**
- * Resuelve el directorio .opencode según scope.
- * - local → findOpenCodeDir() || createOpenCodeDir(findProjectRoot())
- * - global → getGlobalOpenCodeDir()
- * - auto → local si existe .opencode o .git (prioridad .opencode), si no global
+ * Resuelve el directorio .opencode — siempre local.
+ * Solo existe scope "local": retorna `<projectRoot>/.opencode`.
+ * Flags legacy `global|auto` son rechazados antes por `parseScopeArg`.
  */
 export function getOpenCodeDirForScope(scope: Scope, cwd: string = process.cwd()): string {
-  if (scope === "global") return getGlobalOpenCodeDir();
-  if (scope === "local") {
-    const existing = findOpenCodeDir(cwd);
-    if (existing) return existing;
-    return join(findProjectRoot(cwd), ".opencode");
-  }
-  // auto
+  // scope es siempre "local" — compatibilidad con parse legacy
+  void scope;
   const existing = findOpenCodeDir(cwd);
   if (existing) return existing;
-  const root = findProjectRoot(cwd);
-  if (existsSync(join(root, ".opencode")) || existsSync(join(root, ".git"))) {
-    return join(root, ".opencode");
-  }
-  return getGlobalOpenCodeDir();
+  return join(findProjectRoot(cwd), ".opencode");
 }
 
 /**
- * Parsea --scope de argv (soporta --scope local y --scope=local). Retorna null si no está.
+ * Parsea --scope de argv (soporta --scope local y --scope=local). Solo "local" es válido.
+ * Flags legacy `global|auto` retornan "__legacy_global__" / "__legacy_auto__" para mensaje educativo.
  */
-export function parseScopeArg(argv: string[] = process.argv): Scope | null {
+export function parseScopeArg(argv: string[] = process.argv): Scope | "__legacy_global__" | "__legacy_auto__" | null {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--scope" && i + 1 < argv.length) {
       const v = argv[i + 1];
-      if (v === "local" || v === "global" || v === "auto") return v;
+      if (v === "local") return v;
+      if (v === "global") return "__legacy_global__" as unknown as Scope;
+      if (v === "auto") return "__legacy_auto__" as unknown as Scope;
     }
     if (arg.startsWith("--scope=")) {
       const v = arg.split("=")[1];
-      if (v === "local" || v === "global" || v === "auto") return v as Scope;
+      if (v === "local") return v as Scope;
+      if (v === "global") return "__legacy_global__" as unknown as Scope;
+      if (v === "auto") return "__legacy_auto__" as unknown as Scope;
     }
   }
   return null;
@@ -598,4 +579,102 @@ export function findBinaryInDir(dir: string, name: string): string | null {
     }
   }
   return null;
+}
+
+/**
+ * Patrones Ostacky para .gitignore (siempre local).
+ * Se asegura que artefactos locales no se commiteen.
+ */
+export const OSTACKY_GITIGNORE_PATTERNS = [
+  ".opencode/tools/",
+  ".opencode/cache/",
+  ".opencode/ostacky-state.json",
+  ".opencode/ostacky-state.json.backup*",
+  ".opencode/ostacky-state.json.lock.*",
+  ".opencode/ostacky-audit.jsonl",
+  ".codegraph/",
+  "openspec/",
+] as const;
+
+export const OSTACKY_GITIGNORE_HEADER = "# Ostacky";
+
+/**
+ * Asegura que .gitignore del proyecto contenga los patrones Ostacky.
+ * - Si no existe lo crea con header + patrones
+ * - Si existe hace merge idempotente sin duplicar ni borrar contenido del usuario
+ * - Preserva newline final y header único
+ */
+export function ensureGitignore(projectRoot: string = findProjectRoot()): { created: boolean; updated: boolean; patternsAdded: string[] } {
+  const gitignorePath = join(projectRoot, ".gitignore");
+  const patternsAdded: string[] = [];
+  let created = false;
+  let updated = false;
+
+  let raw = "";
+  if (existsSync(gitignorePath)) {
+    raw = readFileSync(gitignorePath, "utf-8");
+  } else {
+    created = true;
+  }
+
+  // Si ya tiene header, verificar cada patrón
+  const hasHeader = raw.includes(OSTACKY_GITIGNORE_HEADER);
+  const missingPatterns = OSTACKY_GITIGNORE_PATTERNS.filter((p) => !raw.includes(p));
+
+  if (missingPatterns.length === 0 && hasHeader) {
+    // Ya está completo, asegurar newline final si hace falta
+    if (raw.length > 0 && !raw.endsWith("\n")) {
+      writeFileSync(gitignorePath, raw + "\n", "utf-8");
+      updated = true;
+    }
+    return { created, updated, patternsAdded };
+  }
+
+  if (!hasHeader) {
+    // No hay bloque Ostacky — agregarlo al final
+    const needsNewline = raw.length > 0 && !raw.endsWith("\n");
+    const block = [OSTACKY_GITIGNORE_HEADER, ...OSTACKY_GITIGNORE_PATTERNS].join("\n") + "\n";
+    const newContent = raw + (needsNewline ? "\n" : raw.length > 0 ? "" : "") + block;
+    // Si raw no termina en \n y no está vacío, el block ya tiene \n inicial extra arriba
+    // Simplificar: si raw vacío → block directo, si no vacío y sin \n → raw + "\n" + block
+    let final = "";
+    if (raw.length === 0) {
+      final = block;
+    } else if (raw.endsWith("\n")) {
+      final = raw + block;
+    } else {
+      final = raw + "\n" + block;
+    }
+    writeFileSync(gitignorePath, final, "utf-8");
+    patternsAdded.push(...missingPatterns.length ? missingPatterns : [...OSTACKY_GITIGNORE_PATTERNS]);
+    updated = true;
+    return { created, updated, patternsAdded };
+  }
+
+  // Tiene header pero faltan patrones — insertar faltantes tras el header
+  const lines = raw.split("\n");
+  const headerIdx = lines.findIndex((l) => l.trim() === OSTACKY_GITIGNORE_HEADER);
+  if (headerIdx !== -1) {
+    // Insertar missing tras el bloque existente
+    // Buscar fin del bloque Ostacky (siguientes líneas que son patrones o vacías)
+    let insertIdx = headerIdx + 1;
+    while (insertIdx < lines.length && (OSTACKY_GITIGNORE_PATTERNS.some((p) => lines[insertIdx].trim() === p) || lines[insertIdx].trim() === "")) {
+      insertIdx++;
+    }
+    // Insertar faltantes
+    lines.splice(insertIdx, 0, ...missingPatterns);
+    const newContent = lines.join("\n");
+    const finalContent = newContent.endsWith("\n") ? newContent : newContent + "\n";
+    writeFileSync(gitignorePath, finalContent, "utf-8");
+    patternsAdded.push(...missingPatterns);
+    updated = true;
+  } else {
+    // Fallback: header existe como substring pero no línea exacta — append
+    const newContent = raw.endsWith("\n") ? raw + missingPatterns.join("\n") + "\n" : raw + "\n" + missingPatterns.join("\n") + "\n";
+    writeFileSync(gitignorePath, newContent, "utf-8");
+    patternsAdded.push(...missingPatterns);
+    updated = true;
+  }
+
+  return { created, updated, patternsAdded };
 }

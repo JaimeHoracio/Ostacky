@@ -31,8 +31,7 @@ import type { OpenCodePaths } from "./types.js";
 
 /**
  * Result of installing the full tool stack.
- * Cada instalación queda coherente en local y global: el plugin controller se copia siempre a <proyecto>/.opencode/plugins
- * aunque el scope sea global (el state vive por worktree, el plugin debe estar local para hard-gate).
+ * Siempre local: el plugin controller vive en <proyecto>/.opencode/plugins.
  */
 export interface StackResult {
   codegraph: { success: boolean; message: string };
@@ -118,15 +117,15 @@ function copyEngramPlugin(projectRoot: string): void {
 
 function copyOstackyControllerPlugin(projectRoot: string): void {
   const pluginSource = join(PACKAGE_ROOT, "assets", "plugins", "ostacky-plugin.ts");
+  const coreSource = join(PACKAGE_ROOT, "assets", "plugins", "controller-core.ts");
   const pluginsDir = join(projectRoot, ".opencode", "plugins");
   if (!existsSync(pluginSource)) {
     throw new Error(`Plugin bundleado de OstackyController no encontrado: ${pluginSource}`);
   }
   mkdirSync(pluginsDir, { recursive: true });
   copyFileSync(pluginSource, join(pluginsDir, "ostacky-plugin.ts"));
-  // Coherencia local/global: el plugin se escribe SIEMPRE en <proyecto>/.opencode/plugins
-  // aunque el scope sea global, porque el state vive por worktree y el hard-gate debe estar local.
-  // Opencode carga plugins de ambas ubicaciones (global + local), así que el global agent también ve el local.
+  if (existsSync(coreSource)) copyFileSync(coreSource, join(pluginsDir, "controller-core.ts"));
+  // Siempre local: state por worktree, hard-gate local.
 }
 
 /** Builds an Engram release URL using its platform-specific asset naming. */
@@ -443,7 +442,7 @@ export async function installEngram(toolsDir?: string): Promise<{ success: boole
 /**
  * Orchestrator: installs and configures the full tool stack
  * (CodeGraph + OpenSpec + Engram + Config patch + OstackyController plugin).
- * Plugin controller se instala siempre local para coherencia.
+ * Siempre local por proyecto.
  * If toolsDir is provided, each tool creates its subdirectory there.
  * Async because CodeGraph and Engram download binaries.
  */

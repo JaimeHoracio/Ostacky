@@ -25,12 +25,20 @@ export function getGitHead(projectRoot: string): string | null {
   }
 }
 
+const gitDiffMemo = new Map<string, { hash: string | null; ts: number }>();
+const GIT_DIFF_MEMO_TTL = 5000;
+
 export function getGitDiffHash(projectRoot: string): string | null {
+  const now = Date.now();
+  const memo = gitDiffMemo.get(projectRoot);
+  if (memo && now - memo.ts < GIT_DIFF_MEMO_TTL) return memo.hash;
   try {
     const diff = execSync("git diff --name-only", { cwd: projectRoot, encoding: "utf-8" }).trim();
     const status = execSync("git status --porcelain --untracked-files=all", { cwd: projectRoot, encoding: "utf-8" }).trim();
     const combined = [diff, status].filter(Boolean).join("\n");
-    return combined ? sha256(combined) : "";
+    const hash = combined ? sha256(combined) : "";
+    gitDiffMemo.set(projectRoot, { hash, ts: now });
+    return hash;
   } catch {
     return null;
   }
@@ -64,21 +72,50 @@ export function getCachedCodegraph(query: string, projectRoot: string): any | nu
   }
 }
 
-function incrementCacheHit(projectRoot: string): void {
+// Batch cache hit increments — flush coalesced after 1s to avoid write per hit
+const pendingCacheHits = new Map<string, number>();
+const pendingCacheTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function flushPendingCacheHits(projectRoot: string): void {
+  const pending = pendingCacheHits.get(projectRoot);
+  if (!pending) return;
+  pendingCacheHits.delete(projectRoot);
+  const timer = pendingCacheTimers.get(projectRoot);
+  if (timer) {
+    clearTimeout(timer);
+    pendingCacheTimers.delete(projectRoot);
+  }
   try {
     const statePath = join(projectRoot, ".opencode", "ostacky-state.json");
     if (!existsSync(statePath)) return;
     const raw = readFileSync(statePath, "utf-8");
     const state = JSON.parse(raw);
-    state.cacheHitCount = (state.cacheHitCount || 0) + 1;
-    state.discoveryCacheHitCount = (state.discoveryCacheHitCount || 0) + 1;
-    state.tokenSavingEstimate = (state.tokenSavingEstimate || 0) + 500;
+    state.cacheHitCount = (state.cacheHitCount || 0) + pending;
+    state.discoveryCacheHitCount = (state.discoveryCacheHitCount || 0) + pending;
+    state.tokenSavingEstimate = (state.tokenSavingEstimate || 0) + 500 * pending;
     writeFileSync(statePath, JSON.stringify(state, null, 2), "utf-8");
   } catch {}
 }
 
+function incrementCacheHit(projectRoot: string): void {
+  const prev = pendingCacheHits.get(projectRoot) ?? 0;
+  pendingCacheHits.set(projectRoot, prev + 1);
+  if (!pendingCacheTimers.has(projectRoot)) {
+    const t = setTimeout(() => flushPendingCacheHits(projectRoot), 1000);
+    // Don't block process exit
+    if (typeof (t as any).unref === "function") (t as any).unref();
+    pendingCacheTimers.set(projectRoot, t);
+  }
+}
+
+export function flushCacheHits(projectRoot: string): void {
+  flushPendingCacheHits(projectRoot);
+}
+
 export function putCachedCodegraph(query: string, result: any, projectRoot: string): void {
   if (process.env.OSTACKY_CACHE_DISABLE === "1") return;
+  // Flush batched hits before put so metrics are coherent
+  try { flushPendingCacheHits(projectRoot); } catch {}
   const dir = getCacheDir(projectRoot);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   try {
@@ -95,7 +132,7 @@ export function putCachedCodegraph(query: string, result: any, projectRoot: stri
   writeFileSync(path, JSON.stringify(data), "utf-8");
 }
 
-function enforceCacheLimit(dir: string): void {
+export function enforceCacheLimit(dir: string): void {
   try {
     const files = readdirSync(dir);
     let total = 0;
