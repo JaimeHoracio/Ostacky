@@ -29,75 +29,85 @@ import { dirname, basename, join, resolve, relative } from 'node:path';
 import { writeFile as writeFileAsync, rename as renameAsync, mkdir as mkdirAsync } from 'node:fs/promises';
 import { SENSITIVE_DEFAULT, BASH_SENSITIVE_RE, isSensitive, extractPathsFromBash } from './security.js';
 import {
-  STATES,
-  TRANSITIONS,
-  TERMINAL_STATES,
-  DEFAULT_STATE,
-  MAX_TASKS,
-  MAX_TASKS_DEFAULT,
-  MAX_TASKS_CAP,
-  MAX_SNAPSHOT_JSON_LENGTH,
-  MAX_STATE_FILE_SIZE,
-  DEGRADED_THRESHOLD,
-  getMaxTasks,
+    STATES,
+    TRANSITIONS,
+    TERMINAL_STATES,
+    DEFAULT_STATE,
+    MAX_TASKS,
+    MAX_TASKS_DEFAULT,
+    MAX_TASKS_CAP,
+    MAX_SNAPSHOT_JSON_LENGTH,
+    MAX_STATE_FILE_SIZE,
+    DEGRADED_THRESHOLD,
+    getMaxTasks,
 } from './controller-core.js';
 
 // --- Audit JSONL (D5) — single source: src/audit-jsonl.ts ---
 function getAuditPath(projectRoot) {
-  return join(projectRoot, '.opencode', 'ostacky-audit.jsonl');
+    return join(projectRoot, '.opencode', 'ostacky-audit.jsonl');
 }
 function appendAuditJsonl(projectRoot, entry) {
-  if (projectRoot === "/tmp" || projectRoot === "/") return;
-  try {
-    const p = join(projectRoot, '.opencode', 'ostacky-audit.jsonl');
-    const dir = dirname(p);
-    try { mkdirSync(dir, { recursive: true }); } catch {}
+    if (projectRoot === '/tmp' || projectRoot === '/') return;
     try {
-      const prev = existsSync(p) ? readFileSync(p, 'utf-8') : '';
-      writeFileSync(p, prev + JSON.stringify(entry) + '\n', 'utf-8');
-      // Enforce OSTACKY_AUDIT_RETENTION
-      try {
-        const retention = (() => {
-          const raw = process.env.OSTACKY_AUDIT_RETENTION;
-          if (raw == null || raw === "") return 500;
-          const n = parseInt(raw, 10);
-          if (Number.isNaN(n) || n <= 0) return 500;
-          if (n > 2000) return 2000;
-          return n;
-        })();
-        const raw2 = readFileSync(p, 'utf-8');
-        const entries = raw2.split('\n').filter(Boolean);
-        if (entries.length > retention) {
-          const keep = entries.slice(-retention);
-          writeFileSync(p, keep.join('\n') + '\n', 'utf-8');
-        }
-      } catch {}
-      try {
-        const s = statSync(p);
-        if (s.size > 500 * 1024) {
-          const raw = readFileSync(p, 'utf-8');
-          const entries = raw.split('\n').filter(Boolean).map(l => JSON.parse(l));
-          const keep = entries.slice(-500);
-          writeFileSync(p, keep.map(e => JSON.stringify(e)).join('\n') + '\n', 'utf-8');
-        }
-      } catch {}
+        const p = join(projectRoot, '.opencode', 'ostacky-audit.jsonl');
+        const dir = dirname(p);
+        try {
+            mkdirSync(dir, { recursive: true });
+        } catch {}
+        try {
+            const prev = existsSync(p) ? readFileSync(p, 'utf-8') : '';
+            writeFileSync(p, prev + JSON.stringify(entry) + '\n', 'utf-8');
+            // Enforce OSTACKY_AUDIT_RETENTION
+            try {
+                const retention = (() => {
+                    const raw = process.env.OSTACKY_AUDIT_RETENTION;
+                    if (raw == null || raw === '') return 500;
+                    const n = parseInt(raw, 10);
+                    if (Number.isNaN(n) || n <= 0) return 500;
+                    if (n > 2000) return 2000;
+                    return n;
+                })();
+                const raw2 = readFileSync(p, 'utf-8');
+                const entries = raw2.split('\n').filter(Boolean);
+                if (entries.length > retention) {
+                    const keep = entries.slice(-retention);
+                    writeFileSync(p, keep.join('\n') + '\n', 'utf-8');
+                }
+            } catch {}
+            try {
+                const s = statSync(p);
+                if (s.size > 500 * 1024) {
+                    const raw = readFileSync(p, 'utf-8');
+                    const entries = raw
+                        .split('\n')
+                        .filter(Boolean)
+                        .map((l) => JSON.parse(l));
+                    const keep = entries.slice(-500);
+                    writeFileSync(p, keep.map((e) => JSON.stringify(e)).join('\n') + '\n', 'utf-8');
+                }
+            } catch {}
+        } catch {}
     } catch {}
-  } catch {}
 }
 function readAuditJsonl(projectRoot, opts = {}) {
-  try {
-    const p = join(projectRoot, '.opencode', 'ostacky-audit.jsonl');
-    if (!existsSync(p)) return [];
-    const raw = readFileSync(p, 'utf-8');
-    let entries = raw.split('\n').filter(Boolean).map(l => JSON.parse(l));
-    if (opts.phase) entries = entries.filter(e => e.phase === opts.phase);
-    if (opts.since) entries = entries.filter(e => e.ts >= opts.since);
-    const limit = opts.limit ?? 20;
-    const offset = opts.offset ?? 0;
-    const start = Math.max(0, entries.length - limit - offset);
-    const end = entries.length - offset;
-    return entries.slice(start, end).reverse();
-  } catch { return []; }
+    try {
+        const p = join(projectRoot, '.opencode', 'ostacky-audit.jsonl');
+        if (!existsSync(p)) return [];
+        const raw = readFileSync(p, 'utf-8');
+        let entries = raw
+            .split('\n')
+            .filter(Boolean)
+            .map((l) => JSON.parse(l));
+        if (opts.phase) entries = entries.filter((e) => e.phase === opts.phase);
+        if (opts.since) entries = entries.filter((e) => e.ts >= opts.since);
+        const limit = opts.limit ?? 20;
+        const offset = opts.offset ?? 0;
+        const start = Math.max(0, entries.length - limit - offset);
+        const end = entries.length - offset;
+        return entries.slice(start, end).reverse();
+    } catch {
+        return [];
+    }
 }
 
 // T1: non-blocking wait — replaces busy-wait spins that froze the event loop
@@ -537,11 +547,13 @@ class OstackyController {
                 });
             // D9+D2: fix double-serialization and [REDACTED] pattern
             if (typeof this.#state.snapshots?.codegraph === 'string') {
-              try { this.#state.snapshots.codegraph = JSON.parse(this.#state.snapshots.codegraph); } catch {}
+                try {
+                    this.#state.snapshots.codegraph = JSON.parse(this.#state.snapshots.codegraph);
+                } catch {}
             }
             if (Array.isArray(this.#state.sensitivePatterns) && this.#state.sensitivePatterns.includes('[REDACTED]')) {
-              this.#state.sensitivePatterns = [...SENSITIVE_DEFAULT];
-              log('warn:patterns_restored', {});
+                this.#state.sensitivePatterns = [...SENSITIVE_DEFAULT];
+                log('warn:patterns_restored', {});
             }
             if (this.#state.schemaVersion === 1) this.#state.schemaVersion = 2;
             this.#degraded = !!this.#state.degraded;
@@ -864,10 +876,10 @@ class OstackyController {
         }
         // D5: also append to jsonl (single source) — keep tail in state for perf
         try {
-          const projectRoot = this.#statePath ? getProjectRoot(this.#statePath) : null;
-          if (projectRoot) {
-            for (const e of this.#auditBuffer) appendAuditJsonl(projectRoot, e);
-          }
+            const projectRoot = this.#statePath ? getProjectRoot(this.#statePath) : null;
+            if (projectRoot) {
+                for (const e of this.#auditBuffer) appendAuditJsonl(projectRoot, e);
+            }
         } catch {}
         this.#state.audit.push(...this.#auditBuffer);
         const retention = getAuditRetentionSafe();
@@ -876,8 +888,8 @@ class OstackyController {
         }
         // Keep only tail in state for size <5KB (full in jsonl)
         if (this.#state.audit.length > 20) {
-          this.#state.auditTail = this.#state.audit.slice(-20);
-          // keep full for backward compat but will be trimmed on persist if oversized
+            this.#state.auditTail = this.#state.audit.slice(-20);
+            // keep full for backward compat but will be trimmed on persist if oversized
         }
         this.#auditBuffer = [];
         // O1: Skip persist for trivial Level 0, but WARN always persists (forcePersist)
@@ -1257,19 +1269,27 @@ class OstackyController {
         let specHashDisk = null;
         let specHashHandoff = this.#state.lastHandoff?.specSnapshot?.specHash || null;
         try {
-          if (this.#state.changeId && specHashHandoff) {
-            const hasRecentAudit = [...(this.#state.audit || []), ...this.#auditBuffer].some(e => e.phase === 'SPECIFICATION' && e.ts > (this.#state.lastHandoff?.ts || 0));
-            if (hasRecentAudit) specNotInSync = true;
-          }
+            if (this.#state.changeId && specHashHandoff) {
+                const hasRecentAudit = [...(this.#state.audit || []), ...this.#auditBuffer].some(
+                    (e) => e.phase === 'SPECIFICATION' && e.ts > (this.#state.lastHandoff?.ts || 0)
+                );
+                if (hasRecentAudit) specNotInSync = true;
+            }
         } catch {}
         await this.#transition(to);
         if (specNotInSync) {
-          const auditId = `aud-${Date.now()}-${this.#state.auditSeq}`;
-          log('warn:spec_not_in_sync', { auditId, specHashDisk, specHashHandoff });
-          await this.#audit('WARN', 'spec_not_in_sync', `spec_not_in_sync ${specHashDisk} vs ${specHashHandoff}`);
-          this.#state.specNotInSync = true;
-          await this.#persist();
-          return { state: this.#state.state, revision: this.#state.revision, warning: 'spec_not_in_sync', auditId, specNotInSync: true };
+            const auditId = `aud-${Date.now()}-${this.#state.auditSeq}`;
+            log('warn:spec_not_in_sync', { auditId, specHashDisk, specHashHandoff });
+            await this.#audit('WARN', 'spec_not_in_sync', `spec_not_in_sync ${specHashDisk} vs ${specHashHandoff}`);
+            this.#state.specNotInSync = true;
+            await this.#persist();
+            return {
+                state: this.#state.state,
+                revision: this.#state.revision,
+                warning: 'spec_not_in_sync',
+                auditId,
+                specNotInSync: true,
+            };
         }
         await this.#audit('EXECUTION_ANALYSIS', 'spec_complete');
         return { state: this.#state.state, revision: this.#state.revision };
@@ -1658,17 +1678,18 @@ class OstackyController {
         this.#load();
         // D5: try jsonl first (single source), fallback to state.audit
         try {
-          const projectRoot = this.#statePath ? getProjectRoot(this.#statePath) : null;
-          if (projectRoot) {
-            const j = readAuditJsonl(projectRoot, { limit, offset, phase, since });
-            if (j.length > 0) return j.map((e) => ({
-              id: e.id,
-              ts: e.ts,
-              phase: e.phase,
-              decision: e.decision,
-              reasoning: e.reasoning ? String(e.reasoning).slice(0, 300) : undefined,
-            }));
-          }
+            const projectRoot = this.#statePath ? getProjectRoot(this.#statePath) : null;
+            if (projectRoot) {
+                const j = readAuditJsonl(projectRoot, { limit, offset, phase, since });
+                if (j.length > 0)
+                    return j.map((e) => ({
+                        id: e.id,
+                        ts: e.ts,
+                        phase: e.phase,
+                        decision: e.decision,
+                        reasoning: e.reasoning ? String(e.reasoning).slice(0, 300) : undefined,
+                    }));
+            }
         } catch {}
         let all = this.#state.audit || [];
         if (phase) all = all.filter((e) => e.phase === phase);
@@ -2110,10 +2131,18 @@ class OstackyController {
         }
         // 7.1: hard gate INLINE (new files eximidos) vs WARN SUBAGENTS
         const isInline = this.#state.executionMode === 'INLINE' || this.#state.state === 'EXECUTING_INLINE';
-        const isNewFile = !!(filePath && !this.#state.fileFingerprints?.[filePath] && !Object.values(this.#state.tasks || {}).some((t) => t.filePath === filePath));
+        const isNewFile = !!(
+            filePath &&
+            !this.#state.fileFingerprints?.[filePath] &&
+            !Object.values(this.#state.tasks || {}).some((t) => t.filePath === filePath)
+        );
         if (!this.#state.lastValidated || (filePath && this.#state.lastValidated.filePath !== filePath)) {
             if (isInline && !isNewFile) {
-                return { error: 'validate required', outcome: 'CONFLICT', reason: `complete_task without prior validate_edit for ${filePath || taskId} — hard gate INLINE (new files eximidos)` };
+                return {
+                    error: 'validate required',
+                    outcome: 'CONFLICT',
+                    reason: `complete_task without prior validate_edit for ${filePath || taskId} — hard gate INLINE (new files eximidos)`,
+                };
             }
             this.#state.completeWithoutValidateCount = (this.#state.completeWithoutValidateCount || 0) + 1;
             await this.#audit(
@@ -2344,7 +2373,7 @@ function safeHandler(fn, options = {}) {
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.8.2',
+    version: '0.8.3',
 });
 
 server.registerTool(
@@ -2944,7 +2973,7 @@ function setupGracefulShutdown(ctrl) {
 }
 
 async function main() {
-    log('Starting ostacky-controller MCP v0.8.2...');
+    log('Starting ostacky-controller MCP v0.8.3...');
     log('State path:', { path: statePath });
     // Clean up stale tmp/lock files from previous runs
     cleanupTmpFiles(statePath);
