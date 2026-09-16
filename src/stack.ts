@@ -178,7 +178,7 @@ export async function installCodeGraph(toolsDir?: string): Promise<{ success: bo
     }
   }
 
-  // Descargar el binario si no está o se corrompió — patrón resiliente copiado de Engram (strip 0 + búsqueda recursiva)
+  // Descargar el binario si no está o se corrompió — CodeGraph usa strip 1 porque el tar trae carpeta codegraph-<platform>/ con bin+node+lib
   if (!localBin) {
     const tag = await fetchLatestReleaseTag("colbymchenry/codegraph");
     if (!tag) {
@@ -190,8 +190,8 @@ export async function installCodeGraph(toolsDir?: string): Promise<{ success: bo
     const ext = process.platform === "win32" ? "zip" : "tar.gz";
     const url = `https://github.com/colbymchenry/codegraph/releases/download/${tag}/codegraph-${target}.${ext}`;
     try {
-      // Engram usa strip 0 y búsqueda recursiva: tolera cambios de estructura del zip entre releases
-      archivePromotion = await downloadAndExtractWithRetry(url, cgToolDir, 0, 180_000, 2);
+      // CodeGraph requiere strip 1: el archive contiene codegraph-<target>/bin + node + lib. Strip 0 deja todo anidado y el wrapper no encuentra $DIR/node.
+      archivePromotion = await downloadAndExtractWithRetry(url, cgToolDir, 1, 180_000, 2);
     } catch (e) {
       return {
         success: false,

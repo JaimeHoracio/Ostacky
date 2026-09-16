@@ -661,17 +661,17 @@ var init_fs = __esm(() => {
 var manifest_default;
 var init_manifest = __esm(() => {
     manifest_default = {
-        version: '0.8.3',
+        version: '0.8.4',
         repo: 'JaimeHoracio/Ostacky',
-        tag: 'v0.8.3',
+        tag: 'v0.8.4',
         agents: [
             {
                 name: 'ostacky',
                 file: 'assets/agents/ostacky.md',
                 description:
-                    'Orquestador con recuperación automática (nunca se congela), ruteo por nivel de impacto, controller MCP con SDK oficial, edición segura con fallback inline, y delegación en OpenSpec + Superpowers. v0.8.3: prune de skills obsoletas, lastHandoff, getAvailableTransitions, consecutiveFailures real, mem_session_summary automático al cierre.',
-                version: '0.8.3',
-                sha256: '7cf1f98fca4fc1bd8c82b4de14cc69d0a9dcbd8d2b0a415757f0262b5c4521cf',
+                    'Orquestador con recuperación automática (nunca se congela), ruteo por nivel de impacto, controller MCP con SDK oficial, edición segura con fallback inline, y delegación en OpenSpec + Superpowers. v0.8.4: prune de skills obsoletas, lastHandoff, getAvailableTransitions, consecutiveFailures real, mem_session_summary automático al cierre.',
+                version: '0.8.4',
+                sha256: '3e08cce52941622ff7897ee71020b26d165e473597a4f85723cf92447b17faaa',
             },
         ],
         commands: [
@@ -679,15 +679,15 @@ var init_manifest = __esm(() => {
                 name: 'install-stack',
                 file: 'assets/commands/install-stack.md',
                 description:
-                    'Instala el stack tecnológico del proyecto (CodeGraph, skills, OpenSpec, Engram, controller plugin). v0.8.3: controller plugin como alma hard-gate, Context7 removido del stack.',
-                version: '0.8.3',
-                sha256: '24802dc29675a584dacf4d0ac8a944dd935ee0f96a4e804a9b1c5bdb3709438c',
+                    'Instala el stack tecnológico del proyecto (CodeGraph, skills, OpenSpec, Engram, controller plugin). v0.8.4: controller plugin como alma hard-gate, Context7 removido del stack.',
+                version: '0.8.4',
+                sha256: 'd655f783b3498eec40eeb6a1e06838d98a5ebdca874419add6cb403cc7905a40',
             },
             {
                 name: 'opsx-sync',
                 file: 'assets/commands/opsx-sync.md',
                 description: 'Sincroniza delta specs del change activo sin inicializar CodeGraph si ya existe índice',
-                version: '0.8.3',
+                version: '0.8.4',
                 sha256: 'fe0158478f2ca63b315037a85fc1632b77868532e319af6c7384285441767d64',
             },
         ],
@@ -696,15 +696,15 @@ var init_manifest = __esm(() => {
                 name: 'ostacky-controller',
                 file: 'assets/mcp/ostacky-controller/',
                 description:
-                    'Máquina de estados persistida con @modelcontextprotocol/server SDK. v0.8.3: 22 tools (incluye set_handoff, get_handoff, clear_handoff, get_available_transitions funcional). Bugfixes: consecutiveFailures real, lastHandoff state, defaultChoice persistido. Robustez: degraded mode automático tras 3 fallos, persistence condicional para Nivel 0, prune de skills obsoletas.',
-                version: '0.8.3',
-                sha256: '9bf0b83ab736e468ef0ea6bfb22afe0690adf214e0177727fd65f7a802ee0859',
+                    'Máquina de estados persistida con @modelcontextprotocol/server SDK. v0.8.4: 22 tools (incluye set_handoff, get_handoff, clear_handoff, get_available_transitions funcional). Bugfixes: consecutiveFailures real, lastHandoff state, defaultChoice persistido. Robustez: degraded mode automático tras 3 fallos, persistence condicional para Nivel 0, prune de skills obsoletas.',
+                version: '0.8.4',
+                sha256: 'ba14e46dc00e6d5cab3a66725be9416a0bfbe950af023a5bdda3f2cdf5d57478',
             },
             {
                 name: 'openspec',
                 file: 'assets/mcp/openspec/',
                 description: 'MCP server local para OpenSpec - proposal, apply, archive, sync de cambios',
-                version: '0.8.3',
+                version: '0.8.4',
                 sha256: 'fa4be28bfc1e75db8f1a037e2580f04a60066c80e8e5934e90e1041020d04609',
             },
         ],
@@ -714,7 +714,7 @@ var init_manifest = __esm(() => {
                 file: 'assets/skills/brainstorming/SKILL.md',
                 description:
                     'Skill unificado de pensamiento con dos modos: creative-design (producción de diseño → transición a implementación directa o openspec-propose) y open-exploration (exploración libre)',
-                version: '0.8.3',
+                version: '0.8.4',
                 sha256: '1e8ad4dc54ae4da0fc581b3968e9e255d43a07d2911f974f953c438a8244b728',
             },
             {
@@ -722,14 +722,14 @@ var init_manifest = __esm(() => {
                 file: 'assets/skills/execution-mode-evaluation/SKILL.md',
                 description:
                     'Skill de análisis de modo de ejecución — output reconciliado con controller snapshot contract (recommendation field)',
-                version: '0.8.3',
+                version: '0.8.4',
                 sha256: 'b121879987c34185285754b56c2ad0a74b4f31c5fe9e2849f7f99130b8f7f20f',
             },
             {
                 name: 'tdd',
                 file: 'assets/skills/tdd/SKILL.md',
                 description: 'Skill de test-driven development (Superpowers)',
-                version: '0.8.3',
+                version: '0.8.4',
                 sha256: '2932bb3c38b2e41305ec8aa375a7800259eda1bba6bbecfa5b6c4de850b2be43',
             },
             {
@@ -737,49 +737,49 @@ var init_manifest = __esm(() => {
                 file: 'assets/skills/subagent-driven-development/SKILL.md',
                 description:
                     'Skill de ejecución con subagentes (Superpowers) — ejecuta solo después de confirmación del coordinador Ostacky',
-                version: '0.8.3',
+                version: '0.8.4',
                 sha256: 'bea7788e897cfae9aeb457eab6cda2ec8822f253b23fd868dc481ddec45cd627',
             },
             {
                 name: 'dispatching-parallel-agents',
                 file: 'assets/skills/dispatching-parallel-agents/SKILL.md',
                 description: 'Skill de dispatch paralelo de agentes (Superpowers)',
-                version: '0.8.3',
+                version: '0.8.4',
                 sha256: '57e3829cc1217e46e693049eaf910f8fad58c27f6d1ec3e37ab7534993123ab6',
             },
             {
                 name: 'review',
                 file: 'assets/skills/review/SKILL.md',
                 description: 'Skill de revisión de código (Superpowers)',
-                version: '0.8.3',
+                version: '0.8.4',
                 sha256: 'e6928f7e5fe2dc7db98f16531d47aa739bb282c4d8ef05ca867d27ab6a8cdb95',
             },
             {
                 name: 'receiving-code-review',
                 file: 'assets/skills/receiving-code-review/SKILL.md',
                 description: 'Skill de recibir y procesar feedback de code review',
-                version: '0.8.3',
+                version: '0.8.4',
                 sha256: '8cccf2b6234be4dfbfd426d0ba4b3e26d3ed8f416adaf1d78e8e3b8ef39067df',
             },
             {
                 name: 'openspec-propose',
                 file: 'assets/skills/openspec-propose/SKILL.md',
                 description: 'Skill de generación de proposal (OpenSpec)',
-                version: '0.8.3',
+                version: '0.8.4',
                 sha256: '36f5d39ad42360259516dfd6ba60673fd62a5ce54b69ae4d159816b73b4543f6',
             },
             {
                 name: 'openspec-apply-change',
                 file: 'assets/skills/openspec-apply-change/SKILL.md',
                 description: 'Skill de aplicación de change (OpenSpec)',
-                version: '0.8.3',
+                version: '0.8.4',
                 sha256: '936c66a3e13a78375eab0d979e8d7d813b9fb070f337034128ce40f9c3f10766',
             },
             {
                 name: 'openspec-archive-change',
                 file: 'assets/skills/openspec-archive-change/SKILL.md',
                 description: 'Skill de archivo de change (OpenSpec)',
-                version: '0.8.3',
+                version: '0.8.4',
                 sha256: '0e566b7cd752784a58ef96bec28b0a85c933d72a8c93a5601ca1cd01669a5620',
             },
             {
@@ -787,35 +787,35 @@ var init_manifest = __esm(() => {
                 file: 'assets/skills/openspec-explore/SKILL.md',
                 description:
                     'Modo explore para OpenSpec — thinking partner para explorar ideas, investigar problemas y clarificar requisitos antes/durante un cambio',
-                version: '0.8.3',
+                version: '0.8.4',
                 sha256: '52746b6c51d5ed5026774391d55edac6558f488d68a5b84f9c7064a10e2333bb',
             },
             {
                 name: 'using-git-worktrees',
                 file: 'assets/skills/using-git-worktrees/SKILL.md',
                 description: 'Skill de uso de git worktrees para aislamiento de trabajo',
-                version: '0.8.3',
+                version: '0.8.4',
                 sha256: '00cec01d6b58cd394abff74ed7fb554adb72c34c4d041e85aa703e72932175f4',
             },
             {
                 name: 'using-superpowers',
                 file: 'assets/skills/using-superpowers/SKILL.md',
                 description: 'Skill de orquestación de Superpowers skills',
-                version: '0.8.3',
+                version: '0.8.4',
                 sha256: 'f66cb61561a7fa23df40d9450459f4109ffc2f7a6f07efa74a8c1fcb96f105bd',
             },
             {
                 name: 'writing-skills',
                 file: 'assets/skills/writing-skills/SKILL.md',
                 description: 'Skill de creación y edición de skills',
-                version: '0.8.3',
+                version: '0.8.4',
                 sha256: '397725e389ce4a80ef6864ec793d1b6f1ae158d1e33db56b8f5ff5167b3938fa',
             },
             {
                 name: 'graceful-degradation',
                 file: 'assets/skills/graceful-degradation/SKILL.md',
                 description: 'Skill de degradación graceful cuando múltiples tools están indisponibles',
-                version: '0.8.3',
+                version: '0.8.4',
                 sha256: '6631253dd6a99208df1884d1609ba13c65702e5c7da327df3cd16c2be9357d91',
             },
         ],
@@ -1274,7 +1274,7 @@ async function installCodeGraph(toolsDir) {
         const ext = process.platform === 'win32' ? 'zip' : 'tar.gz';
         const url = `https://github.com/colbymchenry/codegraph/releases/download/${tag}/codegraph-${target}.${ext}`;
         try {
-            archivePromotion = await downloadAndExtractWithRetry(url, cgToolDir, 0, 180000, 2);
+            archivePromotion = await downloadAndExtractWithRetry(url, cgToolDir, 1, 180000, 2);
         } catch (e) {
             return {
                 success: false,
@@ -1569,7 +1569,7 @@ var init_stack = __esm(() => {
 // package.json
 var package_default = {
     name: 'ostacky',
-    version: '0.8.3',
+    version: '0.8.4',
     description: 'Instalador interactivo de agentes y comandos para OpenCode',
     type: 'module',
     bin: {
@@ -3497,7 +3497,7 @@ async function probeMcpServer(nodeExecutable, serverPath, cwd, statePath, option
                 params: {
                     protocolVersion: '2025-03-26',
                     capabilities: {},
-                    clientInfo: { name: 'ostacky-installer', version: '0.8.3' },
+                    clientInfo: { name: 'ostacky-installer', version: '0.8.4' },
                 },
             });
         });
