@@ -1,6 +1,6 @@
 {
     "name": "ostacky",
-    "version": "0.8.4",
+    "version": "0.8.5",
     "description": "Instalador interactivo de agentes y comandos para OpenCode",
     "type": "module",
     "bin": {
@@ -16,7 +16,9 @@
         "check:skills:fix": "bun run scripts/check-skill-sync.ts --fix",
         "hash:check": "bun run scripts/update-manifest-hashes.ts --check",
         "hash:update": "bun run scripts/update-manifest-hashes.ts",
-        "prepublishOnly": "bun run build"
+        "manifest:prepare": "bun run scripts/update-manifest-hashes.ts",
+        "manifest:check": "bun run scripts/update-manifest-hashes.ts --check",
+        "prepublishOnly": "bun run manifest:prepare && bun run build"
     },
     "files": [
         "dist/",

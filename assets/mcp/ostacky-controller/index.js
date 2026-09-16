@@ -2373,7 +2373,7 @@ function safeHandler(fn, options = {}) {
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.8.4',
+    version: '0.8.5',
 });
 
 server.registerTool(
@@ -2973,7 +2973,7 @@ function setupGracefulShutdown(ctrl) {
 }
 
 async function main() {
-    log('Starting ostacky-controller MCP v0.8.4...');
+    log('Starting ostacky-controller MCP v0.8.5...');
     log('State path:', { path: statePath });
     // Clean up stale tmp/lock files from previous runs
     cleanupTmpFiles(statePath);
