@@ -204,6 +204,37 @@ export const OstackyController: Plugin = async (ctx) => {
         // Also handle TIER1 hint for small tasks without replacing system
         // Intent detection for downgradeable 0/0+1 is done in record_discovery router, not here
       }
+      // harden-compaction-resume: auto-inject recovery hint when pending (determinístico, no depende del modelo)
+      if (!trivial && state && !["DONE", "INTERPRETATION_PENDING"].includes(state.state)) {
+        try {
+          let pending: string[] = Array.isArray(state.lastHandoff?.pendingTasks)
+            ? state.lastHandoff.pendingTasks.filter((id: string) => !state.tasks?.[id] || state.tasks[id].status !== "COMPLETED")
+            : []
+          if (pending.length === 0) {
+            try {
+              const fallbackPath = join(dirname(getStatePath(ctx.directory)), ".ostacky-handoff-compaction.json")
+              if (existsSync(fallbackPath)) {
+                const raw = readFileSync(fallbackPath, "utf-8")
+                const data = JSON.parse(raw)
+                if (data && Array.isArray(data.pendingTasks) && typeof data.ts === "number" && Date.now() - data.ts < 24 * 60 * 60 * 1000) {
+                  const fbPending = data.pendingTasks.filter((id: string) => !state.tasks?.[id] || state.tasks[id].status !== "COMPLETED")
+                  if (fbPending.length > 0) pending = fbPending
+                }
+              }
+            } catch {}
+          }
+          if (pending.length > 0) {
+            const hint = `\n\n[RECOVERY: te quedan ${pending.slice(0, 3).join(",")}${pending.length > 3 ? `, +${pending.length - 3} más` : ""} - usa get_handoff / mem_context para retomar]`
+            if (output.parts && output.parts.length > 0) {
+              const last = output.parts[output.parts.length - 1]
+              if (last.type === "text") last.text = (last.text ?? "") + hint
+              else output.parts.push({ type: "text", text: hint })
+            } else {
+              output.parts = [{ type: "text", text: text + hint }]
+            }
+          }
+        } catch {}
+      }
     },
 
     // ── Hard gates before any tool ──
@@ -292,9 +323,11 @@ export const OstackyController: Plugin = async (ctx) => {
           if (u.startsWith("file://")) targetPath = u.slice(7)
         }
         const isCodeFile = /\.(ts|js|tsx|jsx|mts|cts)$/i.test(targetPath) || targetPath.includes("src/") || targetPath.includes("assets/") || args?.pattern?.includes("*.ts")
+        // harden-task-integrity 1.3: eximir reads de tasks.md del gate (no requiere CodeGraph)
+        const isSpecTasksPath = targetPath.includes("openspec/changes") || targetPath.includes("openspec/specs")
         // Grep on *.md should not be blocked
         const isLiteralGrep = tool === "grep" && (args?.include?.endsWith(".md") || args?.include?.endsWith(".json"))
-        if (isCodeFile && !isLiteralGrep) {
+        if (isCodeFile && !isLiteralGrep && !isSpecTasksPath) {
           const hasDiscoveryHit = discoveryHitByRequest.get(sessionId) ?? getDiscoveryCacheHit(ctx.directory)
           const codegraphOk = isCodegraphAvailable(ctx.directory)
           if (codegraphOk && !hasDiscoveryHit) {
@@ -330,6 +363,29 @@ export const OstackyController: Plugin = async (ctx) => {
               const s = readState(ctx.directory)
               const hasAllowed = Object.keys(s?.allowedFiles || {}).some((k) => isSensitive(k, patterns))
               if (!hasAllowed) throw new Error(`BLOCKED: bash contiene acceso sensible (.env). Llamá check_file_access con reason antes.`)
+            }
+          }
+        }
+      }
+
+      // ── 3.5) Bash file-mutation gate (harden-task-integrity: bash mutante requiere validate_edit) ──
+      if (tool === "bash" && freshState && ["EXECUTING_INLINE", "EXECUTING_SUBAGENTS"].includes(freshState.state)) {
+        const cmdForMutation: string = args?.command || args?.cmd || ""
+        const isMutating = /[>]{1,2}\s*\S+|\bsed\b[^|;]*-i|\btruncate\b|\btee\b|\bcp\s+|\bmv\s+|python.*open.*w/.test(cmdForMutation)
+        if (isMutating) {
+          const mPaths = extractPathsFromBash(cmdForMutation)
+          for (const p of mPaths) {
+            if (!p) continue
+            const isProjectCode = p.includes("src/") || p.includes("assets/") || /\.(ts|js|tsx|jsx|mts|cts)$/i.test(p)
+            if (!isProjectCode) continue
+            if (!isPathInsideProject(p, ctx.directory)) continue
+            const abs = resolve(ctx.directory, p)
+            const exists = existsSync(abs)
+            const isNewFile = !exists && !freshState.fileFingerprints?.[p] && !Object.values(freshState.tasks || {}).some((t: any) => t.filePath === p)
+            if (isNewFile) continue
+            const lv = freshState.lastValidated
+            if (!lv || lv.filePath !== p) {
+              throw new Error(`BLOCKED: file mutation requires validate_edit/expectedTask for ${p} — usa validate_edit antes de bash mutante`)
             }
           }
         }

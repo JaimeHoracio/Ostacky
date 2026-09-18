@@ -176,6 +176,8 @@ Para cada fase de `tasks.md`, evaluar intra-fase:
 
 **⚠️ Este skill provee ANÁLISIS, no autorización. Gate ANTES de persistir:** SHALL correr **en memoria primero**, derivar snapshot y **mostrar al usuario** `"Recomendación: INLINE/SUBAGENT por [razón], ~X líneas, clusters [...] ¿Procedo con este plan?"` y esperar. Solo si responde sí → `record_execution_analysis({snapshot, reuseDiscovery:true})` → `EXECUTION_DECISION_PENDING` → `consume_execution_decision`. Si responde no → `block({reason:"usuario rechazó plan"})` sin persistir. Si re-llamó `codegraph_explore` pudiendo reusar → `WARN:redundant_codegraph_call`.
 
+**Recovery de snapshot incompleto (fix-execution-analysis-validation):** Si `record_execution_analysis` retorna `{error:"Snapshot missing recommendation/reasons", retryAllowed:true, suggestion}`, NO hacer `block`. Corregir snapshot añadiendo `recommendation`/`reasons` y **reintentar el mismo `executionDecisionId`** — permanece en `EXECUTION_ANALYSIS` y el retry avanza. Si `state.degraded==true` o `taskCount<=2` el controller defaultea a `INLINE` con `WARN:snapshot_defaulted` y ya transiciona; no reintentar. Verificar con `grep "retryAllowed" assets/mcp/ostacky-controller/index.js`.
+
 ## Ejemplo compacto
 
 5 tasks, 3 clusters independientes (A: task1+task2 en `workflow.ts`, B: task3+task4 en `structured.ts`, C: task5 en archivo nuevo), sin deps entre clusters:

@@ -197,6 +197,21 @@ If unsure → ask the user.
 - The task is high-risk without structural analysis (CodeGraph)
 - The user requests to stop
 
+### Without execution analysis (fix-execution-analysis-validation)
+
+**Cuando `record_execution_analysis` falla por snapshot incompleto:**
+
+1. **Si `retryAllowed:true` (modo normal, taskCount>2):** NO hacer `block`. Corregir snapshot (añadir `recommendation`/`reasons`) y reintentar `record_execution_analysis` con mismo `executionDecisionId` — permanece en `EXECUTION_ANALYSIS` y el retry avanza a `EXECUTION_DECISION_PENDING`.
+2. **Si `warning: snapshot_defaulted` (degraded o taskCount<=2):** Ya avanzó a `EXECUTION_DECISION_PENDING` con `INLINE` defaulteado. Continuar a `consume_execution_decision`.
+3. **Si snapshot irrecuperable (truncado 50KB, datos perdidos):** Usar `block({reason}) → BLOCKED → replan → INTERPRETATION_PENDING`. `lastHandoff` preserva checkpoint (cada 3 `complete_task`), no se pierden archivos.
+
+**Workflow:**
+```
+1. Leer error: ¿tiene retryAllowed? → corregir y reintentar
+2. ¿Es warning defaulted? → continuar
+3. Solo si irrecuperable → block/replan degradado
+```
+
 ## Integration
 
 This skill is loaded automatically when the agent detects tool failures during the health check pre-vuelo.

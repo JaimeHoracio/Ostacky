@@ -137,6 +137,45 @@ function isPathInsideProject(filePath, statePath) {
     }
 }
 
+export function parseTasksMd(changeId, statePath) {
+    if (!changeId || typeof changeId !== 'string') return [];
+    try {
+        const projectRoot = getProjectRoot(statePath);
+        const tasksPath = join(projectRoot, 'openspec', 'changes', changeId, 'tasks.md');
+        let content = null;
+        if (existsSync(tasksPath)) {
+            content = readFileSync(tasksPath, 'utf-8');
+        } else {
+            // fallback to archive: YYYY-MM-DD-<changeId>
+            try {
+                const archiveDir = join(projectRoot, 'openspec', 'changes', 'archive');
+                if (existsSync(archiveDir)) {
+                    for (const entry of readdirSync(archiveDir)) {
+                        if (entry.endsWith(`-${changeId}`) || entry === changeId) {
+                            const alt = join(archiveDir, entry, 'tasks.md');
+                            if (existsSync(alt)) {
+                                content = readFileSync(alt, 'utf-8');
+                                break;
+                            }
+                        }
+                    }
+                }
+            } catch {}
+            if (content === null) return [];
+        }
+        const re = /^- \[[ x]\]\s+([A-Za-z0-9][A-Za-z0-9\-_.\/:]*)/gm;
+        const ids = [];
+        let m;
+        while ((m = re.exec(content)) !== null) {
+            const id = m[1];
+            if (isValidTaskId(id)) ids.push(id);
+        }
+        return ids;
+    } catch {
+        return [];
+    }
+}
+
 function isValidTaskId(taskId) {
     return typeof taskId === 'string' && /^[a-zA-Z0-9-_.\/:]+$/.test(taskId);
 }
@@ -1309,9 +1348,33 @@ class OstackyController {
                 'record_execution_analysis'
             );
         }
-        // C2: strict contract — recommendation + reasons required
+        // C2: strict contract — recommendation + reasons required (tiered recovery: fix-execution-analysis-validation)
+        let _snapshotDefaulted = false;
         if (snapshot && (!snapshot.recommendation || !snapshot.reasons)) {
-            return this.#makeError('Snapshot missing recommendation/reasons', 'record_execution_analysis');
+            const isDegradedOrEarlyExit =
+                this.#degraded || (typeof snapshot.taskCount === 'number' && snapshot.taskCount <= 2);
+            if (isDegradedOrEarlyExit) {
+                snapshot.recommendation = snapshot.recommendation || 'INLINE';
+                snapshot.reasons = snapshot.reasons || ['defaulted: snapshot incompleto en degraded/early-exit'];
+                _snapshotDefaulted = true;
+            } else {
+                const available = (TRANSITIONS[this.#state.state] || []).map((t) => {
+                    let desc = t.via;
+                    if (t.choice) desc += ` (choice=${t.choice})`;
+                    if (t.mode) desc += ` (mode=${t.mode})`;
+                    return desc;
+                });
+                return {
+                    error: 'Snapshot missing recommendation/reasons',
+                    current_state: this.#state.state,
+                    attempted_transition: 'record_execution_analysis',
+                    available_transitions: available,
+                    retryAllowed: true,
+                    suggestion:
+                        'Reintentá con {recommendation:"INLINE"|"SUBAGENT_DRIVEN", reasons:[...]} — ver skill execution-mode-evaluation',
+                    timestamp: new Date().toISOString(),
+                };
+            }
         }
         // 1.7: exigir expectedTaskIds/taskIds/taskCount cuando taskCount>0
         if (snapshot && typeof snapshot.taskCount === 'number' && snapshot.taskCount > 0) {
@@ -1331,10 +1394,25 @@ class OstackyController {
                 );
             }
         }
-        // C2: capture expected tasks for gate
-        const expectedTasks = snapshot?.expectedTaskIds || snapshot?.taskIds || null;
-        const expectedTaskCount = snapshot?.taskCount ?? (Array.isArray(expectedTasks) ? expectedTasks.length : null);
+        // C2: capture expected tasks for gate — harden-task-integrity: tasks.md canonical
+        let expectedTasks = snapshot?.expectedTaskIds || snapshot?.taskIds || null;
+        let expectedTaskCount = snapshot?.taskCount ?? (Array.isArray(expectedTasks) ? expectedTasks.length : null);
         const isEarlyExitExec = snapshot?.globalRuleTriggered === 'early-exit' && (snapshot?.taskCount ?? 0) <= 2;
+        // harden-task-integrity 1.1/1.2: tasks.md is source of truth
+        let tasksMdIds = [];
+        let taskCountMismatch = false;
+        try {
+            tasksMdIds = parseTasksMd(this.#state.changeId, this.#statePath);
+        } catch {}
+        if (tasksMdIds.length > 0) {
+            const snapshotIds = Array.isArray(expectedTasks) ? expectedTasks : null;
+            const snapshotSet = snapshotIds ? new Set(snapshotIds) : new Set();
+            const tasksMdSet = new Set(tasksMdIds);
+            const mismatch = !snapshotIds || snapshotIds.length !== tasksMdIds.length || [...snapshotSet].some((id) => !tasksMdSet.has(id)) || [...tasksMdSet].some((id) => !snapshotSet.has(id));
+            if (mismatch) taskCountMismatch = true;
+            expectedTasks = [...tasksMdIds];
+            expectedTaskCount = tasksMdIds.length;
+        }
         // 8.1/8.2: lastProposal for execution — reasoning con plan
         let execShown = false;
         let execFiles = [];
@@ -1377,6 +1455,30 @@ class OstackyController {
             lastProposal: execLastProposal,
         });
         await this.#audit('EXECUTION_DECISION_PENDING', 'record_execution_analysis');
+        // fix-execution-analysis-validation: degraded/early-exit defaulted snapshot → WARN
+        if (_snapshotDefaulted) {
+            const auditId = `aud-${Date.now()}-${this.#state.auditSeq}`;
+            log('warn:snapshot_defaulted', { auditId });
+            await this.#audit(
+                'WARN',
+                'snapshot_defaulted',
+                'snapshot missing recommendation/reasons, defaulted to INLINE'
+            );
+            const lastAudit = this.#state.audit?.[this.#state.audit.length - 1];
+            return {
+                state: this.#state.state,
+                revision: this.#state.revision,
+                executionDecisionId: this.#state.executionDecisionId,
+                warning: 'snapshot missing recommendation/reasons, defaulted to INLINE',
+                auditId: lastAudit?.id || auditId,
+            };
+        }
+        // harden-task-integrity: emit WARN if tasks.md mismatch
+        if (taskCountMismatch) {
+            const auditId = `aud-${Date.now()}-${this.#state.auditSeq}`;
+            log('warn:task_count_mismatch', { auditId, snapshotCount: snapshot?.expectedTaskIds?.length ?? 0, tasksMdCount: tasksMdIds.length });
+            await this.#audit('WARN', 'task_count_mismatch', `expectedTasks from snapshot (${snapshot?.expectedTaskIds?.length ?? 0}) differs from tasks.md (${tasksMdIds.length}) - using tasks.md`);
+        }
         // 8.2: reasoning sin plan → WARN (but allow early-exit style)
         if (!execShown && snapshot && !isEarlyExitExec) {
             // Only warn if snapshot was expected to have reasoning (taskCount>2 or not early-exit)
@@ -1612,9 +1714,35 @@ class OstackyController {
         return { state: this.#state.state, revision: this.#state.revision };
     }
 
-    // --- C2: Expected tasks gate (controller as source of truth) ---
+    // --- C2: Expected tasks gate (controller as source of truth) — harden-task-integrity: tasks.md canonical ---
     async setExpectedTasks({ taskIds, taskCount } = {}) {
         this.#load();
+        let tasksMdIds = [];
+        try {
+            tasksMdIds = parseTasksMd(this.#state.changeId, this.#statePath);
+        } catch {}
+        if (tasksMdIds.length > 0) {
+            const providedIds = Array.isArray(taskIds) ? taskIds : null;
+            if (providedIds) {
+                const setA = new Set(providedIds);
+                const setB = new Set(tasksMdIds);
+                const mismatch = providedIds.length !== tasksMdIds.length || [...setA].some((id) => !setB.has(id)) || [...setB].some((id) => !setA.has(id));
+                if (mismatch) {
+                    const auditId = `aud-${Date.now()}-${this.#state.auditSeq}`;
+                    log('warn:task_count_mismatch', { auditId, provided: providedIds.length, tasksMd: tasksMdIds.length });
+                    await this.#audit('WARN', 'task_count_mismatch', `expectedTasks from caller (${providedIds.length}) differs from tasks.md (${tasksMdIds.length}) - using tasks.md`);
+                }
+            } else if (typeof taskCount === 'number' && taskCount !== tasksMdIds.length) {
+                const auditId = `aud-${Date.now()}-${this.#state.auditSeq}`;
+                log('warn:task_count_mismatch', { auditId, provided: taskCount, tasksMd: tasksMdIds.length });
+                await this.#audit('WARN', 'task_count_mismatch', `expectedTaskCount from caller (${taskCount}) differs from tasks.md (${tasksMdIds.length}) - using tasks.md`);
+            }
+            this.#state.expectedTasks = [...tasksMdIds];
+            this.#state.expectedTaskCount = tasksMdIds.length;
+            await this.#persist();
+            await this.#audit('EXECUTING', 'set_expected_tasks', `expected=${this.#state.expectedTaskCount} (from tasks.md)`);
+            return { ok: true, expectedTasks: this.#state.expectedTasks, expectedTaskCount: this.#state.expectedTaskCount, source: 'tasks.md' };
+        }
         if (Array.isArray(taskIds) && taskIds.length > 0) {
             this.#state.expectedTasks = [...taskIds];
             this.#state.expectedTaskCount = taskIds.length;
@@ -2129,19 +2257,18 @@ class OstackyController {
                 return { error: 'fingerprint required: file exists but fileHash is null' };
             }
         }
-        // 7.1: hard gate INLINE (new files eximidos) vs WARN SUBAGENTS
-        const isInline = this.#state.executionMode === 'INLINE' || this.#state.state === 'EXECUTING_INLINE';
+        // harden-task-integrity 2.2: hard gate unificado (new files eximidos) — antes INLINE hard vs SUBAGENTS WARN
         const isNewFile = !!(
             filePath &&
             !this.#state.fileFingerprints?.[filePath] &&
             !Object.values(this.#state.tasks || {}).some((t) => t.filePath === filePath)
         );
         if (!this.#state.lastValidated || (filePath && this.#state.lastValidated.filePath !== filePath)) {
-            if (isInline && !isNewFile) {
+            if (!isNewFile) {
                 return {
                     error: 'validate required',
                     outcome: 'CONFLICT',
-                    reason: `complete_task without prior validate_edit for ${filePath || taskId} — hard gate INLINE (new files eximidos)`,
+                    reason: `complete_task without prior validate_edit for ${filePath || taskId} — hard gate (new files eximidos)`,
                 };
             }
             this.#state.completeWithoutValidateCount = (this.#state.completeWithoutValidateCount || 0) + 1;
@@ -2373,7 +2500,7 @@ function safeHandler(fn, options = {}) {
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.8.5',
+    version: '0.8.6',
 });
 
 server.registerTool(
@@ -2973,7 +3100,7 @@ function setupGracefulShutdown(ctrl) {
 }
 
 async function main() {
-    log('Starting ostacky-controller MCP v0.8.5...');
+    log('Starting ostacky-controller MCP v0.8.6...');
     log('State path:', { path: statePath });
     // Clean up stale tmp/lock files from previous runs
     cleanupTmpFiles(statePath);

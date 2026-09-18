@@ -1,6 +1,6 @@
 {
     "name": "ostacky-controller",
-    "version": "0.8.5",
+    "version": "0.8.6",
     "private": true,
     "type": "module",
     "dependencies": {

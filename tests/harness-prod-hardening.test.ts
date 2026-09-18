@@ -608,3 +608,57 @@ describe('11.4 liveness metrics y doctor', () => {
     expect(typeof m.completeWithoutValidateCount).toBe('number');
   });
 });
+
+describe('12.1 EXECUTION_ANALYSIS recovery — fix-execution-analysis-validation', () => {
+  it('snapshot mínimo en degraded defaultea y avanza a EXECUTION_DECISION_PENDING', async () => {
+    const statePath = join(tmp, 'state-recovery-degraded.json');
+    const c = new OstackyController({ statePath, initialState: { state: 'EXECUTION_ANALYSIS', degraded: true, audit: [], auditSeq: 0 } as any });
+    const res: any = await c.recordExecutionAnalysis({ executionDecisionId: 'e-degraded', snapshot: { taskCount: 1, expectedTaskIds: ['T1'] } as any });
+    expect(res.state).toBe('EXECUTION_DECISION_PENDING');
+    expect(res.warning).toContain('defaulted to INLINE');
+    const audit = await c.getAudit({ phase: 'WARN' });
+    expect(audit.some((a) => a.decision.includes('snapshot_defaulted'))).toBe(true);
+  });
+  it('taskCount<=2 sin reasons en modo normal también defaultea (early-exit)', async () => {
+    const statePath = join(tmp, 'state-recovery-early.json');
+    const c = new OstackyController({ statePath, initialState: { state: 'EXECUTION_ANALYSIS', degraded: false, audit: [], auditSeq: 0 } as any });
+    const res: any = await c.recordExecutionAnalysis({ executionDecisionId: 'e-early', snapshot: { taskCount: 2, recommendation: 'INLINE', expectedTaskIds: ['T1', 'T2'] } as any });
+    expect(res.state).toBe('EXECUTION_DECISION_PENDING');
+    expect(res.warning).toContain('defaulted to INLINE');
+  });
+  it('snapshot mínimo en modo normal con taskCount>2 retorna error con retryAllowed', async () => {
+    const statePath = join(tmp, 'state-recovery-normal.json');
+    const c = new OstackyController({ statePath, initialState: { state: 'EXECUTION_ANALYSIS', degraded: false, audit: [], auditSeq: 0 } as any });
+    const res: any = await c.recordExecutionAnalysis({ executionDecisionId: 'e-normal', snapshot: { taskCount: 5, codegraphUsed: ['x'] } as any });
+    expect(res.error).toContain('Snapshot missing recommendation/reasons');
+    expect(res.retryAllowed).toBe(true);
+    expect(res.suggestion).toContain('execution-mode-evaluation');
+    expect(res.current_state).toBe('EXECUTION_ANALYSIS');
+    expect(res.available_transitions).toContain('record_execution_analysis');
+  });
+  it('retry tras error con snapshot completo avanza', async () => {
+    const statePath = join(tmp, 'state-recovery-retry.json');
+    const c = new OstackyController({ statePath, initialState: { state: 'EXECUTION_ANALYSIS', degraded: false, audit: [], auditSeq: 0 } as any });
+    const err: any = await c.recordExecutionAnalysis({ executionDecisionId: 'e-retry', snapshot: { taskCount: 5, codegraphUsed: ['x'] } as any });
+    expect(err.retryAllowed).toBe(true);
+    const ok: any = await c.recordExecutionAnalysis({
+      executionDecisionId: 'e-retry',
+      snapshot: {
+        recommendation: 'INLINE',
+        reasons: ['regla 3a'],
+        codegraphUsed: ['x'],
+        taskCount: 5,
+        expectedTaskIds: ['T1', 'T2', 'T3', 'T4', 'T5'],
+        sharedFiles: {},
+        fileClusters: [],
+        clusterCount: 5,
+        sequentialDeps: [],
+        estLines: 10,
+        hasExplicitContract: false,
+        filesPerTask: {},
+      } as any,
+    });
+    expect(ok.state).toBe('EXECUTION_DECISION_PENDING');
+    expect(ok.executionDecisionId).toBe('e-retry');
+  });
+});

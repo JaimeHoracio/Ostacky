@@ -437,6 +437,37 @@ export const Engram: Plugin = async (ctx) => {
       }
       // No inyectar MEMORY_INSTRUCTIONS completo nunca — se lee on-demand via Read
 
+      // harden-compaction-resume: auto-inject recovery hint when pending (no depende del modelo)
+      if (!shouldBeTrivial) {
+        try {
+          const statePath = process.env.OSTACKY_STATE_PATH || join(ctx.directory, ".opencode", "ostacky-state.json")
+          const raw = readFileSync(statePath, "utf-8")
+          const st = JSON.parse(raw)
+          const curState = st?.state ?? "DONE"
+          if (!["DONE", "INTERPRETATION_PENDING"].includes(curState)) {
+            let pending: string[] = Array.isArray(st?.lastHandoff?.pendingTasks)
+              ? st.lastHandoff.pendingTasks.filter((id: string) => !st.tasks?.[id] || st.tasks[id].status !== "COMPLETED")
+              : []
+            if (pending.length === 0) {
+              try {
+                const fbPath = join(dirname(statePath), ".ostacky-handoff-compaction.json")
+                const fbRaw = readFileSync(fbPath, "utf-8")
+                const fb = JSON.parse(fbRaw)
+                if (fb && Array.isArray(fb.pendingTasks) && typeof fb.ts === "number" && Date.now() - fb.ts < 24 * 60 * 60 * 1000) {
+                  const fbPend = fb.pendingTasks.filter((id: string) => !st.tasks?.[id] || st.tasks[id].status !== "COMPLETED")
+                  if (fbPend.length > 0) pending = fbPend
+                }
+              } catch {}
+            }
+            if (pending.length > 0) {
+              const hint = `\n\n[RECOVERY: te quedan ${pending.slice(0, 3).join(",")}${pending.length > 3 ? `, +${pending.length - 3} más` : ""} - usa get_handoff / mem_context para retomar]`
+              if (output.system.length > 0) output.system[output.system.length - 1] += hint
+              else output.system.push(hint.trim())
+            }
+          }
+        } catch {}
+      }
+
       // ── Save nudge ──────────────────────────────────────────────────────────
       // Skip nudge for trivial greeting (cache-friendly, no extra injection)
       if (shouldBeTrivial) return
