@@ -26,7 +26,9 @@ When ready to implement, run /opsx-apply
 
 **Steps**
 
-1. **Check Engram for similar changes** — `engram_mem_search` with keywords from the user's description. If a similar change was proposed or implemented before, surface it to the user. They may want to extend the existing work instead of starting fresh.
+0. **Ground with CodeGraph + Engram (SHALL — Ostacky)** — Antes de `openspec new`, verifica `getDiscoverySnapshot(query)` + `getEngramDedup`. Si miss → `codegraph_codegraph_explore` + `engram_mem_search` + `putDiscoverySnapshot`. Cita símbolos existentes en `proposal/design`; sin esto el `design.md` puede alucinar API inexistente y dispara `WARN:codegraphBypass` en `doctor`.
+
+1. **Check Engram for similar changes** — `engram_mem_search` con keywords del *paso 0* (reusar si ya fue hit; no duplicar `mem_search` mismo `requestId`). Si hay change similar previo, surfacealo. Pueden extender trabajo existente en vez de empezar de cero.
 
 2. **If no clear input provided, ask what they want to build**
 

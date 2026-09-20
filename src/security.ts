@@ -1,4 +1,4 @@
-import { createHash } from "crypto";
+import { createHash } from "node:crypto";
 
 /**
  * Validates a relative file path to prevent path traversal attacks.

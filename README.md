@@ -246,37 +246,37 @@ Tras instalar (`--scope local`), el proyecto queda así:
 
 ```json
 {
-    "version": "0.8.7",
+    "version": "0.8.8",
     "lockedAt": "2025-01-01T00:00:00.000Z",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.8.7",
+    "tag": "v0.8.8",
     "agents": {
         "ostacky": {
-            "version": "0.8.7",
+            "version": "0.8.8",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "abc123..."
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.8.7",
+            "version": "0.8.8",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "def456..."
         },
         "opsx-sync": {
-            "version": "0.8.7",
+            "version": "0.8.8",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "ghi789..."
         }
     },
     "skills": {
-        "brainstorming": { "version": "0.8.7", ... },
-        "execution-mode-evaluation": { "version": "0.8.7", ... },
-        "openspec-propose": { "version": "0.8.7", ... }
+        "brainstorming": { "version": "0.8.8", ... },
+        "execution-mode-evaluation": { "version": "0.8.8", ... },
+        "openspec-propose": { "version": "0.8.8", ... }
     },
     "mcpServers": {
-        "ostacky-controller": { "version": "0.8.7", ... },
-        "openspec": { "version": "0.8.7", ... }
+        "ostacky-controller": { "version": "0.8.8", ... },
+        "openspec": { "version": "0.8.8", ... }
     }
 }
 ```
@@ -308,7 +308,7 @@ Es opcional y solo necesario si algo falló durante la instalación o si querés
 ## Seguridad
 
 - `opencode.jsonc` se versiona en el repo para compartir permisos y MCP de forma reproducible.
-- Las URLs de descarga usan **tags de GitHub** (ej. `v0.8.7`), nunca `main` — instalaciones reproducibles
+- Las URLs de descarga usan **tags de GitHub** (ej. `v0.8.8`), nunca `main` — instalaciones reproducibles
 - Cada path de archivo descargado es validado para prevenir **path traversal**
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
 - El cache local (`.opencode/cache/`) también valida integridad al servir archivos cacheados
@@ -324,7 +324,7 @@ Es opcional y solo necesario si algo falló durante la instalación o si querés
 - Variable `OSTACKY_SENSITIVE_PATTERNS` overridea los patrones por defecto (`**/.env*`, `**/.secrets/**`, `**/*.pem`, `**/*.key`, `**/.aws/**`, `**/.ssh/**`, `**/credentials.json`, `**/.npmrc`).
 - Ejemplo: `OSTACKY_SENSITIVE_PATTERNS="**/.env*,**/.secrets/**" bunx ostacky doctor` — `doctor` imprime el patrón efectivo.
 - Allowlist: `.env.example`, `.env.template`, `.env.sample` nunca se bloquean.
-- Fuente única: `src/security.ts` (`SENSITIVE_DEFAULT`, `isSensitive`, `BASH_SENSITIVE_RE`) — `ostacky-plugin.ts` importa de ahí (legacy `ostacky-guard.ts` eliminado, fusionado en el plugin). Ver `doctor` para verificar.
+- Fuente única: `src/security.ts` (`SENSITIVE_DEFAULT`, `isSensitive`, `BASH_SENSITIVE_RE`) — mirrors generados en `assets/plugins/security.ts` y `assets/mcp/ostacky-controller/security.js` vía `bun run scripts/sync-controller-core.ts`; `ostacky-plugin.ts` importa de `./security.ts` (self-contained). Ver `doctor` para verificar.
 
 #### Aislamiento de worktrees (harness-prod-hardening)
 
@@ -365,7 +365,7 @@ CodeGraph está instalado en `.opencode/tools/codegraph/bin/codegraph` y se conf
 | `.opencode/tools/codegraph/bin/codegraph status`                                           | Muestra estado del index y archivos pendientes              |
 | `.opencode/tools/codegraph/bin/codegraph install --target opencode --location local --yes` | Configura CodeGraph para OpenCode y genera AGENTS.md        |
 
-> **Windows:** si ves `Command failed: cmd.exe /d /c call ... codegraph.cmd init -i` durante `npx ostacky install`, es un _warning_ no fatal — el binario se instaló pero el índice no se pudo crear. Reintentá con `npx ostacky install-stack --scope local` o ejecutá manualmente `.opencode\tools\codegraph\bin\codegraph.exe init -i` (o `codegraph.cmd` si no hay `.exe`) dentro del proyecto. Desde v0.8.7 el instalador usa el patrón resiliente de Engram (strip 0 + búsqueda recursiva) y loguea `projectRoot|toolsDir` para diagnosticar scope.
+> **Windows:** si ves `Command failed: cmd.exe /d /c call ... codegraph.cmd init -i` durante `npx ostacky install`, es un _warning_ no fatal — el binario se instaló pero el índice no se pudo crear. Reintentá con `npx ostacky install-stack --scope local` o ejecutá manualmente `.opencode\tools\codegraph\bin\codegraph.exe init -i` (o `codegraph.cmd` si no hay `.exe`) dentro del proyecto. Desde v0.8.8 el instalador usa el patrón resiliente de Engram (strip 0 + búsqueda recursiva) y loguea `projectRoot|toolsDir` para diagnosticar scope.
 
 ## Licencia
 

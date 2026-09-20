@@ -1,11 +1,11 @@
 /**
- * security.js — source-of-truth mirror of src/security.ts for controller (Node)
+ * security.ts — mirror de src/security.ts para plugin (self-contained, solo Sensitive guard)
  * Generado desde src/security.ts — NO EDITAR. Ejecutá `bun run scripts/sync-controller-core.ts`.
  */
 
 // ─── Sensitive guard — source-of-truth (hardening-v2 D1) ───────────────
 
-export const SENSITIVE_DEFAULT = [
+export const SENSITIVE_DEFAULT: string[] = [
   "**/.env*",
   "**/.secrets/**",
   "**/*.pem",
@@ -30,7 +30,7 @@ export const BASH_SENSITIVE_RE =
  * - Normaliza backslashes a "/" para Windows.
  * - patterns: array de globs como SENSITIVE_DEFAULT; si no se pasa usa SENSITIVE_DEFAULT.
  */
-export function isSensitive(filePath, patterns = SENSITIVE_DEFAULT) {
+export function isSensitive(filePath: string, patterns: string[] = SENSITIVE_DEFAULT): boolean {
   if (!filePath) return false;
   const normalized = filePath.replace(/\\/g, "/");
   const lower = normalized.toLowerCase();
@@ -62,13 +62,13 @@ export function isSensitive(filePath, patterns = SENSITIVE_DEFAULT) {
  * Tokeniza por separadores shell `| ; && || > >> <` y respeta quotes.
  * Normaliza quitando quotes y backslashes para detectar obfuscaciones como .e""nv.
  */
-export function extractPathsFromBash(cmd) {
+export function extractPathsFromBash(cmd: string): string[] {
   if (!cmd) return [];
   // Normalizar && y || a ; para split único
   const normalized = cmd.replace(/&&/g, ";").replace(/\|\|/g, ";");
   // Split por separadores shell
   const segments = normalized.split(/[|;><\n]+/);
-  const paths = [];
+  const paths: string[] = [];
   for (const seg of segments) {
     const trimmed = seg.trim();
     if (!trimmed) continue;
@@ -111,7 +111,7 @@ export function extractPathsFromBash(cmd) {
 /**
  * Lee patrones sensibles desde env OSTACKY_SENSITIVE_PATTERNS o usa default.
  */
-export function getSensitivePatterns() {
+export function getSensitivePatterns(): string[] {
   const raw = process.env.OSTACKY_SENSITIVE_PATTERNS;
   if (!raw) return SENSITIVE_DEFAULT;
   return raw.split(",").map((s) => s.trim()).filter(Boolean);

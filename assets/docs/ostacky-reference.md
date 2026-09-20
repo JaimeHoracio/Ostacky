@@ -64,14 +64,22 @@ Principio: **eficacia > recorte** — si recorte rompiera caché y saliera más 
 
 ## Security single-source
 
-`src/security.ts` único origen de `SENSITIVE_DEFAULT`/`BASH_SENSITIVE_RE`/`isSensitive`/`extractPathsFromBash`; plugin y guard importan, no copian. `BASH_SENSITIVE_RE` arriba. `OSTACKY_SENSITIVE_PATTERNS` override.
+`src/security.ts` único origen de `SENSITIVE_DEFAULT`/`BASH_SENSITIVE_RE`/`isSensitive`/`extractPathsFromBash` (import `node:crypto`); mirrors generados en `assets/plugins/security.ts` (solo Sensitive guard, sin crypto) y `assets/mcp/ostacky-controller/security.js` vía `bun run scripts/sync-controller-core.ts`. `ostacky-plugin.ts` importa de `./security.ts` self-contained (no `../../src`). `BASH_SENSITIVE_RE` arriba. `OSTACKY_SENSITIVE_PATTERNS` override.
 
 ## Tiered single-source
 
-`src/tiered.ts` único origen de `isTrivial(msg,state)` + `getControllerState(dir)`. Ambos plugins importan lógica idéntica, no duplican regex. Ver `assets/plugins/ostacky-plugin.ts` y `assets/plugins/engram.ts`.
+`src/tiered.ts` único origen de `isTrivial(msg,state)` + `getControllerState(dir)`. `ostacky-plugin.ts` importa de `./tiered.ts` mirror (generado vía `sync-controller-core.ts`), `engram.ts` inlined (misma regex, evita import dinámico). No duplicar regex. Ver `assets/plugins/ostacky-plugin.ts` y `assets/plugins/engram.ts`.
+
+## Controller single-source
+
+`src/controller-core.ts` CANÓNICO para `STATES/TRANSITIONS/DEFAULT_STATE`; mirrors generados en `assets/plugins/controller-core.ts` (TS) y `assets/mcp/ostacky-controller/controller-core.js` (JS strippado) vía `bun run scripts/sync-controller-core.ts` (prebuild). No editar mirrors. `ostacky-plugin.ts` importa de `./controller-core.ts` self-contained.
 
 ## Prompt-efficiency
 
 - `ostacky.md` 109→72 líneas (diet estable cacheable). Tiered vía suffix, no reemplazo `system[0]`.
 - `controller` descriptions <150 chars
 - `MEMORY_INSTRUCTIONS` lazy: siempre pointer (~1 línea) en `system.transform`; full vive en `assets/docs/engram-protocol.md` on-demand via `Read` (ahorro ~1.2k en FULL, trivial ya era pointer)
+
+## Propose Flow (1+)
+
+`openspec-propose` SHALL Paso 0: `getDiscoverySnapshot(query)` + `getEngramDedup` → si miss `codegraph_codegraph_explore` + `engram_mem_search` + `putDiscoverySnapshot` **antes** de `openspec new`. Cita símbolos existentes en `proposal/design`; sin esto dispara `WARN:codegraphBypass` y `design.md` alucina API. Ver `assets/skills/openspec-propose/SKILL.md: Paso 0` y `brainstorming` (router por nivel: `brainstorming` decide 0/0+1/1+, `openspec-explore` es stance sin nivel).

@@ -118,6 +118,8 @@ function copyEngramPlugin(projectRoot: string): void {
 function copyOstackyControllerPlugin(projectRoot: string): void {
   const pluginSource = join(PACKAGE_ROOT, "assets", "plugins", "ostacky-plugin.ts");
   const coreSource = join(PACKAGE_ROOT, "assets", "plugins", "controller-core.ts");
+  const securitySource = join(PACKAGE_ROOT, "assets", "plugins", "security.ts");
+  const tieredSource = join(PACKAGE_ROOT, "assets", "plugins", "tiered.ts");
   const pluginsDir = join(projectRoot, ".opencode", "plugins");
   if (!existsSync(pluginSource)) {
     throw new Error(`Plugin bundleado de OstackyController no encontrado: ${pluginSource}`);
@@ -125,6 +127,8 @@ function copyOstackyControllerPlugin(projectRoot: string): void {
   mkdirSync(pluginsDir, { recursive: true });
   copyFileSync(pluginSource, join(pluginsDir, "ostacky-plugin.ts"));
   if (existsSync(coreSource)) copyFileSync(coreSource, join(pluginsDir, "controller-core.ts"));
+  if (existsSync(securitySource)) copyFileSync(securitySource, join(pluginsDir, "security.ts"));
+  if (existsSync(tieredSource)) copyFileSync(tieredSource, join(pluginsDir, "tiered.ts"));
   // Siempre local: state por worktree, hard-gate local.
 }
 

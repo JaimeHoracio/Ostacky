@@ -1,7 +1,7 @@
 /**
- * controller-core — Single source of truth para TRANSITIONS, STATES, DEFAULT_STATE y helpers.
- * Extraído de assets/mcp/ostacky-controller/index.js y assets/plugins/ostacky-plugin.ts
- * para eliminar duplicación (D1). Ambos importan de acá.
+ * controller-core — CANÓNICO Single source of truth para TRANSITIONS, STATES, DEFAULT_STATE y helpers.
+ * Mirrors generados en assets/plugins/controller-core.ts y assets/mcp/ostacky-controller/controller-core.js
+ * via `bun run scripts/sync-controller-core.ts` (prebuild). No editar mirrors directamente.
  */
 
 import { SENSITIVE_DEFAULT } from "./security.js";
@@ -142,6 +142,7 @@ export const DEFAULT_STATE: any = {
   watchdogEnabled: true,
   ts: Date.now(),
   specNotInSync: false,
+  engramBypassCount: 0,
 };
 
 export function safeJsonStringify(obj: any, pretty = false): string {

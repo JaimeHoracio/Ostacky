@@ -5,7 +5,7 @@
  * Mantiene máquina de 13 estados en-process y aplica hard gates en tool.execute.before.
  * MCP queda thin solo para observabilidad (get_*).
  *
- * Single source security: importa desde src/security.ts (no copia regex).
+ * Single source security: mirrors generados desde src/security.ts via scripts/sync-controller-core.ts
  * Cache único: getDiscoverySnapshot es único entrypoint.
  * Tiered cache-friendly: isTrivial sin reemplazar system[0], suffix hint + SKIP.
  * CodeGraph preventivo: bloquea Read/Grep masivo sin Discovery hit.
@@ -14,8 +14,8 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, statSync, readdirSync, unlinkSync } from "node:fs"
 import { join, dirname, basename, resolve, relative } from "node:path"
-import { SENSITIVE_DEFAULT, BASH_SENSITIVE_RE, isSensitive, extractPathsFromBash } from "../../src/security.ts"
-import { isTrivial } from "../../src/tiered.ts"
+import { SENSITIVE_DEFAULT, BASH_SENSITIVE_RE, isSensitive, extractPathsFromBash } from "./security.ts"
+import { isTrivial } from "./tiered.ts"
 import { STATES, TRANSITIONS, DEFAULT_STATE } from "./controller-core.ts"
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -139,6 +139,8 @@ function isCodegraphAvailable(directory: string): boolean {
 const trivialBySession = new Map<string, boolean>()
 // Track discovery hit per requestId to avoid blocking after hit
 const discoveryHitByRequest = new Map<string, boolean>()
+// Track Engram hit per session to audit bypass (soft, no BLOCK)
+const engramHitBySession = new Map<string, boolean>()
 // ─── Heartbeat ping — evita sensación de trancado en tareas largas ──
 let lastPingTs = 0
 let pingInterval: ReturnType<typeof setInterval> | null = null
@@ -277,6 +279,26 @@ export const OstackyController: Plugin = async (ctx) => {
         }
       } else if (freshState) {
         lastCheck = { revision: freshState.revision, result: "ALLOW" }
+      }
+
+      // ── 1.6) Engram soft gate (auditable, no BLOCK) — refuerza SHALL 1 de ostacky.md ──
+      // Si propone/cambia nivel sin haber consultado Engram, cuenta bypass (exime trivial+DONE)
+      const isEngramRelevantTool = tool.includes("record_discovery") || (tool.includes("openspec") && (tool.includes("propose") || (typeof args?.filePath === "string" && args.filePath.includes("openspec/changes")) || (typeof args?.path === "string" && args.path.includes("openspec/changes"))))
+      if (isEngramRelevantTool) {
+        const hasEngramHit = engramHitBySession.get(sessionId) ?? false
+        const isTrivialForEngram = trivialBySession.get(sessionId) ?? false
+        const stateForEngram = freshState
+        const shouldAudit = !hasEngramHit && !isTrivialForEngram && stateForEngram && ["DISCOVERY", "ROUTE_DECISION_PENDING", "SPECIFICATION", "INTERPRETATION_PENDING"].includes(stateForEngram.state)
+        if (shouldAudit) {
+          try {
+            const st = readState(ctx.directory)
+            if (st) {
+              st.engramBypassCount = (st.engramBypassCount || 0) + 1
+              // no persist cada vez si es muy frecuente: single-writer ya persiste en after, pero acá persistimos directo para auditoría
+              persistState(ctx.directory, st)
+            }
+          } catch {}
+        }
       }
 
       // ── 1.5) Router determinista: openspec-propose bloquea si 1+ no-downgradeable sin Alternatives ──
@@ -487,7 +509,15 @@ export const OstackyController: Plugin = async (ctx) => {
           if (text && !text.includes("null") && text.length > 10) {
             discoveryHitByRequest.set(sessionId, true)
           }
+          // Engram hit via discovery snapshot (contiene engramHits)
+          if (text && text.includes("engramHits")) {
+            engramHitBySession.set(sessionId, true)
+          }
         } catch {}
+      }
+      // Track Engram hit (mem_search / mem_context / dedup) para soft gate 1.6
+      if (tool.includes("engram_mem_search") || tool.includes("engram_mem_context") || tool.includes("mem_search") || tool.includes("mem_context") || tool.includes("getEngramDedup") || tool.includes("engram_mem_")) {
+        engramHitBySession.set(sessionId, true)
       }
       // Update state metrics for cache hit (best-effort)
       if (tool.includes("getDiscoverySnapshot") && output) {
@@ -549,6 +579,7 @@ export const OstackyController: Plugin = async (ctx) => {
             tokenSavingEstimate: state?.tokenSavingEstimate ?? 0,
             stateCheckCount: state?.stateCheckCount ?? 0,
             codegraphBypassCount: state?.codegraphBypassCount ?? 0,
+            engramBypassCount: state?.engramBypassCount ?? 0,
             revision: state?.revision ?? 0,
           }
         },
@@ -605,6 +636,7 @@ export const OstackyController: Plugin = async (ctx) => {
         if (sid) {
           trivialBySession.delete(sid)
           discoveryHitByRequest.delete(sid)
+          engramHitBySession.delete(sid)
         }
       }
     },

@@ -116,7 +116,7 @@ async function runDoctorCommand() {
         join(cwd, 'assets', 'plugins', 'ostacky-plugin.ts'),
         join(opencodeDir, 'plugins', 'ostacky-plugin.ts'),
         join(cwd, '.opencode', 'plugins', 'ostacky-plugin.ts'),
-        // legacy fallback (pre-0.8.7)
+        // legacy fallback (pre-0.8.8)
         join(cwd, 'assets', 'plugins', 'ostacky-controller.ts'),
         join(opencodeDir, 'plugins', 'ostacky-controller.ts'),
         join(cwd, '.opencode', 'plugins', 'ostacky-controller.ts'),
@@ -147,6 +147,10 @@ async function runDoctorCommand() {
                 );
             if (parsed.codegraphBypassCount > 0)
                 console.log(`⚠️ codegraphBypassCount=${parsed.codegraphBypassCount} (inefficient: codegraph bypass)`);
+            if (parsed.engramBypassCount > 0)
+                console.log(
+                    `⚠️ engramBypassCount=${parsed.engramBypassCount} (contradiction check bypassed — sin mem_search)`
+                );
             if (parsed.stateOversizedCount > 0)
                 console.log(`⚠️ stateOversizedCount=${parsed.stateOversizedCount} snapshots perdidos`);
             if (parsed.sensitiveAccess)

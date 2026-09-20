@@ -129,6 +129,7 @@ Return: Summary of what you found and what you fixed.
 **Need full context:** Understanding requires seeing entire system
 **Exploratory debugging:** You don't know what's broken yet
 **Shared state:** Agents would interfere (editing same files, using same resources)
+**Ostacky execution:** If `execution-mode-evaluation` already produced `fileClusters/sharedFiles` — **DO NOT use this skill**; use `subagent-driven-development` dispatch por clusters (respeta `sharedFiles` y `sequentialDeps` del Controller, evita pisar mismo archivo desde 2 agentes).
 
 ## Real Example from Session
 

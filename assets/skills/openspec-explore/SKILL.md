@@ -39,10 +39,11 @@ Depending on what the user brings, you might:
 - Find analogies
 
 **Investigate the codebase**
-- Map existing architecture relevant to the discussion
+- Map existing architecture relevant to the discussion (ground with `codegraph_codegraph_explore` + `engram_mem_search` if pre-1+ or without active change)
 - Find integration points
 - Identify patterns already in use
 - Surface hidden complexity
+- **Level note:** Si necesitás ruteo por nivel Ostacky (0/0+1/1+) usa `brainstorming` en vez de este stance; este skill asume ya estás en flujo OpenSpec (1+).
 
 **Compare options**
 - Brainstorm multiple approaches
