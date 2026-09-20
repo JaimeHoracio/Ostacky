@@ -1349,6 +1349,22 @@ class OstackyController {
             );
         }
         // C2: strict contract — recommendation + reasons required (tiered recovery: fix-execution-analysis-validation)
+        // Normalizar aliases para no bloquear snapshot válido enviado con nombre distinto
+        if (snapshot && typeof snapshot === 'string') {
+            try {
+                snapshot = JSON.parse(snapshot);
+            } catch {}
+        }
+        if (snapshot && !snapshot.recommendation && (snapshot.mode || snapshot.executionMode)) {
+            snapshot.recommendation = snapshot.mode || snapshot.executionMode;
+        }
+        if (snapshot && !snapshot.reasons && snapshot.reason) {
+            snapshot.reasons = Array.isArray(snapshot.reason) ? snapshot.reason : [String(snapshot.reason)];
+        }
+        if (snapshot && Array.isArray(snapshot.reasons) && snapshot.reasons.length === 0) {
+            // vacío se considera missing para no dejar pasar snapshot inválido
+            snapshot.reasons = undefined;
+        }
         let _snapshotDefaulted = false;
         if (snapshot && (!snapshot.recommendation || !snapshot.reasons)) {
             const isDegradedOrEarlyExit =
@@ -1376,22 +1392,46 @@ class OstackyController {
                 };
             }
         }
-        // 1.7: exigir expectedTaskIds/taskIds/taskCount cuando taskCount>0
+        // 1.7: exigir expectedTaskIds/taskIds/taskCount cuando taskCount>0 — con retryAllowed para no dejar en BLOCKED
         if (snapshot && typeof snapshot.taskCount === 'number' && snapshot.taskCount > 0) {
             const hasExpectedIds = Array.isArray(snapshot.expectedTaskIds) && snapshot.expectedTaskIds.length > 0;
             const hasTaskIds = Array.isArray(snapshot.taskIds) && snapshot.taskIds.length > 0;
             const hasCount = typeof snapshot.taskCount === 'number' && snapshot.taskCount > 0;
             if (!hasExpectedIds && !hasTaskIds && !hasCount) {
-                return this.#makeError(
-                    'Snapshot missing expectedTaskIds/taskIds/taskCount when taskCount>0',
-                    'record_execution_analysis'
-                );
+                const available = (TRANSITIONS[this.#state.state] || []).map((t) => {
+                    let desc = t.via;
+                    if (t.choice) desc += ` (choice=${t.choice})`;
+                    if (t.mode) desc += ` (mode=${t.mode})`;
+                    return desc;
+                });
+                return {
+                    error: 'Snapshot missing expectedTaskIds/taskIds/taskCount when taskCount>0',
+                    current_state: this.#state.state,
+                    attempted_transition: 'record_execution_analysis',
+                    available_transitions: available,
+                    retryAllowed: true,
+                    suggestion:
+                        'Reintentá con {taskCount, expectedTaskIds:[...]} que matchee tasks.md — ver skill execution-mode-evaluation',
+                    timestamp: new Date().toISOString(),
+                };
             }
             if (!hasExpectedIds && !hasTaskIds) {
-                return this.#makeError(
-                    'Snapshot missing expectedTaskIds or taskIds when taskCount>0',
-                    'record_execution_analysis'
-                );
+                const available = (TRANSITIONS[this.#state.state] || []).map((t) => {
+                    let desc = t.via;
+                    if (t.choice) desc += ` (choice=${t.choice})`;
+                    if (t.mode) desc += ` (mode=${t.mode})`;
+                    return desc;
+                });
+                return {
+                    error: 'Snapshot missing expectedTaskIds or taskIds when taskCount>0',
+                    current_state: this.#state.state,
+                    attempted_transition: 'record_execution_analysis',
+                    available_transitions: available,
+                    retryAllowed: true,
+                    suggestion:
+                        'Reintentá con expectedTaskIds/taskIds que matchee tasks.md — ver skill execution-mode-evaluation',
+                    timestamp: new Date().toISOString(),
+                };
             }
         }
         // C2: capture expected tasks for gate — harden-task-integrity: tasks.md canonical
@@ -1408,7 +1448,11 @@ class OstackyController {
             const snapshotIds = Array.isArray(expectedTasks) ? expectedTasks : null;
             const snapshotSet = snapshotIds ? new Set(snapshotIds) : new Set();
             const tasksMdSet = new Set(tasksMdIds);
-            const mismatch = !snapshotIds || snapshotIds.length !== tasksMdIds.length || [...snapshotSet].some((id) => !tasksMdSet.has(id)) || [...tasksMdSet].some((id) => !snapshotSet.has(id));
+            const mismatch =
+                !snapshotIds ||
+                snapshotIds.length !== tasksMdIds.length ||
+                [...snapshotSet].some((id) => !tasksMdSet.has(id)) ||
+                [...tasksMdSet].some((id) => !snapshotSet.has(id));
             if (mismatch) taskCountMismatch = true;
             expectedTasks = [...tasksMdIds];
             expectedTaskCount = tasksMdIds.length;
@@ -1476,8 +1520,16 @@ class OstackyController {
         // harden-task-integrity: emit WARN if tasks.md mismatch
         if (taskCountMismatch) {
             const auditId = `aud-${Date.now()}-${this.#state.auditSeq}`;
-            log('warn:task_count_mismatch', { auditId, snapshotCount: snapshot?.expectedTaskIds?.length ?? 0, tasksMdCount: tasksMdIds.length });
-            await this.#audit('WARN', 'task_count_mismatch', `expectedTasks from snapshot (${snapshot?.expectedTaskIds?.length ?? 0}) differs from tasks.md (${tasksMdIds.length}) - using tasks.md`);
+            log('warn:task_count_mismatch', {
+                auditId,
+                snapshotCount: snapshot?.expectedTaskIds?.length ?? 0,
+                tasksMdCount: tasksMdIds.length,
+            });
+            await this.#audit(
+                'WARN',
+                'task_count_mismatch',
+                `expectedTasks from snapshot (${snapshot?.expectedTaskIds?.length ?? 0}) differs from tasks.md (${tasksMdIds.length}) - using tasks.md`
+            );
         }
         // 8.2: reasoning sin plan → WARN (but allow early-exit style)
         if (!execShown && snapshot && !isEarlyExitExec) {
@@ -1726,22 +1778,46 @@ class OstackyController {
             if (providedIds) {
                 const setA = new Set(providedIds);
                 const setB = new Set(tasksMdIds);
-                const mismatch = providedIds.length !== tasksMdIds.length || [...setA].some((id) => !setB.has(id)) || [...setB].some((id) => !setA.has(id));
+                const mismatch =
+                    providedIds.length !== tasksMdIds.length ||
+                    [...setA].some((id) => !setB.has(id)) ||
+                    [...setB].some((id) => !setA.has(id));
                 if (mismatch) {
                     const auditId = `aud-${Date.now()}-${this.#state.auditSeq}`;
-                    log('warn:task_count_mismatch', { auditId, provided: providedIds.length, tasksMd: tasksMdIds.length });
-                    await this.#audit('WARN', 'task_count_mismatch', `expectedTasks from caller (${providedIds.length}) differs from tasks.md (${tasksMdIds.length}) - using tasks.md`);
+                    log('warn:task_count_mismatch', {
+                        auditId,
+                        provided: providedIds.length,
+                        tasksMd: tasksMdIds.length,
+                    });
+                    await this.#audit(
+                        'WARN',
+                        'task_count_mismatch',
+                        `expectedTasks from caller (${providedIds.length}) differs from tasks.md (${tasksMdIds.length}) - using tasks.md`
+                    );
                 }
             } else if (typeof taskCount === 'number' && taskCount !== tasksMdIds.length) {
                 const auditId = `aud-${Date.now()}-${this.#state.auditSeq}`;
                 log('warn:task_count_mismatch', { auditId, provided: taskCount, tasksMd: tasksMdIds.length });
-                await this.#audit('WARN', 'task_count_mismatch', `expectedTaskCount from caller (${taskCount}) differs from tasks.md (${tasksMdIds.length}) - using tasks.md`);
+                await this.#audit(
+                    'WARN',
+                    'task_count_mismatch',
+                    `expectedTaskCount from caller (${taskCount}) differs from tasks.md (${tasksMdIds.length}) - using tasks.md`
+                );
             }
             this.#state.expectedTasks = [...tasksMdIds];
             this.#state.expectedTaskCount = tasksMdIds.length;
             await this.#persist();
-            await this.#audit('EXECUTING', 'set_expected_tasks', `expected=${this.#state.expectedTaskCount} (from tasks.md)`);
-            return { ok: true, expectedTasks: this.#state.expectedTasks, expectedTaskCount: this.#state.expectedTaskCount, source: 'tasks.md' };
+            await this.#audit(
+                'EXECUTING',
+                'set_expected_tasks',
+                `expected=${this.#state.expectedTaskCount} (from tasks.md)`
+            );
+            return {
+                ok: true,
+                expectedTasks: this.#state.expectedTasks,
+                expectedTaskCount: this.#state.expectedTaskCount,
+                source: 'tasks.md',
+            };
         }
         if (Array.isArray(taskIds) && taskIds.length > 0) {
             this.#state.expectedTasks = [...taskIds];
@@ -2500,7 +2576,7 @@ function safeHandler(fn, options = {}) {
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.8.6',
+    version: '0.8.7',
 });
 
 server.registerTool(
@@ -3100,7 +3176,7 @@ function setupGracefulShutdown(ctrl) {
 }
 
 async function main() {
-    log('Starting ostacky-controller MCP v0.8.6...');
+    log('Starting ostacky-controller MCP v0.8.7...');
     log('State path:', { path: statePath });
     // Clean up stale tmp/lock files from previous runs
     cleanupTmpFiles(statePath);
