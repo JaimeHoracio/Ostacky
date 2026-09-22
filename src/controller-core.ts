@@ -111,6 +111,8 @@ export const DEFAULT_STATE: any = {
   lastHandoff: null,
   expectedTasks: null,
   expectedTaskCount: null,
+  taskVerifications: null as any,
+  taskVerificationResults: {} as any,
   auditSeq: 0,
   degraded: false,
   schemaVersion: 2,

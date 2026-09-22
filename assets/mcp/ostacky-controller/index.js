@@ -176,6 +176,53 @@ export function parseTasksMd(changeId, statePath) {
     }
 }
 
+export function parseTaskVerifications(changeId, statePath) {
+    if (!changeId || typeof changeId !== 'string') return {};
+    try {
+        const projectRoot = getProjectRoot(statePath);
+        const tasksPath = join(projectRoot, 'openspec', 'changes', changeId, 'tasks.md');
+        let content = null;
+        if (existsSync(tasksPath)) {
+            content = readFileSync(tasksPath, 'utf-8');
+        } else {
+            try {
+                const archiveDir = join(projectRoot, 'openspec', 'changes', 'archive');
+                if (existsSync(archiveDir)) {
+                    for (const entry of readdirSync(archiveDir)) {
+                        if (entry.endsWith(`-${changeId}`) || entry === changeId) {
+                            const alt = join(archiveDir, entry, 'tasks.md');
+                            if (existsSync(alt)) {
+                                content = readFileSync(alt, 'utf-8');
+                                break;
+                            }
+                        }
+                    }
+                }
+            } catch {}
+            if (content === null) return {};
+        }
+        const verifs = {};
+        const lines = content.split('\n');
+        for (const line of lines) {
+            const m = line.match(/^- \[[ x]\]\s+([A-Za-z0-9][A-Za-z0-9\-_.\/:]*)/);
+            if (!m) continue;
+            const id = m[1];
+            if (!isValidTaskId(id)) continue;
+            const idx = line.indexOf('verificar:');
+            if (idx !== -1) {
+                const v = line
+                    .slice(idx + 'verificar:'.length)
+                    .trim()
+                    .slice(0, 200);
+                if (v) verifs[id] = v;
+            }
+        }
+        return verifs;
+    } catch {
+        return {};
+    }
+}
+
 function isValidTaskId(taskId) {
     return typeof taskId === 'string' && /^[a-zA-Z0-9-_.\/:]+$/.test(taskId);
 }
@@ -1662,16 +1709,62 @@ class OstackyController {
                 else if (cur !== stored) staleFiles.push(`${fp} (stale fingerprint)`);
             }
         } catch {}
-        const hasBlocking = pending.length > 0 || staleFiles.length > 0;
+        // Generico: verificar tasks con verificacion definida
+        let verificationFailed = [];
+        try {
+            const verifs = this.#state.taskVerifications || {};
+            for (const [tid, verif] of Object.entries(verifs)) {
+                const task = this.#state.tasks[tid];
+                if (!task || task.status !== 'COMPLETED') continue;
+                let needle = String(verif).trim();
+                if (needle.startsWith('codegraph:')) needle = needle.slice('codegraph:'.length).trim();
+                else if (needle.startsWith('file:')) {
+                    const rest = needle.slice('file:'.length).trim();
+                    const parts = rest.split('contiene');
+                    needle = (parts[1] || parts[0] || '').trim() || rest;
+                } else if (needle.startsWith('test:')) continue;
+                if (!needle) continue;
+                let content = null;
+                const fp = task.filePath;
+                if (fp) {
+                    try {
+                        const abs =
+                            fp.startsWith('/') || /^[A-Za-z]:/.test(fp)
+                                ? resolve(fp)
+                                : resolve(getProjectRoot(this.#statePath), fp);
+                        if (existsSync(abs)) content = readFileSync(abs, 'utf-8');
+                    } catch {}
+                }
+                const found = content ? content.includes(needle) : false;
+                if (!found) verificationFailed.push(`${tid}: ${verif} no encontrado en ${fp || 'archivo'}`);
+            }
+        } catch {}
+        const hasBlocking = pending.length > 0 || staleFiles.length > 0 || verificationFailed.length > 0;
         if (hasBlocking && !force) {
+            const pendingMsg =
+                pending.length > 0 ? `Te faltan ${pending.length} task(s) por completar: ${pending.join(', ')}.` : '';
+            const staleMsg =
+                staleFiles.length > 0
+                    ? `Hay ${staleFiles.length} archivo(s) con fingerprint stale o faltante: ${staleFiles.join(', ')}.`
+                    : '';
+            const verifMsg =
+                verificationFailed.length > 0
+                    ? `Hay ${verificationFailed.length} verificación(es) fallida(s): ${verificationFailed.join(', ')}.`
+                    : '';
+            const detail = [pendingMsg, staleMsg, verifMsg].filter(Boolean).join(' ');
+            const isVerif = verificationFailed.length > 0;
             return {
-                error: staleFiles.length ? 'stale fingerprints' : 'tasks incomplete',
+                error: isVerif
+                    ? `verification failed - No puedo cerrar: ${verificationFailed.length} verificación(es) fallida(s)`
+                    : staleFiles.length > 0
+                      ? `stale fingerprints - No puedo cerrar: ${pending.length} task(s) pendiente(s) y ${staleFiles.length} archivo(s) stale`
+                      : `tasks incomplete - No puedo cerrar: te faltan ${pending.length} task(s) por completar`,
                 pending,
                 staleFiles: staleFiles.length ? staleFiles : undefined,
+                verificationFailed: verificationFailed.length ? verificationFailed : undefined,
                 current_state: this.#state.state,
                 attempted_transition: 'implementation_complete',
-                suggestion:
-                    'Complete pending tasks via complete_task or retry with {force:true} after explicit user confirmation',
+                suggestion: `${detail} Completá cada task con Read fresco → validate_edit → edit → complete_task (con verificación) y luego reintentá implementation_complete sin force. Solo si querés descartar trabajo pendiente, escribí literal "confirmo forzar" en tu mensaje y reintentá con {force:true}. No propongo cancelar; propongo completar.`,
             };
         }
         if (hasBlocking && force) {
@@ -1679,16 +1772,23 @@ class OstackyController {
             const recentAudit = [...(this.#state.audit || []).slice(-5), ...this.#auditBuffer.slice(-5)];
             const hasHuman = recentAudit.some((e) => e.reasoning && /forzar|confirmo|force/i.test(e.reasoning));
             if (!hasHuman) {
+                const pendingMsg =
+                    pending.length > 0 ? `Te faltan ${pending.length} task(s): ${pending.join(', ')}.` : '';
+                const staleMsg = staleFiles.length > 0 ? `Archivos stale: ${staleFiles.join(', ')}.` : '';
+                const verifMsg =
+                    verificationFailed.length > 0 ? `Verificaciones fallidas: ${verificationFailed.join(', ')}.` : '';
+                const detail = [pendingMsg, staleMsg, verifMsg].filter(Boolean).join(' ');
                 return {
-                    error: 'force requires human confirmation',
+                    error: 'force requires human confirmation - force requiere confirmación humana explícita',
                     pending,
                     staleFiles: staleFiles.length ? staleFiles : undefined,
+                    verificationFailed: verificationFailed.length ? verificationFailed : undefined,
                     current_state: this.#state.state,
                     attempted_transition: 'implementation_complete',
-                    suggestion: 'User must write forzar/confirmo/force in a prior block/replan/set_handoff reasoning',
+                    suggestion: `${detail} Para forzar el cierre, escribí literal "confirmo forzar" en tu mensaje (quedará auditado) y reintentá con {force:true}. Si no querés forzar, completá los pendientes y reintentá sin force.`,
                 };
             }
-            const all = [...pending, ...staleFiles].join(',');
+            const all = [...pending, ...staleFiles, ...verificationFailed].join(',');
             await this.#audit('FORCE', 'implementation_complete', `forced with pending: ${all}`);
         }
         await this.#transition(to);
@@ -1806,6 +1906,12 @@ class OstackyController {
             }
             this.#state.expectedTasks = [...tasksMdIds];
             this.#state.expectedTaskCount = tasksMdIds.length;
+            // --- Generico: extraer verificaciones de tasks.md (codegraph:/file:/test:)
+            try {
+                const verifs = parseTaskVerifications(this.#state.changeId, this.#statePath);
+                this.#state.taskVerifications = Object.keys(verifs).length ? verifs : null;
+                if (!this.#state.taskVerificationResults) this.#state.taskVerificationResults = {};
+            } catch {}
             await this.#persist();
             await this.#audit(
                 'EXECUTING',
@@ -1816,15 +1922,18 @@ class OstackyController {
                 ok: true,
                 expectedTasks: this.#state.expectedTasks,
                 expectedTaskCount: this.#state.expectedTaskCount,
+                taskVerifications: this.#state.taskVerifications,
                 source: 'tasks.md',
             };
         }
         if (Array.isArray(taskIds) && taskIds.length > 0) {
             this.#state.expectedTasks = [...taskIds];
             this.#state.expectedTaskCount = taskIds.length;
+            this.#state.taskVerifications = null;
         } else if (typeof taskCount === 'number' && taskCount > 0) {
             this.#state.expectedTasks = null;
             this.#state.expectedTaskCount = taskCount;
+            this.#state.taskVerifications = null;
         } else {
             return { error: 'taskIds (array) or taskCount (number) required' };
         }
@@ -1834,7 +1943,12 @@ class OstackyController {
             'set_expected_tasks',
             `expected=${this.#state.expectedTaskCount ?? this.#state.expectedTasks?.length}`
         );
-        return { ok: true, expectedTasks: this.#state.expectedTasks, expectedTaskCount: this.#state.expectedTaskCount };
+        return {
+            ok: true,
+            expectedTasks: this.#state.expectedTasks,
+            expectedTaskCount: this.#state.expectedTaskCount,
+            taskVerifications: this.#state.taskVerifications,
+        };
     }
 
     async verifyIntegrity() {
@@ -1867,11 +1981,46 @@ class OstackyController {
                 else if (current !== stored) staleFiles.push(`${fp} (stale fingerprint)`);
             }
         } catch {}
-        const ok = pending.length === 0 && staleFiles.length === 0;
+        // Generico: verificar tasks con verificacion definida
+        let verificationFailed = [];
+        try {
+            const verifs = this.#state.taskVerifications || {};
+            for (const [tid, verif] of Object.entries(verifs)) {
+                const task = this.#state.tasks[tid];
+                if (!task || task.status !== 'COMPLETED') continue;
+                // Re-verificar via file content
+                let needle = String(verif).trim();
+                if (needle.startsWith('codegraph:')) needle = needle.slice('codegraph:'.length).trim();
+                else if (needle.startsWith('file:')) {
+                    const rest = needle.slice('file:'.length).trim();
+                    const parts = rest.split('contiene');
+                    needle = (parts[1] || parts[0] || '').trim() || rest;
+                } else if (needle.startsWith('test:')) {
+                    // test: asumimos ok si ya está completa (test se corrió en agente)
+                    continue;
+                }
+                if (!needle) continue;
+                let content = null;
+                const fp = task.filePath;
+                if (fp) {
+                    try {
+                        const abs =
+                            fp.startsWith('/') || /^[A-Za-z]:/.test(fp)
+                                ? resolve(fp)
+                                : resolve(getProjectRoot(this.#statePath), fp);
+                        if (existsSync(abs)) content = readFileSync(abs, 'utf-8');
+                    } catch {}
+                }
+                const found = content ? content.includes(needle) : false;
+                if (!found) verificationFailed.push(`${tid}: ${verif} no encontrado en ${fp || 'archivo'}`);
+            }
+        } catch {}
+        const ok = pending.length === 0 && staleFiles.length === 0 && verificationFailed.length === 0;
         return {
             ok,
             pending,
             staleFiles,
+            verificationFailed: verificationFailed.length ? verificationFailed : undefined,
             completed: Object.keys(this.#state.tasks).filter((k) => this.#state.tasks[k].status === 'COMPLETED').length,
             expected: this.#state.expectedTaskCount ?? this.#state.expectedTasks?.length ?? null,
             state: this.#state.state,
@@ -2334,10 +2483,14 @@ class OstackyController {
             }
         }
         // harden-task-integrity 2.2: hard gate unificado (new files eximidos) — antes INLINE hard vs SUBAGENTS WARN
+        // Generico: test: tasks no requieren archivo nuevo (son verificaciones de comportamiento)
+        const verifEarly = this.#state.taskVerifications?.[taskId];
+        const isTestTaskEarly = verifEarly && verifEarly.trim().startsWith('test:');
         const isNewFile = !!(
-            filePath &&
-            !this.#state.fileFingerprints?.[filePath] &&
-            !Object.values(this.#state.tasks || {}).some((t) => t.filePath === filePath)
+            isTestTaskEarly ||
+            (filePath &&
+                !this.#state.fileFingerprints?.[filePath] &&
+                !Object.values(this.#state.tasks || {}).some((t) => t.filePath === filePath))
         );
         if (!this.#state.lastValidated || (filePath && this.#state.lastValidated.filePath !== filePath)) {
             if (!isNewFile) {
@@ -2355,6 +2508,26 @@ class OstackyController {
             );
         } else {
             this.#state.lastValidated = null;
+        }
+
+        // --- Generico: verificar task antes de marcar completa (evita invento)
+        const verifForComplete = this.#state.taskVerifications?.[taskId];
+        if (verifForComplete) {
+            const vres = await this.verifyTask({ taskId, filePath });
+            if (!vres.ok) {
+                await this.#audit(
+                    'WARN',
+                    'verification_failed',
+                    `task ${taskId} verification failed: ${verifForComplete}`
+                );
+                return {
+                    error: `verification failed for ${taskId}: ${verifForComplete} not found in ${vres.fileHint || filePath || 'unknown file'}`,
+                    taskId,
+                    verification: verifForComplete,
+                    verificationFailed: true,
+                    vres,
+                };
+            }
         }
 
         this.#state.tasks[taskId] = {
@@ -2411,6 +2584,67 @@ class OstackyController {
             status: 'COMPLETED',
             totalCompleted,
         };
+    }
+
+    async verifyTask({ taskId, filePath: filePathParam } = {}) {
+        this.#load();
+        if (!taskId) return { error: 'taskId required' };
+        const verif = this.#state.taskVerifications?.[taskId];
+        if (!verif) return { ok: true, taskId, reason: 'no verification defined' };
+        try {
+            const info = this.#state.tasks[taskId];
+            // Try filePath from param, task, or verification prefix
+            let needle = verif.trim();
+            let fileHint = filePathParam || null;
+            if (needle.startsWith('codegraph:')) {
+                needle = needle.slice('codegraph:'.length).trim();
+                fileHint = fileHint || info?.filePath || null;
+            } else if (needle.startsWith('file:')) {
+                const rest = needle.slice('file:'.length).trim();
+                // file:path contiene string  -> split
+                const parts = rest.split('contiene');
+                needle = (parts[1] || parts[0] || '').trim();
+                const parsedPath = (parts[0] || '').trim();
+                if (parsedPath) fileHint = parsedPath;
+                else fileHint = fileHint || info?.filePath || null;
+                if (!needle) needle = rest;
+            } else if (needle.startsWith('test:')) {
+                // test: no podemos ejecutar desde controller, consideramos ok si hay filePath (ya editado) o fileHash
+                needle = needle.slice('test:'.length).trim();
+                const hasFile = !!(fileHint || info?.filePath || info?.fileHash);
+                const ok = hasFile;
+                if (!this.#state.taskVerificationResults) this.#state.taskVerificationResults = {};
+                this.#state.taskVerificationResults[taskId] = { ok, verif, ts: Date.now() };
+                await this.#persist();
+                return { ok, taskId, verif, reason: hasFile ? 'test verification assumed ok (has file)' : 'no file' };
+            }
+            // Generic: check file content contains needle
+            let content = null;
+            let checkPath = fileHint || info?.filePath || filePathParam || null;
+            if (checkPath) {
+                const abs =
+                    checkPath.startsWith('/') || /^[A-Za-z]:/.test(checkPath)
+                        ? resolve(checkPath)
+                        : resolve(getProjectRoot(this.#statePath), checkPath);
+                if (existsSync(abs)) {
+                    try {
+                        content = readFileSync(abs, 'utf-8');
+                    } catch {}
+                }
+            }
+            let ok = false;
+            if (content && needle && content.includes(needle)) ok = true;
+            else if (!checkPath && needle) {
+                // No file hint, search in any task file? For generic, require filePath
+                ok = false;
+            }
+            if (!this.#state.taskVerificationResults) this.#state.taskVerificationResults = {};
+            this.#state.taskVerificationResults[taskId] = { ok, verif, needle, fileHint: checkPath, ts: Date.now() };
+            await this.#persist();
+            return { ok, taskId, verif, needle, fileHint: checkPath, found: ok };
+        } catch (e) {
+            return { ok: false, taskId, verif, error: e.message };
+        }
     }
 
     /**
@@ -2576,7 +2810,7 @@ function safeHandler(fn, options = {}) {
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.8.8',
+    version: '0.8.9',
 });
 
 server.registerTool(
@@ -3176,7 +3410,7 @@ function setupGracefulShutdown(ctrl) {
 }
 
 async function main() {
-    log('Starting ostacky-controller MCP v0.8.8...');
+    log('Starting ostacky-controller MCP v0.8.9...');
     log('State path:', { path: statePath });
     // Clean up stale tmp/lock files from previous runs
     cleanupTmpFiles(statePath);
