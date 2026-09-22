@@ -120,6 +120,9 @@ export function setMcpEntry(name: string, entry: Record<string, unknown>): void 
  * Sets an MCP entry at an explicit project root. Keeping the root explicit
  * prevents installers that already resolved a target directory from silently
  * writing configuration for a different process working directory.
+ *
+ * V2 native shape: entries live under `mcp.servers.<name>`. A legacy
+ * same-name `mcp.<name>` entry is removed to avoid V1/V2 conflict warnings.
  */
 export function setMcpEntryAtProjectRoot(
   projectRoot: string,
@@ -129,8 +132,12 @@ export function setMcpEntryAtProjectRoot(
   const configPath = ensureOpenCodeConfig(projectRoot);
   const config = readOpenCodeConfig(configPath);
   if (!config) throw new Error(`Error parseando ${configPath}`);
-  if (!config.mcp) config.mcp = {};
-  (config.mcp as Record<string, unknown>)[name] = entry;
+  if (!config.mcp || typeof config.mcp !== 'object') config.mcp = {};
+  const mcp = config.mcp as Record<string, unknown>;
+  if (!mcp.servers || typeof mcp.servers !== 'object') mcp.servers = {};
+  (mcp.servers as Record<string, unknown>)[name] = entry;
+  // Drop legacy same-name V1 entry so V2 doesn't warn on conflicting values.
+  if (name in mcp && name !== 'servers') delete mcp[name];
   writeOpenCodeConfig(configPath, config);
 }
 
@@ -154,15 +161,19 @@ export function ensureMcpEntryAtProjectRoot(
   if (!config) throw new Error(`Error parseando ${configPath}`);
   if (!config.mcp) config.mcp = {};
   const mcp = config.mcp as Record<string, unknown>;
-  if (!mcp[name]) {
-    mcp[name] = entry;
+  const servers = (mcp.servers ?? {}) as Record<string, unknown>;
+  if (!(name in servers) && !(name in mcp)) {
+    if (!mcp.servers || typeof mcp.servers !== 'object') mcp.servers = {};
+    (mcp.servers as Record<string, unknown>)[name] = entry;
     writeOpenCodeConfig(configPath, config);
   }
 }
 
 /**
- * Patches opencode.json to remove the legacy `plugin` field
- * (from the deprecated Superpowers era).
+ * Patches opencode.json to remove Ostacky-owned legacy `plugin` entries
+ * (from the deprecated Superpowers era). Only entries referencing
+ * Superpowers are removed; user plugin entries and the V2 `plugins`
+ * array are never touched.
  */
 export function patchOpenCodeConfig(projectRoot: string = findProjectRoot()): { success: boolean; message: string } {
   const configPath = findOpenCodeConfig(projectRoot);
@@ -184,15 +195,28 @@ export function patchOpenCodeConfig(projectRoot: string = findProjectRoot()): { 
 
   let changed = false;
 
-  if ("plugin" in config) {
-    delete config.plugin;
-    changed = true;
+  if ("plugin" in config && Array.isArray(config.plugin)) {
+    const entries = config.plugin as unknown[];
+    const kept = entries.filter((e) => !isSuperpowersPluginEntry(e));
+    if (kept.length !== entries.length) {
+      if (kept.length === 0) delete config.plugin;
+      else config.plugin = kept;
+      changed = true;
+    }
   }
 
   if (changed) {
     writeOpenCodeConfig(configPath, config);
-    return { success: true, message: "Config actualizada (plugin legacy eliminado)" };
+    return { success: true, message: "Config actualizada (entradas superpowers eliminadas)" };
   }
 
   return { success: true, message: "Config de OpenCode ya está limpia" };
+}
+
+function isSuperpowersPluginEntry(entry: unknown): boolean {
+  try {
+    return JSON.stringify(entry).toLowerCase().includes("superpowers");
+  } catch {
+    return false;
+  }
 }

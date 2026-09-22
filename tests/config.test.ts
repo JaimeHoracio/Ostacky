@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { ensureMcpEntryAtProjectRoot, stripJsoncComments, setMcpEntryAtProjectRoot } from '../src/config.js';
+import { ensureMcpEntryAtProjectRoot, stripJsoncComments, setMcpEntryAtProjectRoot, patchOpenCodeConfig } from '../src/config.js';
 
 const TEST_ROOT = join(import.meta.dir, '.test-config-project');
 
@@ -109,14 +109,42 @@ describe('setMcpEntryAtProjectRoot', () => {
         setMcpEntryAtProjectRoot(TEST_ROOT, 'ostacky-controller', {
             type: 'local',
             command: ['C:/Program Files/nodejs/node.exe', 'C:/project/.opencode/mcp/ostacky-controller/index.js'],
-            enabled: true,
+            disabled: false,
         });
 
         const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-        expect(config.mcp['ostacky-controller'].command).toEqual([
+        expect(config.mcp.servers['ostacky-controller'].command).toEqual([
             'C:/Program Files/nodejs/node.exe',
             'C:/project/.opencode/mcp/ostacky-controller/index.js',
         ]);
+    });
+
+    it('migrates a legacy same-name entry from mcp.<name> to mcp.servers.<name>', () => {
+        mkdirSync(TEST_ROOT, { recursive: true });
+        const configPath = join(TEST_ROOT, 'opencode.json');
+        writeFileSync(
+            configPath,
+            JSON.stringify({
+                mcp: {
+                    'ostacky-controller': {
+                        type: 'local',
+                        command: ['node', 'stale/index.js'],
+                        enabled: true,
+                    },
+                },
+            }),
+            'utf-8'
+        );
+
+        setMcpEntryAtProjectRoot(TEST_ROOT, 'ostacky-controller', {
+            type: 'local',
+            command: ['node', 'fresh/index.js'],
+            disabled: false,
+        });
+
+        const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+        expect(config.mcp.servers['ostacky-controller'].command).toEqual(['node', 'fresh/index.js']);
+        expect('ostacky-controller' in config.mcp).toBe(false);
     });
 
     it('fails instead of silently skipping an invalid OpenCode config', () => {
@@ -158,6 +186,41 @@ describe('ensureMcpEntryAtProjectRoot', () => {
             type: 'remote',
             url: 'https://custom.example/mcp',
         });
+    });
+});
+
+describe('patchOpenCodeConfig', () => {
+    it('removes only Ostacky-owned superpowers entries from plugin, never user plugins', () => {
+        mkdirSync(TEST_ROOT, { recursive: true });
+        const configPath = join(TEST_ROOT, 'opencode.json');
+        writeFileSync(
+            configPath,
+            JSON.stringify({
+                plugin: ['superpowers@git+https://github.com/obra/superpowers.git', 'mi-plugin'],
+                plugins: ['otro-plugin'],
+            }),
+            'utf-8'
+        );
+
+        const res = patchOpenCodeConfig(TEST_ROOT);
+        expect(res.success).toBe(true);
+        const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+        expect(config.plugin).toEqual(['mi-plugin']);
+        expect(config.plugins).toEqual(['otro-plugin']);
+    });
+
+    it('drops an emptied plugin key entirely', () => {
+        mkdirSync(TEST_ROOT, { recursive: true });
+        const configPath = join(TEST_ROOT, 'opencode.json');
+        writeFileSync(
+            configPath,
+            JSON.stringify({ plugin: ['superpowers@git+https://github.com/obra/superpowers.git'] }),
+            'utf-8'
+        );
+
+        patchOpenCodeConfig(TEST_ROOT);
+        const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+        expect('plugin' in config).toBe(false);
     });
 });
 

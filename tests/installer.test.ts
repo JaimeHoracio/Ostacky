@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createMcpConfigEntry, probeMcpServer } from '../src/installer.js';
+import { createMcpConfigEntry, probeMcpServer, uninstallMcpServer } from '../src/installer.js';
+import type { OpenCodePaths } from '../src/types.js';
 
 const PROBE_STATE = join(import.meta.dir, '.test-controller-probe-state.json');
 
@@ -22,11 +23,23 @@ describe('createMcpConfigEntry', () => {
         ).toEqual({
             type: 'local',
             command: ['C:/Program Files/nodejs/node.exe', 'C:/workspace/.opencode/mcp/ostacky-controller/index.js'],
-            enabled: true,
+            disabled: false,
+            timeout: { catalog: 30000, execution: 300000 },
+            protocol: 'legacy',
             environment: {
                 OSTACKY_STATE_PATH: 'C:/workspace/.opencode/ostacky-state.json',
             },
         });
+    });
+
+    it('uses V2 native shape without legacy enabled', () => {
+        const entry = createMcpConfigEntry(
+            'codegraph',
+            '/usr/bin/node',
+            '/w/.opencode/mcp/codegraph/index.js'
+        ) as Record<string, unknown>;
+        expect('enabled' in entry).toBe(false);
+        expect(entry.disabled).toBe(false);
     });
 
     it('does not add controller-only environment to other MCP servers', () => {
@@ -39,7 +52,9 @@ describe('createMcpConfigEntry', () => {
         ).toEqual({
             type: 'local',
             command: ['C:/Program Files/nodejs/node.exe', 'C:/workspace/.opencode/mcp/openspec/index.js'],
-            enabled: true,
+            disabled: false,
+            timeout: { catalog: 30000, execution: 300000 },
+            protocol: 'legacy',
         });
     });
 
@@ -91,8 +106,7 @@ describe('createMcpConfigEntry', () => {
         ).rejects.toThrow(/start_request/);
     });
 
-    it('controller probe still enforces ping + start_request when defaults are used', async () => {
-        // Backward-compat guarantee: when no options are passed, the probe must
+    it('controller probe still enforces ping + start_request when defaults are used', async () => {        // Backward-compat guarantee: when no options are passed, the probe must
         // still require ping+start_request and exercise start_request. This is
         // verified indirectly by the previous "controller" test, but we add this
         // explicit assertion so a future refactor that loosens defaults is caught.
@@ -104,5 +118,47 @@ describe('createMcpConfigEntry', () => {
                 join(import.meta.dir, '..')
             )
         ).rejects.toThrow(/ping|start_request/);
+    });
+});
+
+describe('uninstallMcpServer', () => {
+    const TEST_PROJ = join(import.meta.dir, '.test-uninstall-project');
+    const paths = (root: string): OpenCodePaths => ({
+        root,
+        agents: join(root, 'agents'),
+        commands: join(root, 'commands'),
+        plugins: join(root, 'plugins'),
+        skills: join(root, 'skills'),
+        mcp: join(root, 'mcp'),
+        tools: join(root, 'tools'),
+    });
+
+    it('removes V2 servers and legacy entries but never user plugins', () => {
+        const projectRoot = TEST_PROJ;
+        const root = join(projectRoot, '.opencode');
+        mkdirSync(join(root, 'mcp', 'codegraph'), { recursive: true });
+        writeFileSync(
+            join(projectRoot, 'opencode.json'),
+            JSON.stringify({
+                mcp: {
+                    servers: {
+                        codegraph: { type: 'local', command: ['x'] },
+                        'my-user-mcp': { type: 'remote', url: 'https://u.example/mcp' },
+                    },
+                    codegraph: { type: 'local', command: ['stale'], enabled: true },
+                },
+                plugins: ['mi-plugin'],
+            }),
+            'utf-8'
+        );
+
+        expect(uninstallMcpServer('codegraph', paths(root))).toBe(true);
+        const config = JSON.parse(readFileSync(join(projectRoot, 'opencode.json'), 'utf-8'));
+        expect(config.mcp.servers.codegraph).toBeUndefined();
+        expect(config.mcp.codegraph).toBeUndefined();
+        expect(config.mcp.servers['my-user-mcp'].url).toBe('https://u.example/mcp');
+        expect(config.plugins).toEqual(['mi-plugin']);
+        expect(existsSync(join(root, 'mcp', 'codegraph'))).toBe(false);
+        rmSync(TEST_PROJ, { recursive: true, force: true });
     });
 });

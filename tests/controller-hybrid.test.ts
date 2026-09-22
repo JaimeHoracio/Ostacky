@@ -11,10 +11,18 @@ describe("controller-hybrid", () => {
     expect(pluginSrc.includes("LEVEL_RESOLVED")).toBe(false);
   });
 
+  it("entrypoint nativo V2", () => {
+    expect(pluginSrc).toContain('from "@opencode/plugin"');
+    expect(pluginSrc).toContain("Plugin.define");
+    expect(pluginSrc).toContain('id: "ostacky-controller"');
+    expect(pluginSrc.includes("@opencode-ai/plugin")).toBe(false);
+    expect(pluginSrc.includes("export const OstackyController: Plugin")).toBe(false);
+  });
+
   it("PENDING bloquea read (hard gate)", () => {
     expect(pluginSrc).toContain("ROUTE_DECISION_PENDING");
     expect(pluginSrc).toContain("BLOCKED: call consume_* first");
-    expect(pluginSrc).toContain("tool.execute.before");
+    expect(pluginSrc).toContain('ctx.tool.hook("execute.before"');
   });
 
   it("PENDING permite consume_route_decision", () => {
@@ -27,6 +35,9 @@ describe("controller-hybrid", () => {
     expect(pluginSrc).toContain("validate_edit");
     expect(pluginSrc).toContain("oldString === newString");
     expect(pluginSrc).toContain("CONFLICT: stale fingerprint");
+    expect(pluginSrc).toContain('tool === "write"');
+    expect(pluginSrc).toContain('tool === "patch"');
+    expect(pluginSrc).toContain("patchText");
   });
 
   it("tool observables exist", () => {

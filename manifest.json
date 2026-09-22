@@ -8,7 +8,7 @@
       "file": "assets/agents/ostacky.md",
       "description": "Orquestador con recuperación automática (nunca se congela), ruteo por nivel de impacto, controller MCP con SDK oficial, edición segura con fallback inline, y delegación en OpenSpec + Superpowers. v0.8.9: prune de skills obsoletas, lastHandoff, getAvailableTransitions, consecutiveFailures real, mem_session_summary automático al cierre.",
       "version": "0.8.9",
-      "sha256": "086767698acd284cbf4fe709994d2bd9d31ffef92b9760eb1cb4e653af8d426f"
+      "sha256": "d2c60e795dd19e764dce0c03e3dbfceb9ebc2a238c52f7675469d4b02ca9aa8e"
     }
   ],
   "commands": [
@@ -17,7 +17,7 @@
       "file": "assets/commands/install-stack.md",
       "description": "Instala el stack tecnológico del proyecto (CodeGraph, skills, OpenSpec, Engram, controller plugin). v0.8.9: controller plugin como alma hard-gate, Context7 removido del stack.",
       "version": "0.8.9",
-      "sha256": "bb4c39f476273bb2303d58a9299ae451981acbd5de90f4c04b00fff189153e71"
+      "sha256": "85e5a86eec081d02f8b9d453857a2e8b49211c2910287b6d1d8ae10208473dbd"
     },
     {
       "name": "opsx-sync",

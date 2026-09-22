@@ -91,7 +91,9 @@ function configureLocalTool(
   setMcpEntryAtProjectRoot(projectRoot, name, {
     type: "local",
     command,
-    enabled: true,
+    disabled: false,
+    timeout: { catalog: 30000, execution: 300000 },
+    protocol: "legacy",
   });
 }
 

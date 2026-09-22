@@ -1,8 +1,8 @@
 /**
- * Ostacky Controller — Plugin híbrido como alma
+ * Ostacky Controller — Plugin híbrido como alma (OpenCode V2)
  *
  * Fusiona assets/mcp/ostacky-controller/index.js + assets/plugins/ostacky-guard.ts
- * Mantiene máquina de 13 estados en-process y aplica hard gates en tool.execute.before.
+ * Mantiene máquina de 13 estados en-process y aplica hard gates en tool hook execute.before.
  * MCP queda thin solo para observabilidad (get_*).
  *
  * Single source security: mirrors generados desde src/security.ts via scripts/sync-controller-core.ts
@@ -11,9 +11,9 @@
  * CodeGraph preventivo: bloquea Read/Grep masivo sin Discovery hit.
  */
 
-import type { Plugin } from "@opencode-ai/plugin"
+import { Plugin } from "@opencode/plugin"
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, statSync, readdirSync, unlinkSync } from "node:fs"
-import { join, dirname, basename, resolve, relative } from "node:path"
+import { join, dirname, basename, resolve, relative, delimiter } from "node:path"
 import { SENSITIVE_DEFAULT, BASH_SENSITIVE_RE, isSensitive, extractPathsFromBash } from "./security.ts"
 import { isTrivial } from "./tiered.ts"
 import { STATES, TRANSITIONS, DEFAULT_STATE } from "./controller-core.ts"
@@ -23,12 +23,26 @@ import { STATES, TRANSITIONS, DEFAULT_STATE } from "./controller-core.ts"
 const MAX_STATE_FILE_SIZE = 2 * 1024 * 1024
 const PING_INTERVAL_MS = 60_000
 const IDLE_THRESHOLD_MS = 45_000
-const PURPLE_TENUE = "\x1b[38;5;183m"
-const PURPLE_RESET = "\x1b[0m"
 
 // DEFAULT_STATE imported from controller-core.ts
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function lookupOnPath(name: string): string | null {
+  try {
+    const pathEnv = process.env.PATH ?? ""
+    const suffix = process.platform === "win32" ? ".exe" : ""
+    for (const dir of pathEnv.split(delimiter)) {
+      if (!dir) continue
+      try {
+        const cand = join(dir, name + suffix)
+        if (existsSync(cand)) return cand
+        if (suffix && existsSync(join(dir, name))) return join(dir, name)
+      } catch {}
+    }
+  } catch {}
+  return null
+}
 
 function getStatePath(directory: string): string {
   if (process.env.OSTACKY_STATE_PATH) return process.env.OSTACKY_STATE_PATH
@@ -38,6 +52,7 @@ function getStatePath(directory: string): string {
       const raw = readFileSync(cand, "utf-8")
       const json = JSON.parse(raw.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, ""))
       const envPath = (json as any)?.mcp?.["ostacky-controller"]?.environment?.OSTACKY_STATE_PATH
+        ?? (json as any)?.mcp?.servers?.["ostacky-controller"]?.environment?.OSTACKY_STATE_PATH
       if (typeof envPath === "string" && envPath) return envPath
     } catch {}
   }
@@ -107,7 +122,7 @@ function getDiscoveryCacheHit(directory: string): boolean {
   try {
     const cacheDir = join(directory, ".opencode", "cache", "codegraph")
     if (!existsSync(cacheDir)) return false
-    const files = readdirSync(cacheDir).filter(f => f.startsWith("discovery-"))
+    const files = readdirSync(cacheDir).filter((f: string) => f.startsWith("discovery-"))
     if (files.length === 0) return false
     // check if any file is recent (<1h) and valid
     const now = Date.now()
@@ -128,83 +143,101 @@ function isCodegraphAvailable(directory: string): boolean {
     const bin = join(directory, ".opencode", "tools", "codegraph", "bin", "codegraph")
     const binExe = bin + ".exe"
     if (existsSync(bin) || existsSync(binExe)) return true
-    // also check global which
-    const which = (Bun as any).which?.("codegraph")
-    if (which) return true
+    // also check PATH
+    if (lookupOnPath("codegraph")) return true
     return false
   } catch { return false }
 }
 
-// Track trivial flag per session to gate tools
-const trivialBySession = new Map<string, boolean>()
-// Track discovery hit per requestId to avoid blocking after hit
-const discoveryHitByRequest = new Map<string, boolean>()
-// Track Engram hit per session to audit bypass (soft, no BLOCK)
-const engramHitBySession = new Map<string, boolean>()
-// ─── Heartbeat ping — evita sensación de trancado en tareas largas ──
-let lastPingTs = 0
-let pingInterval: ReturnType<typeof setInterval> | null = null
+function jsonContent(value: unknown): { content: string } {
+  try {
+    return { content: JSON.stringify(value) ?? "null" }
+  } catch {
+    return { content: "null" }
+  }
+}
+
+/**
+ * Extrae paths de un patchText V2 (`*** Add File: <path>`, Update/Delete/Move).
+ * Move trae `old --> new`: se revisan ambos lados.
+ */
+function extractPathsFromPatch(patchText: string): string[] {
+  if (!patchText) return []
+  const paths: string[] = []
+  const re = /^\*\*\* (?:Add File|Update File|Delete File|Move File):\s*(.+)$/gm
+  let m: RegExpExecArray | null
+  while ((m = re.exec(patchText)) !== null) {
+    const rest = (m[1] ?? "").trim()
+    for (const part of rest.split(/\s+-->\s+|\s+->\s+/)) {
+      const p = part.trim().replace(/^["']|["']$/g, "")
+      if (p) paths.push(p)
+    }
+  }
+  return [...new Set(paths)]
+}
 
 // ─── Plugin ──────────────────────────────────────────────────────────────────
 
-export const OstackyController: Plugin = async (ctx) => {
-  const patterns = (() => {
-    const raw = process.env.OSTACKY_SENSITIVE_PATTERNS
-    if (!raw) return SENSITIVE_DEFAULT
-    return raw.split(",").map(s => s.trim()).filter(Boolean)
-  })()
+export default Plugin.define({
+  id: "ostacky-controller",
+  async setup(ctx) {
+    const directory = ctx.location.directory
 
-  let lastCheck: { revision: number; result: string } | null = null
-  let checkCount = 0
+    // Track trivial flag per session to gate tools
+    const trivialBySession = new Map<string, boolean>()
+    // Track discovery hit per requestId to avoid blocking after hit
+    const discoveryHitByRequest = new Map<string, boolean>()
+    // Track Engram hit per session to audit bypass (soft, no BLOCK)
+    const engramHitBySession = new Map<string, boolean>()
+    // ─── Heartbeat ping — evita sensación de trancado en tareas largas ──
+    let lastPingTs = 0
+    let pingInterval: ReturnType<typeof setInterval> | null = null
 
-  // Heartbeat ping — purple tenue, evita sensación de trancado en tareas largas
-  if (!pingInterval) {
-    pingInterval = setInterval(async () => {
-      try {
-        const s = readState(ctx.directory)
-        if (!s || !["EXECUTING_INLINE", "EXECUTING_SUBAGENTS", "SYNC"].includes(s.state)) return
-        const now = Date.now()
-        const lastHeartbeat = s.lastHeartbeat || s.ts || now
-        const idle = now - lastHeartbeat
-        if (idle < IDLE_THRESHOLD_MS) return
-        if (now - lastPingTs < PING_INTERVAL_MS) return
-        lastPingTs = now
-        const completed = Object.values(s.tasks || {}).filter((t: any) => t.status === "COMPLETED").length
-        const total = s.expectedTaskCount ?? s.expectedTasks?.length ?? "?"
-        const pending = Array.isArray(s.expectedTasks) ? s.expectedTasks.filter((id: string) => !s.tasks?.[id] || s.tasks[id].status !== "COMPLETED").length : "?"
-        const msg = `🟣 ${PURPLE_TENUE}[OSTACKY]${PURPLE_RESET} ⏳ Sigo trabajando — ${s.state} • ${completed}/${total} (${pending} pendientes) • hace ${Math.round(idle/1000)}s sin output`
-        try { await (ctx as any).client?.tui?.showToast?.({ body: { message: msg, variant: "info" } } as any) } catch {}
-        try { await (ctx as any).client?.app?.log?.({ body: { service: "ostacky-ping", level: "info", message: msg } } as any) } catch {}
-        try { const st = readState(ctx.directory); if (st) { (st as any).lastPingTs = now; persistState(ctx.directory, st) } } catch {}
-      } catch {}
-    }, 30_000)
-    if (pingInterval && typeof (pingInterval as any).unref === 'function') (pingInterval as any).unref()
-  }
+    const patterns = (() => {
+      const raw = process.env.OSTACKY_SENSITIVE_PATTERNS
+      if (!raw) return SENSITIVE_DEFAULT
+      return raw.split(",").map((s: string) => s.trim()).filter(Boolean)
+    })()
 
-  return {
+    let lastCheck: { revision: number; result: string } | null = null
+    let checkCount = 0
+
+    // Heartbeat ping — evita sensación de trancado en tareas largas
+    // (V2: sin canal TUI en ctx; se loguea al server log y se persiste lastPingTs)
+    if (!pingInterval) {
+      pingInterval = setInterval(() => {
+        try {
+          const s = readState(directory)
+          if (!s || !["EXECUTING_INLINE", "EXECUTING_SUBAGENTS", "SYNC"].includes(s.state)) return
+          const now = Date.now()
+          const lastHeartbeat = s.lastHeartbeat || s.ts || now
+          const idle = now - lastHeartbeat
+          if (idle < IDLE_THRESHOLD_MS) return
+          if (now - lastPingTs < PING_INTERVAL_MS) return
+          lastPingTs = now
+          const completed = Object.values(s.tasks || {}).filter((t: any) => t.status === "COMPLETED").length
+          const total = s.expectedTaskCount ?? s.expectedTasks?.length ?? "?"
+          const pending = Array.isArray(s.expectedTasks) ? s.expectedTasks.filter((id: string) => !s.tasks?.[id] || s.tasks[id].status !== "COMPLETED").length : "?"
+          const msg = `[ostacky] Sigo trabajando — ${s.state} • ${completed}/${total} (${pending} pendientes) • hace ${Math.round(idle/1000)}s sin output`
+          try { console.log(msg) } catch {}
+          try { const st = readState(directory); if (st) { (st as any).lastPingTs = now; persistState(directory, st) } } catch {}
+        } catch {}
+      }, 30_000)
+      if (pingInterval && typeof (pingInterval as any).unref === 'function') (pingInterval as any).unref()
+    }
+
     // ── Tiered: suffix hint on user message (cache-friendly, no system replace) ──
-    "chat.message": async (input: any, output: any) => {
-      const sessionId: string = input.sessionID ?? "default"
-      const parts: any[] = output.parts || []
-      const text = parts.filter((p: any) => p.type === "text").map((p: any) => p.text ?? "").join("\n").trim()
-        || output.message?.summary?.title || ""
-      const state = readState(ctx.directory)
+    await ctx.session.hook("prompt", (event) => {
+      const sessionId: string = event.sessionID ?? "default"
+      const text = (event.prompt.text ?? "").trim()
+      const state = readState(directory)
       const currentState = state?.state ?? "DONE"
       const trivial = isTrivial(text, currentState)
       trivialBySession.set(sessionId, trivial)
       if (trivial) {
-        // Preserve system[0] FULL cacheable, add suffix hint to user message
+        // Preserve system FULL cacheable, add suffix hint to user prompt text
         const hint = "\n\n[PLUGIN HINT: Saludo trivial — responde breve sin tools. No hagas Discovery.]"
-        if (output.parts && output.parts.length > 0) {
-          const last = output.parts[output.parts.length - 1]
-          if (last.type === "text") last.text = (last.text ?? "") + hint
-          else output.parts.push({ type: "text", text: hint })
-        } else if (output.message) {
-          output.parts = [{ type: "text", text: text + hint }]
-        }
-      } else {
-        // Also handle TIER1 hint for small tasks without replacing system
-        // Intent detection for downgradeable 0/0+1 is done in record_discovery router, not here
+        event.prompt.text = (event.prompt.text ?? "") + hint
       }
       // harden-compaction-resume: auto-inject recovery hint when pending (determinístico, no depende del modelo)
       if (!trivial && state && !["DONE", "INTERPRETATION_PENDING"].includes(state.state)) {
@@ -214,7 +247,7 @@ export const OstackyController: Plugin = async (ctx) => {
             : []
           if (pending.length === 0) {
             try {
-              const fallbackPath = join(dirname(getStatePath(ctx.directory)), ".ostacky-handoff-compaction.json")
+              const fallbackPath = join(dirname(getStatePath(directory)), ".ostacky-handoff-compaction.json")
               if (existsSync(fallbackPath)) {
                 const raw = readFileSync(fallbackPath, "utf-8")
                 const data = JSON.parse(raw)
@@ -227,27 +260,21 @@ export const OstackyController: Plugin = async (ctx) => {
           }
           if (pending.length > 0) {
             const hint = `\n\n[RECOVERY: te quedan ${pending.slice(0, 3).join(",")}${pending.length > 3 ? `, +${pending.length - 3} más` : ""} - usa get_handoff / mem_context para retomar]`
-            if (output.parts && output.parts.length > 0) {
-              const last = output.parts[output.parts.length - 1]
-              if (last.type === "text") last.text = (last.text ?? "") + hint
-              else output.parts.push({ type: "text", text: hint })
-            } else {
-              output.parts = [{ type: "text", text: text + hint }]
-            }
+            event.prompt.text = (event.prompt.text ?? "") + hint
           }
         } catch {}
       }
-    },
+    })
 
     // ── Hard gates before any tool ──
-    "tool.execute.before": async (input: any, _output: any) => {
-      const tool: string = (input as any).tool as string
-      const args: any = (input as any).args as any
-      const sessionId: string = (input as any).sessionID ?? "default"
+    await ctx.tool.hook("execute.before", (event) => {
+      const tool: string = event.tool as string
+      const args: any = (event.input ?? {}) as any
+      const sessionId: string = (event.sessionID ?? "default") as string
 
       // ── 0) Trivial greeting blocks for expensive tools (SKIP, not BLOCKED) ──
       const isTrivialSession = trivialBySession.get(sessionId) ?? false
-      const stateForTrivial = readState(ctx.directory)
+      const stateForTrivial = readState(directory)
       if (isTrivialSession && stateForTrivial?.state === "DONE") {
         const blockedForTrivial = [
           "engram_mem_context", "mem_context",
@@ -261,7 +288,7 @@ export const OstackyController: Plugin = async (ctx) => {
 
       // ── 1) PENDING hard gate (0 tokens) ──
       checkCount++
-      const freshState = readState(ctx.directory)
+      const freshState = readState(directory)
       const pendingStates = ["ROUTE_DECISION_PENDING", "EXECUTION_DECISION_PENDING", "CLARIFICATION_PENDING"]
       if (freshState && pendingStates.includes(freshState.state)) {
         // cache ALLOW per revision, BLOCKED never cached
@@ -291,11 +318,11 @@ export const OstackyController: Plugin = async (ctx) => {
         const shouldAudit = !hasEngramHit && !isTrivialForEngram && stateForEngram && ["DISCOVERY", "ROUTE_DECISION_PENDING", "SPECIFICATION", "INTERPRETATION_PENDING"].includes(stateForEngram.state)
         if (shouldAudit) {
           try {
-            const st = readState(ctx.directory)
+            const st = readState(directory)
             if (st) {
               st.engramBypassCount = (st.engramBypassCount || 0) + 1
               // no persist cada vez si es muy frecuente: single-writer ya persiste en after, pero acá persistimos directo para auditoría
-              persistState(ctx.directory, st)
+              persistState(directory, st)
             }
           } catch {}
         }
@@ -304,16 +331,16 @@ export const OstackyController: Plugin = async (ctx) => {
       // ── 1.5) Router determinista: openspec-propose bloquea si 1+ no-downgradeable sin Alternatives ──
       const isOpenspecPropose = tool.includes("openspec") && (tool.includes("propose") || args?.filePath?.includes("openspec/changes") || args?.path?.includes("openspec/changes"))
       if (isOpenspecPropose) {
-        const s = readState(ctx.directory)
+        const s = readState(directory)
         if (s?.level === "1+" && s?._routerNeedsAlternatives) {
           // check if design.md has Alternatives
           try {
             const changeId = args?.changeId || s?.changeId || ""
             let designPath: string | null = null
-            if (changeId) designPath = join(ctx.directory, "openspec", "changes", changeId, "design.md")
+            if (changeId) designPath = join(directory, "openspec", "changes", changeId, "design.md")
             else {
               // try to find any change dir with _routerNeedsAlternatives
-              const changesDir = join(ctx.directory, "openspec", "changes")
+              const changesDir = join(directory, "openspec", "changes")
               if (existsSync(changesDir)) {
                 for (const entry of readdirSync(changesDir)) {
                   const p = join(changesDir, entry, "design.md")
@@ -350,8 +377,8 @@ export const OstackyController: Plugin = async (ctx) => {
         // Grep on *.md should not be blocked
         const isLiteralGrep = tool === "grep" && (args?.include?.endsWith(".md") || args?.include?.endsWith(".json"))
         if (isCodeFile && !isLiteralGrep && !isSpecTasksPath) {
-          const hasDiscoveryHit = discoveryHitByRequest.get(sessionId) ?? getDiscoveryCacheHit(ctx.directory)
-          const codegraphOk = isCodegraphAvailable(ctx.directory)
+          const hasDiscoveryHit = discoveryHitByRequest.get(sessionId) ?? getDiscoveryCacheHit(directory)
+          const codegraphOk = isCodegraphAvailable(directory)
           if (codegraphOk && !hasDiscoveryHit) {
             // Allow if file is not indexable or trivial?
             // Block with suggestion
@@ -361,7 +388,7 @@ export const OstackyController: Plugin = async (ctx) => {
       }
 
       // ── 3) Sensitive gate (hard, even in degraded) ──
-      if (tool === "bash") {
+      if (tool === "shell") {
         const cmd: string = args?.command || args?.cmd || ""
         if (typeof cmd === "string" && cmd) {
           const normalized = cmd.replace(/["'`]/g, "").replace(/\\/g, "")
@@ -371,27 +398,27 @@ export const OstackyController: Plugin = async (ctx) => {
           if (hasSensitivePattern || sensitivePaths.length > 0) {
             if (sensitivePaths.length > 0) {
               for (const p of sensitivePaths) {
-                const s = readState(ctx.directory)
-                const candidates = [p, resolve(ctx.directory, p), join(ctx.directory, p)]
+                const s = readState(directory)
+                const candidates = [p, resolve(directory, p), join(directory, p)]
                 const allowed = candidates.some((c) => s?.allowedFiles?.[c] || s?.allowedFiles?.[p])
-                const baseAllowed = s?.allowedFiles?.[p] || s?.allowedFiles?.[basename(p)] || s?.allowedFiles?.[resolve(ctx.directory, p)]
+                const baseAllowed = s?.allowedFiles?.[p] || s?.allowedFiles?.[basename(p)] || s?.allowedFiles?.[resolve(directory, p)]
                 if (!allowed && !baseAllowed) {
                   const denied = s?.deniedFiles?.[p] || s?.deniedFiles?.[basename(p)]
-                  if (denied) throw new Error(`BLOCKED: bash contiene acceso sensible (${p}) (previously denied) — Llamá check_file_access con reason antes.`)
-                  throw new Error(`BLOCKED: bash contiene acceso sensible (${p}). Llamá check_file_access con reason antes.`)
+                  if (denied) throw new Error(`BLOCKED: shell contiene acceso sensible (${p}) (previously denied) — Llamá check_file_access con reason antes.`)
+                  throw new Error(`BLOCKED: shell contiene acceso sensible (${p}). Llamá check_file_access con reason antes.`)
                 }
               }
             } else if (hasSensitivePattern) {
-              const s = readState(ctx.directory)
+              const s = readState(directory)
               const hasAllowed = Object.keys(s?.allowedFiles || {}).some((k) => isSensitive(k, patterns))
-              if (!hasAllowed) throw new Error(`BLOCKED: bash contiene acceso sensible (.env). Llamá check_file_access con reason antes.`)
+              if (!hasAllowed) throw new Error(`BLOCKED: shell contiene acceso sensible (.env). Llamá check_file_access con reason antes.`)
             }
           }
         }
       }
 
-      // ── 3.5) Bash file-mutation gate (harden-task-integrity: bash mutante requiere validate_edit) ──
-      if (tool === "bash" && freshState && ["EXECUTING_INLINE", "EXECUTING_SUBAGENTS"].includes(freshState.state)) {
+      // ── 3.5) Shell file-mutation gate (harden-task-integrity: shell mutante requiere validate_edit) ──
+      if (tool === "shell" && freshState && ["EXECUTING_INLINE", "EXECUTING_SUBAGENTS"].includes(freshState.state)) {
         const cmdForMutation: string = args?.command || args?.cmd || ""
         const isMutating = /[>]{1,2}\s*\S+|\bsed\b[^|;]*-i|\btruncate\b|\btee\b|\bcp\s+|\bmv\s+|python.*open.*w/.test(cmdForMutation)
         if (isMutating) {
@@ -400,24 +427,24 @@ export const OstackyController: Plugin = async (ctx) => {
             if (!p) continue
             const isProjectCode = p.includes("src/") || p.includes("assets/") || /\.(ts|js|tsx|jsx|mts|cts)$/i.test(p)
             if (!isProjectCode) continue
-            if (!isPathInsideProject(p, ctx.directory)) continue
-            const abs = resolve(ctx.directory, p)
+            if (!isPathInsideProject(p, directory)) continue
+            const abs = resolve(directory, p)
             const exists = existsSync(abs)
             const isNewFile = !exists && !freshState.fileFingerprints?.[p] && !Object.values(freshState.tasks || {}).some((t: any) => t.filePath === p)
             if (isNewFile) continue
             const lv = freshState.lastValidated
             if (!lv || lv.filePath !== p) {
-              throw new Error(`BLOCKED: file mutation requires validate_edit/expectedTask for ${p} — usa validate_edit antes de bash mutante`)
+              throw new Error(`BLOCKED: file mutation requires validate_edit/expectedTask for ${p} — usa validate_edit antes de shell mutante`)
             }
           }
         }
       }
 
       let filePath: string | undefined
-      if (tool === "read" || tool === "read_mcp_resource" || tool === "grep" || tool === "glob" || tool === "write" || tool === "edit") {
+      if (tool === "read" || tool === "read_mcp_resource" || tool === "grep" || tool === "glob" || tool === "edit" || tool === "write") {
         filePath = args?.filePath || args?.path || args?.pattern || args?.uri || ""
         if (tool === "grep" && args?.include) filePath = args.include
-        if (tool === "write" || tool === "edit") filePath = args?.filePath || args?.path || ""
+        if (tool === "edit" || tool === "write") filePath = args?.filePath || args?.path || ""
         if (tool === "read_mcp_resource" && typeof args?.uri === "string") {
           try {
             const u = args.uri as string
@@ -427,17 +454,30 @@ export const OstackyController: Plugin = async (ctx) => {
         }
       }
       if (filePath && isSensitive(filePath, patterns)) {
-        const s = readState(ctx.directory)
-        const allowed = s?.allowedFiles?.[filePath] || s?.allowedFiles?.[resolve(ctx.directory, filePath)] || s?.allowedFiles?.[basename(filePath)]
+        const s = readState(directory)
+        const allowed = s?.allowedFiles?.[filePath] || s?.allowedFiles?.[resolve(directory, filePath)] || s?.allowedFiles?.[basename(filePath)]
         if (!allowed) {
           const denied = s?.deniedFiles?.[filePath] || s?.deniedFiles?.[basename(filePath)]
           if (denied) throw new Error(`BLOCKED: File ${filePath} requires check_file_access (previously denied)`)
           throw new Error(`BLOCKED: File ${filePath} requires check_file_access`)
         }
       }
+      // patch usa patchText (no filePath): se chequean los paths mencionados
+      if (tool === "patch" && typeof args?.patchText === "string" && args.patchText) {
+        for (const patchPath of extractPathsFromPatch(args.patchText)) {
+          if (!patchPath || !isSensitive(patchPath, patterns)) continue
+          const s = readState(directory)
+          const allowed = s?.allowedFiles?.[patchPath] || s?.allowedFiles?.[resolve(directory, patchPath)] || s?.allowedFiles?.[basename(patchPath)]
+          if (!allowed) {
+            const denied = s?.deniedFiles?.[patchPath] || s?.deniedFiles?.[basename(patchPath)]
+            if (denied) throw new Error(`BLOCKED: File ${patchPath} requires check_file_access (previously denied)`)
+            throw new Error(`BLOCKED: File ${patchPath} requires check_file_access`)
+          }
+        }
+      }
 
-      // ── 4) validate_edit in-process for write/edit ──
-      if (tool === "write" || tool === "edit") {
+      // ── 4) validate_edit in-process for edit/write (V2 keeps both tools; patch usa patchText y queda fuera — follow-up) ──
+      if (tool === "edit" || tool === "write") {
         const oldString: string = args?.oldString ?? ""
         const newString: string = args?.newString ?? args?.content ?? ""
         const targetPath: string = args?.filePath || args?.path || ""
@@ -445,31 +485,30 @@ export const OstackyController: Plugin = async (ctx) => {
           if (oldString === newString) {
             throw new Error(`CONFLICT: oldString === newString`)
           }
-          if (!isPathInsideProject(targetPath, ctx.directory)) {
+          if (!isPathInsideProject(targetPath, directory)) {
             throw new Error(`BLOCKED: path outside project: ${targetPath}`)
           }
           // If oldString is hash:<fp> handle stale check
           if (oldString.startsWith("hash:")) {
             const claimed = oldString.slice(5)
-            const currentFp = fastFingerprint(resolve(ctx.directory, targetPath))
-            const s = readState(ctx.directory)
+            const currentFp = fastFingerprint(resolve(directory, targetPath))
+            const s = readState(directory)
             const last = s?.lastValidated
             if (claimed !== currentFp || (last && last.filePath === targetPath && last.hash !== currentFp)) {
               // mark stale attempt
               try {
-                const st = readState(ctx.directory) || { ...DEFAULT_STATE }
+                const st = readState(directory) || { ...DEFAULT_STATE }
                 st.staleContentAttempts = (st.staleContentAttempts || 0) + 1
-                persistState(ctx.directory, st)
+                persistState(directory, st)
               } catch {}
               throw new Error(`CONFLICT: stale fingerprint for ${targetPath}`)
             }
           } else if (oldString.length > 0) {
             // Check fresh content has exactly one occurrence
             try {
-              const fullPath = resolve(ctx.directory, targetPath)
+              const fullPath = resolve(directory, targetPath)
               if (existsSync(fullPath)) {
                 const content = readFileSync(fullPath, "utf-8")
-                const escaped = oldString.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
                 // count occurrences literally, not regex
                 let count = 0
                 let idx = 0
@@ -488,24 +527,25 @@ export const OstackyController: Plugin = async (ctx) => {
           }
           // Record lastValidated for future hash checks
           try {
-            const st = readState(ctx.directory)
+            const st = readState(directory)
             if (st) {
-              const fp = fastFingerprint(resolve(ctx.directory, targetPath))
+              const fp = fastFingerprint(resolve(directory, targetPath))
               st.lastValidated = { filePath: targetPath, hash: fp, ts: Date.now() }
             }
           } catch {}
         }
       }
-    },
+    })
 
-    "tool.execute.after": async (input: any, output: any) => {
+    await ctx.tool.hook("execute.after", (event) => {
       // Track discovery hit to allow subsequent Reads
-      const tool: string = (input as any).tool as string
-      const sessionId: string = (input as any).sessionID ?? "default"
+      const tool: string = event.tool as string
+      const sessionId: string = (event.sessionID ?? "default") as string
+      const resultText = event.status === "completed" && event.result ? JSON.stringify(event.result) : ""
       if (tool.includes("getDiscoverySnapshot") || tool.includes("get_discovery_snapshot")) {
         // if output indicates hit, mark it
         try {
-          const text = typeof output === "string" ? output : JSON.stringify(output)
+          const text = resultText
           if (text && !text.includes("null") && text.length > 10) {
             discoveryHitByRequest.set(sessionId, true)
           }
@@ -519,61 +559,56 @@ export const OstackyController: Plugin = async (ctx) => {
       if (tool.includes("engram_mem_search") || tool.includes("engram_mem_context") || tool.includes("mem_search") || tool.includes("mem_context") || tool.includes("getEngramDedup") || tool.includes("engram_mem_")) {
         engramHitBySession.set(sessionId, true)
       }
-      // Update state metrics for cache hit (best-effort)
-      if (tool.includes("getDiscoverySnapshot") && output) {
-        try {
-          const s = readState((input as any).ctx?.directory ?? "")
-        } catch {}
-      }
-      // Heartbeat + color purple tenue: Ostacky vs modelo (fácil) — single-writer: plugin memo, no persist cada tool (D10)
-      let lastHeartbeatMem = 0
+      // Heartbeat: single-writer — plugin memo, no persist cada tool (D10)
       try {
-        const dir = ctx.directory
-        const s = readState(dir)
+        const s = readState(directory)
         if (s) {
           const now = Date.now()
-          lastHeartbeatMem = now
           // Single-writer: solo persiste si OSTACKY_PLUGIN_PERSIST=1 o idle>30s o state cambió
           const shouldPersist = process.env.OSTACKY_PLUGIN_PERSIST === "1" || (now - (s.lastHeartbeat || 0) > 30000)
           if (shouldPersist) {
             s.lastHeartbeat = now
-            try { persistState(dir, s) } catch {}
-          }
-          if (["EXECUTING_INLINE", "EXECUTING_SUBAGENTS", "SYNC"].includes(s.state) && output && typeof output.title === "string" && output.title && !output.title.includes("🟣")) {
-            output.title = `🟣 ${PURPLE_TENUE}[OSTACKY]${PURPLE_RESET} ${output.title}`
+            try { persistState(directory, s) } catch {}
           }
         }
       } catch {}
-    },
+    })
+
+    const emptySchema = {
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    } as const
 
     // ── Observable tools (MCP thin replacement) ──
-    tool: {
-      ostacky_get_state: {
+    await ctx.tool.transform((editor) => {
+      editor.add({
+        name: "ostacky_get_state",
         description: "Get Ostacky controller state (plugin, no MCP needed)",
-        parameters: {} as any,
-        execute: async (_args: any, ctx2: any) => {
-          const dir = ctx2?.directory ?? ctx.directory
-          const state = readState(dir)
-          if (!state) return { error: "no state", state: "UNKNOWN", revision: 0 }
-          return { state: state.state, revision: state.revision, requestId: state.requestId, degraded: !!state.degraded, level: state.level, routeChoice: state.routeChoice }
+        input: emptySchema,
+        execute: async () => {
+          const state = readState(directory)
+          if (!state) return jsonContent({ error: "no state", state: "UNKNOWN", revision: 0 })
+          return jsonContent({ state: state.state, revision: state.revision, requestId: state.requestId, degraded: !!state.degraded, level: state.level, routeChoice: state.routeChoice })
         },
-      },
-      ostacky_get_audit: {
+      })
+      editor.add({
+        name: "ostacky_get_audit",
         description: "Get audit trail (plugin)",
-        parameters: {} as any,
-        execute: async (_args: any, ctx2: any) => {
-          const dir = ctx2?.directory ?? ctx.directory
-          const state = readState(dir)
-          return { audit: state?.audit ?? [], revision: state?.revision ?? 0 }
+        input: emptySchema,
+        execute: async () => {
+          const state = readState(directory)
+          return jsonContent({ audit: state?.audit ?? [], revision: state?.revision ?? 0 })
         },
-      },
-      ostacky_get_metrics: {
+      })
+      editor.add({
+        name: "ostacky_get_metrics",
         description: "Get controller metrics (plugin)",
-        parameters: {} as any,
-        execute: async (_args: any, ctx2: any) => {
-          const dir = ctx2?.directory ?? ctx.directory
-          const state = readState(dir)
-          return {
+        input: emptySchema,
+        execute: async () => {
+          const state = readState(directory)
+          return jsonContent({
             cacheHitCount: state?.cacheHitCount ?? 0,
             discoveryCacheHitCount: state?.discoveryCacheHitCount ?? 0,
             tokenSavingEstimate: state?.tokenSavingEstimate ?? 0,
@@ -581,90 +616,99 @@ export const OstackyController: Plugin = async (ctx) => {
             codegraphBypassCount: state?.codegraphBypassCount ?? 0,
             engramBypassCount: state?.engramBypassCount ?? 0,
             revision: state?.revision ?? 0,
-          }
+          })
         },
-      },
-      ostacky_get_handoff: {
+      })
+      editor.add({
+        name: "ostacky_get_handoff",
         description: "Get last handoff (plugin)",
-        parameters: {} as any,
-        execute: async (_args: any, ctx2: any) => {
-          const dir = ctx2?.directory ?? ctx.directory
-          const state = readState(dir)
+        input: emptySchema,
+        execute: async () => {
+          const state = readState(directory)
           // also check compaction fallback
           try {
-            const fallback = join(dirname(getStatePath(dir)), ".ostacky-handoff-compaction.json")
+            const fallback = join(dirname(getStatePath(directory)), ".ostacky-handoff-compaction.json")
             if (existsSync(fallback)) {
               const raw = readFileSync(fallback, "utf-8")
               const data = JSON.parse(raw)
-              if (data && !state?.lastHandoff) return data
+              if (data && !state?.lastHandoff) return jsonContent(data)
             }
           } catch {}
-          return state?.lastHandoff ?? null
+          return jsonContent(state?.lastHandoff ?? null)
         },
-      },
-      ostacky_get_available_transitions: {
+      })
+      editor.add({
+        name: "ostacky_get_available_transitions",
         description: "Get available transitions from current state",
-        parameters: {} as any,
-        execute: async (_args: any, ctx2: any) => {
-          const dir = ctx2?.directory ?? ctx.directory
-          const state = readState(dir)
+        input: emptySchema,
+        execute: async () => {
+          const state = readState(directory)
           const cur = state?.state ?? "INTERPRETATION_PENDING"
           const trans = TRANSITIONS[cur] ?? []
-          return { currentState: cur, transitions: trans }
+          return jsonContent({ currentState: cur, transitions: trans })
         },
-      },
+      })
       // Compatibility for old MCP calls that expect deprecated response
-      ostacky_check_pending_state: {
+      editor.add({
+        name: "ostacky_check_pending_state",
         description: "[deprecated] plugin enforces — use tool before hook",
-        parameters: {} as any,
-        execute: async (_args: any) => {
-          return { deprecated: true, hint: "plugin enforces", allowed: true }
+        input: emptySchema,
+        execute: async () => {
+          return jsonContent({ deprecated: true, hint: "plugin enforces", allowed: true })
         },
-      },
-      ostacky_validate_edit: {
+      })
+      editor.add({
+        name: "ostacky_validate_edit",
         description: "[deprecated] plugin enforces validate_edit in-process",
-        parameters: {} as any,
-        execute: async (_args: any) => {
-          return { deprecated: true, hint: "plugin enforces" }
+        input: emptySchema,
+        execute: async () => {
+          return jsonContent({ deprecated: true, hint: "plugin enforces" })
         },
-      },
-    },
+      })
+    })
 
-    event: async ({ event }: any) => {
-      if (event.type === "session.deleted") {
-        const sid = (event.properties as any)?.info?.id
-        if (sid) {
-          trivialBySession.delete(sid)
-          discoveryHitByRequest.delete(sid)
-          engramHitBySession.delete(sid)
+    const eventController = new AbortController()
+    void (async () => {
+      for await (const event of ctx.event.subscribe({ signal: eventController.signal })) {
+        if (event.type === "session.deleted") {
+          const sid = event.data.sessionID as string
+          if (sid) {
+            trivialBySession.delete(sid)
+            discoveryHitByRequest.delete(sid)
+            engramHitBySession.delete(sid)
+          }
         }
       }
-    },
+    })()
 
-    dispose: async () => {
-      try { if (pingInterval) clearInterval(pingInterval) } catch {}
-      pingInterval = null
-    },
-
-    "experimental.session.compacting": async (input: any, output: any) => {
+    await ctx.session.hook("compaction", (event) => {
       try {
-        const statePath = getStatePath(ctx.directory)
+        const statePath = getStatePath(directory)
         const dir = dirname(statePath)
         try { mkdirSync(dir, { recursive: true }) } catch {}
         const fallbackPath = join(dir, ".ostacky-handoff-compaction.json")
+        const contextSnippet = (() => {
+          try {
+            return JSON.stringify(event.messages.slice(0, 2)).slice(0, 800)
+          } catch { return "" }
+        })()
         const payload = {
-          summary: `Compaction fallback for session ${input.sessionID ?? "unknown"} — plugin`,
+          summary: `Compaction fallback for session ${event.sessionID ?? "unknown"} — plugin`,
           nextSteps: [] as string[],
           pendingTasks: [] as string[],
           ts: Date.now(),
-          contextSnippet: output.context?.slice(0, 2).join("\n\n").slice(0, 800) ?? "",
+          contextSnippet,
         }
         const tmp = `${fallbackPath}.tmp.${process.pid}`
         writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf-8")
         renameSync(tmp, fallbackPath)
       } catch {}
-    },
-  }
-}
+    })
 
-export default OstackyController
+    return () => {
+      try { if (pingInterval) clearInterval(pingInterval) } catch {}
+      pingInterval = null
+      eventController.abort()
+    }
+  },
+})

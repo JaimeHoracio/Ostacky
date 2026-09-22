@@ -49,7 +49,9 @@ export function createMcpConfigEntry(
     const entry: Record<string, unknown> = {
         type: 'local',
         command: [nodeExecutable, serverPath],
-        enabled: true,
+        disabled: false,
+        timeout: { catalog: 30000, execution: 300000 },
+        protocol: 'legacy',
     };
     if (name === 'ostacky-controller' && statePath) {
         entry.environment = { OSTACKY_STATE_PATH: statePath };
@@ -613,15 +615,24 @@ export function uninstallMcpServer(name: string, paths: OpenCodePaths): boolean 
         return false;
     }
 
-    // Remover de opencode.jsonc
+    // Remover de opencode.json / opencode.jsonc (forma V2 mcp.servers + legacy mcp.<name>)
     const projectRoot = dirname(paths.root);
     const configPath = findOpenCodeConfig(projectRoot);
     if (configPath) {
         const config = readOpenCodeConfig(configPath);
         if (config) {
             const mcp = config.mcp as Record<string, unknown> | undefined;
-            if (mcp && mcp[name]) {
-                delete mcp[name];
+            if (mcp) {
+                const servers = mcp.servers as Record<string, unknown> | undefined;
+                if (servers && name in servers) {
+                    delete servers[name];
+                    if (Object.keys(servers).length === 0) {
+                        delete mcp.servers;
+                    }
+                }
+                if (name in mcp && name !== 'servers') {
+                    delete mcp[name];
+                }
                 if (Object.keys(mcp).length === 0) {
                     delete config.mcp;
                 }

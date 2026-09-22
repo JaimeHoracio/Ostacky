@@ -67,10 +67,12 @@ Verifica que el MCP server esté configurado en `opencode.json` apuntando al bin
 ```json
 {
     "mcp": {
-        "codegraph": {
-            "type": "local",
-            "command": [".opencode/tools/codegraph/bin/codegraph", "serve", "--mcp"],
-            "enabled": true
+        "servers": {
+            "codegraph": {
+                "type": "local",
+                "command": [".opencode/tools/codegraph/bin/codegraph", "serve", "--mcp"],
+                "disabled": false
+            }
         }
     }
 }
@@ -99,10 +101,12 @@ El controller MCP se configura como server local en `opencode.json`. Si el contr
 ```json
 {
     "mcp": {
-        "ostacky-controller": {
-            "type": "local",
-            "command": ["node", ".opencode/mcp/ostacky-controller/index.js"],
-            "enabled": true
+        "servers": {
+            "ostacky-controller": {
+                "type": "local",
+                "command": ["node", ".opencode/mcp/ostacky-controller/index.js"],
+                "disabled": false
+            }
         }
     }
 }
@@ -197,7 +201,7 @@ Leé `opencode.json` (o `opencode.jsonc`) en la raíz del proyecto.
 
 **Eliminá** cualquier entrada `"plugin": ["superpowers@git+https://github.com/obra/superpowers.git"]` (y equivalentes). Las skills ya están provistas por el bundle local, no por el plugin.
 
-**Preservá** sin tocar el bloque `mcp.codegraph` configurado en el Paso 1.
+**Preservá** sin tocar el bloque `mcp.servers.codegraph` configurado en el Paso 1.
 
 **Resultado final esperado** de `opencode.json` (o `opencode.jsonc`):
 
@@ -205,20 +209,22 @@ Leé `opencode.json` (o `opencode.jsonc`) en la raíz del proyecto.
 {
     "$schema": "https://opencode.ai/config.json",
     "mcp": {
-        "codegraph": {
-            "type": "local",
-            "command": [".opencode/tools/codegraph/bin/codegraph", "serve", "--mcp"],
-            "enabled": true
-        },
-        "engram": {
-            "type": "local",
-            "command": [".opencode/tools/engram/bin/engram", "mcp"],
-            "enabled": true
-        },
-        "ostacky-controller": {
-            "type": "local",
-            "command": ["node", ".opencode/mcp/ostacky-controller/index.js"],
-            "enabled": true
+        "servers": {
+            "codegraph": {
+                "type": "local",
+                "command": [".opencode/tools/codegraph/bin/codegraph", "serve", "--mcp"],
+                "disabled": false
+            },
+            "engram": {
+                "type": "local",
+                "command": [".opencode/tools/engram/bin/engram", "mcp"],
+                "disabled": false
+            },
+            "ostacky-controller": {
+                "type": "local",
+                "command": ["node", ".opencode/mcp/ostacky-controller/index.js"],
+                "disabled": false
+            }
         }
     }
 }
@@ -306,10 +312,12 @@ Verificá que `opencode.json` contenga la entrada MCP de Engram apuntando al bin
 ```json
 {
     "mcp": {
-        "engram": {
-            "type": "local",
-            "command": [".opencode/tools/engram/bin/engram", "mcp"],
-            "enabled": true
+        "servers": {
+            "engram": {
+                "type": "local",
+                "command": [".opencode/tools/engram/bin/engram", "mcp"],
+                "disabled": false
+            }
         }
     }
 }

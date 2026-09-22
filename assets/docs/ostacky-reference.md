@@ -50,7 +50,7 @@ Allowlist: `.env.example/.template/.sample` nunca bloquea. `extractPathsFromBash
 
 ## Enforcement (plugin)
 
-El plugin hace cumplir `PENDING` en `tool.execute.before`; `lastCheck={revision, result}` cachea ALLOW por revisión, revalida si cambia o >5 tools; `BLOCKED` nunca cacheado. Métricas `stateCheckCount` cuentan checks del plugin (no del LLM).
+El plugin hace cumplir `PENDING` en `ctx.tool.hook("execute.before")`; `lastCheck={revision, result}` cachea ALLOW por revisión, revalida si cambia o >5 tools; `BLOCKED` nunca cacheado. Métricas `stateCheckCount` cuentan checks del plugin (no del LLM).
 
 ## Tiered Behaviour
 

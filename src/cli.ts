@@ -258,6 +258,17 @@ async function runDoctorCommand() {
         check('manifest: not found', false, true);
     }
 
+    // V2 checks (ostacky-opencode-v2-compat): plugin API, mcp.servers, legacy warn-only, commands
+    try {
+        const { checkDoctorV2 } = await import('./doctor-v2.js');
+        for (const line of checkDoctorV2(cwd)) {
+            console.log(line);
+            if (line.startsWith('⚠️') || line.startsWith('❌')) hasWarn = true;
+        }
+    } catch {
+        check('doctor-v2: check failed', false, true);
+    }
+
     // sensitive files denied check
     if (existsSync(statePath)) {
         try {
