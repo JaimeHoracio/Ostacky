@@ -17,3 +17,6 @@ openspec/
 .opencode/ostacky-state.json.lock.*
 .opencode/ostacky-audit.jsonl
 .codegraph/
+
+.agents/
+material/

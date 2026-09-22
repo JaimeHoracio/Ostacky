@@ -231,7 +231,7 @@ export async function probeMcpServer(
                 params: {
                     protocolVersion: '2025-03-26',
                     capabilities: {},
-                    clientInfo: { name: 'ostacky-installer', version: '0.8.9' },
+                    clientInfo: { name: 'ostacky-installer', version: '0.9.0' },
                 },
             });
         });

@@ -2143,31 +2143,6 @@ class OstackyController {
         } catch {}
     }
 
-    // --- 5.4 hardening-v2: cache metrics (token efficiency) ---
-    async recordCacheHit({ tokensSaved = 500 } = {}) {
-        this.#load();
-        this.#state.cacheHitCount = (this.#state.cacheHitCount || 0) + 1;
-        const saved = typeof tokensSaved === 'number' && tokensSaved > 0 ? tokensSaved : 500;
-        this.#state.tokenSavingEstimate = (this.#state.tokenSavingEstimate || 0) + saved;
-        try {
-            await this.#persist();
-        } catch {}
-        return {
-            ok: true,
-            cacheHitCount: this.#state.cacheHitCount,
-            tokenSavingEstimate: this.#state.tokenSavingEstimate,
-        };
-    }
-
-    async recordCacheMiss() {
-        this.#load();
-        this.#state.cacheMissCount = (this.#state.cacheMissCount || 0) + 1;
-        try {
-            await this.#persist();
-        } catch {}
-        return { ok: true, cacheMissCount: this.#state.cacheMissCount };
-    }
-
     async recordUserConfirmation({ decisionId, confirmationText } = {}) {
         this.#load();
         if (!decisionId || typeof confirmationText !== 'string') {
@@ -2810,7 +2785,7 @@ function safeHandler(fn, options = {}) {
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.8.9',
+    version: '0.9.0',
 });
 
 server.registerTool(
@@ -3051,34 +3026,6 @@ server.registerTool(
         },
         { maxRetries: 1 }
     )
-);
-
-server.registerTool(
-    'record_cache_hit',
-    {
-        description: 'Deprecated: cache hit',
-        inputSchema: z.object({
-            tokensSaved: z.number().optional().describe('Estimated tokens saved (default 500)'),
-        }),
-    },
-    safeHandler(async ({ tokensSaved }) => {
-        log('tool:record_cache_hit', { tokensSaved, deprecated: true });
-        const r = await controller.recordCacheHit({ tokensSaved });
-        return { ...r, deprecated: true };
-    })
-);
-
-server.registerTool(
-    'record_cache_miss',
-    {
-        description: 'Deprecated: cache miss',
-        inputSchema: z.object({}),
-    },
-    safeHandler(async () => {
-        log('tool:record_cache_miss', { deprecated: true });
-        const r = await controller.recordCacheMiss();
-        return { ...r, deprecated: true };
-    })
 );
 
 server.registerTool(
@@ -3410,7 +3357,7 @@ function setupGracefulShutdown(ctrl) {
 }
 
 async function main() {
-    log('Starting ostacky-controller MCP v0.8.9...');
+    log('Starting ostacky-controller MCP v0.9.0...');
     log('State path:', { path: statePath });
     // Clean up stale tmp/lock files from previous runs
     cleanupTmpFiles(statePath);

@@ -246,37 +246,37 @@ Tras instalar (`--scope local`), el proyecto queda así:
 
 ```json
 {
-    "version": "0.8.9",
+    "version": "0.9.0",
     "lockedAt": "2025-01-01T00:00:00.000Z",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.8.9",
+    "tag": "v0.9.0",
     "agents": {
         "ostacky": {
-            "version": "0.8.9",
+            "version": "0.9.0",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "abc123..."
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.8.9",
+            "version": "0.9.0",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "def456..."
         },
         "opsx-sync": {
-            "version": "0.8.9",
+            "version": "0.9.0",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "ghi789..."
         }
     },
     "skills": {
-        "brainstorming": { "version": "0.8.9", ... },
-        "execution-mode-evaluation": { "version": "0.8.9", ... },
-        "openspec-propose": { "version": "0.8.9", ... }
+        "brainstorming": { "version": "0.9.0", ... },
+        "execution-mode-evaluation": { "version": "0.9.0", ... },
+        "openspec-propose": { "version": "0.9.0", ... }
     },
     "mcpServers": {
-        "ostacky-controller": { "version": "0.8.9", ... },
-        "openspec": { "version": "0.8.9", ... }
+        "ostacky-controller": { "version": "0.9.0", ... },
+        "openspec": { "version": "0.9.0", ... }
     }
 }
 ```
@@ -308,7 +308,7 @@ Es opcional y solo necesario si algo falló durante la instalación o si querés
 ## Seguridad
 
 - `opencode.jsonc` se versiona en el repo para compartir permisos y MCP de forma reproducible.
-- Las URLs de descarga usan **tags de GitHub** (ej. `v0.8.9`), nunca `main` — instalaciones reproducibles
+- Las URLs de descarga usan **tags de GitHub** (ej. `v0.9.0`), nunca `main` — instalaciones reproducibles
 - Cada path de archivo descargado es validado para prevenir **path traversal**
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
 - El cache local (`.opencode/cache/`) también valida integridad al servir archivos cacheados
@@ -365,7 +365,7 @@ CodeGraph está instalado en `.opencode/tools/codegraph/bin/codegraph` y se conf
 | `.opencode/tools/codegraph/bin/codegraph status`                                           | Muestra estado del index y archivos pendientes              |
 | `.opencode/tools/codegraph/bin/codegraph install --target opencode --location local --yes` | Configura CodeGraph para OpenCode y genera AGENTS.md        |
 
-> **Windows:** si ves `Command failed: cmd.exe /d /c call ... codegraph.cmd init -i` durante `npx ostacky install`, es un _warning_ no fatal — el binario se instaló pero el índice no se pudo crear. Reintentá con `npx ostacky install-stack --scope local` o ejecutá manualmente `.opencode\tools\codegraph\bin\codegraph.exe init -i` (o `codegraph.cmd` si no hay `.exe`) dentro del proyecto. Desde v0.8.9 el instalador usa el patrón resiliente de Engram (strip 0 + búsqueda recursiva) y loguea `projectRoot|toolsDir` para diagnosticar scope.
+> **Windows:** si ves `Command failed: cmd.exe /d /c call ... codegraph.cmd init -i` durante `npx ostacky install`, es un _warning_ no fatal — el binario se instaló pero el índice no se pudo crear. Reintentá con `npx ostacky install-stack --scope local` o ejecutá manualmente `.opencode\tools\codegraph\bin\codegraph.exe init -i` (o `codegraph.cmd` si no hay `.exe`) dentro del proyecto. Desde v0.9.0 el instalador usa el patrón resiliente de Engram (strip 0 + búsqueda recursiva) y loguea `projectRoot|toolsDir` para diagnosticar scope.
 
 ## Licencia
 
