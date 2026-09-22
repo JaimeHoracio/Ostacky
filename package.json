@@ -1,6 +1,6 @@
 {
     "name": "ostacky",
-    "version": "0.9.0",
+    "version": "0.9.1",
     "description": "Instalador interactivo de agentes y comandos para OpenCode",
     "type": "module",
     "bin": {
@@ -34,7 +34,7 @@
     ],
     "license": "MIT",
     "dependencies": {
-        "@clack/prompts": "^0.9.0"
+        "@clack/prompts": "^0.9.1"
     },
     "devDependencies": {
         "@types/bun": "latest",

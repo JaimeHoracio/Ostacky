@@ -116,7 +116,7 @@ async function runDoctorCommand() {
         join(cwd, 'assets', 'plugins', 'ostacky-plugin.ts'),
         join(opencodeDir, 'plugins', 'ostacky-plugin.ts'),
         join(cwd, '.opencode', 'plugins', 'ostacky-plugin.ts'),
-        // legacy fallback (pre-0.9.0)
+        // legacy fallback (pre-0.9.1)
         join(cwd, 'assets', 'plugins', 'ostacky-controller.ts'),
         join(opencodeDir, 'plugins', 'ostacky-controller.ts'),
         join(cwd, '.opencode', 'plugins', 'ostacky-controller.ts'),

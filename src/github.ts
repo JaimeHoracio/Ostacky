@@ -23,6 +23,9 @@ export interface Manifest {
     skills: ManifestItem[];
 }
 
+/** Categorías del manifest que agrupan ManifestItem. */
+export type ManifestCategory = 'agents' | 'commands' | 'skills' | 'mcpServers';
+
 const GITHUB_RAW = 'https://raw.githubusercontent.com';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -53,6 +56,20 @@ export const BUNDLED_MCP_DIR = join(PACKAGE_ROOT, 'assets', 'mcp');
 export function getBundledMcpPath(name: string): string {
     validateFilePath(name);
     return join(BUNDLED_MCP_DIR, name);
+}
+
+/**
+ * Hash esperado de un asset BUNDLEADO — lee el manifest embebido en el paquete,
+ * que es el MISMO origen que los assets en `assets/`.
+ *
+ * Nunca uses el manifest remoto de GitHub para verificar integridad: el tag y
+ * el tarball npm pueden divergir (prepublishOnly regenera archivos sin
+ * commitear). Ver tests/manifest-integrity.test.ts (incidente v0.9.1).
+ * Retorna null cuando el nombre no existe en el bundle.
+ */
+export function getBundledExpectedHash(category: ManifestCategory, name: string): string | null {
+    const items = localManifest[category] ?? [];
+    return items.find((item) => item.name === name)?.sha256 ?? null;
 }
 
 export function getRawUrl(repo: string, tag: string, path: string): string {

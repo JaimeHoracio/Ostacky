@@ -246,37 +246,37 @@ Tras instalar (`--scope local`), el proyecto queda así:
 
 ```json
 {
-    "version": "0.9.0",
+    "version": "0.9.1",
     "lockedAt": "2025-01-01T00:00:00.000Z",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.9.0",
+    "tag": "v0.9.1",
     "agents": {
         "ostacky": {
-            "version": "0.9.0",
+            "version": "0.9.1",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "abc123..."
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.9.0",
+            "version": "0.9.1",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "def456..."
         },
         "opsx-sync": {
-            "version": "0.9.0",
+            "version": "0.9.1",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "ghi789..."
         }
     },
     "skills": {
-        "brainstorming": { "version": "0.9.0", ... },
-        "execution-mode-evaluation": { "version": "0.9.0", ... },
-        "openspec-propose": { "version": "0.9.0", ... }
+        "brainstorming": { "version": "0.9.1", ... },
+        "execution-mode-evaluation": { "version": "0.9.1", ... },
+        "openspec-propose": { "version": "0.9.1", ... }
     },
     "mcpServers": {
-        "ostacky-controller": { "version": "0.9.0", ... },
-        "openspec": { "version": "0.9.0", ... }
+        "ostacky-controller": { "version": "0.9.1", ... },
+        "openspec": { "version": "0.9.1", ... }
     }
 }
 ```
@@ -290,17 +290,17 @@ Se recomienda agregar `ostacky-lock.json` al control de versiones para que el eq
 Al terminar la instalación, el flujo normal es:
 
 1. **Iniciar OpenCode** (si no está corriendo):
-    - **TUI:** `opencode` en tu terminal → **usá `Tab` para navegar al agente Ostacky** en el panel lateral
-    - **Web:** `opencode web --port 4096` y abrí `http://localhost:4096` → **abrí el combo/selector de agentes** en la barra superior y elegí "Ostacky"
+    - **TUI:** `opencode` en tu terminal → seleccioná el agente con `/agents` (o atajos **Shift+Tab** / **Ctrl+X A**)
+    - **Web:** `opencode web --port 4096` y abrí `http://localhost:4096` → abrí el selector de agentes de la interfaz y elegí `ostacky`
 2. OpenCode detecta automáticamente los archivos nuevos en `.opencode/` al iniciar, no necesita recarga manual.
-3. Para usar el agente **escribí `@Ostacky`** en el chat de OpenCode (TUI o web) y enviá tu mensaje. También podés seleccionarlo desde el selector de agentes (ver arriba cómo).
+3. Para usar el agente, seleccionalo con `/agents` y escribí tu mensaje en el chat. (En OpenCode v2, `@` es solo para referenciar archivos, no agentes.)
 
 ### Regenerar el stack manualmente
 
-El comando `/install-stack` también está disponible **dentro del chat de OpenCode** (TUI o web) por si querés regenerar el stack local sin salir de la sesión:
+El comando `/install-stack` también está disponible **dentro del chat de OpenCode** (TUI o web) por si querés regenerar el stack local sin salir de la sesión. Seleccioná primero el agente `ostacky` (con `/agents`) y ejecutá:
 
 ```text
-@Ostacky /install-stack
+/install-stack
 ```
 
 Es opcional y solo necesario si algo falló durante la instalación o si querés verificar que todo esté en orden.
@@ -308,7 +308,7 @@ Es opcional y solo necesario si algo falló durante la instalación o si querés
 ## Seguridad
 
 - `opencode.jsonc` se versiona en el repo para compartir permisos y MCP de forma reproducible.
-- Las URLs de descarga usan **tags de GitHub** (ej. `v0.9.0`), nunca `main` — instalaciones reproducibles
+- Las URLs de descarga usan **tags de GitHub** (ej. `v0.9.1`), nunca `main` — instalaciones reproducibles
 - Cada path de archivo descargado es validado para prevenir **path traversal**
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
 - El cache local (`.opencode/cache/`) también valida integridad al servir archivos cacheados
@@ -365,7 +365,7 @@ CodeGraph está instalado en `.opencode/tools/codegraph/bin/codegraph` y se conf
 | `.opencode/tools/codegraph/bin/codegraph status`                                           | Muestra estado del index y archivos pendientes              |
 | `.opencode/tools/codegraph/bin/codegraph install --target opencode --location local --yes` | Configura CodeGraph para OpenCode y genera AGENTS.md        |
 
-> **Windows:** si ves `Command failed: cmd.exe /d /c call ... codegraph.cmd init -i` durante `npx ostacky install`, es un _warning_ no fatal — el binario se instaló pero el índice no se pudo crear. Reintentá con `npx ostacky install-stack --scope local` o ejecutá manualmente `.opencode\tools\codegraph\bin\codegraph.exe init -i` (o `codegraph.cmd` si no hay `.exe`) dentro del proyecto. Desde v0.9.0 el instalador usa el patrón resiliente de Engram (strip 0 + búsqueda recursiva) y loguea `projectRoot|toolsDir` para diagnosticar scope.
+> **Windows:** si ves `Command failed: cmd.exe /d /c call ... codegraph.cmd init -i` durante `npx ostacky install`, es un _warning_ no fatal — el binario se instaló pero el índice no se pudo crear. Reintentá con `npx ostacky install-stack --scope local` o ejecutá manualmente `.opencode\tools\codegraph\bin\codegraph.exe init -i` (o `codegraph.cmd` si no hay `.exe`) dentro del proyecto. Desde v0.9.1 el instalador usa el patrón resiliente de Engram (strip 0 + búsqueda recursiva) y loguea `projectRoot|toolsDir` para diagnosticar scope.
 
 ## Licencia
 

@@ -13,7 +13,14 @@ import { execFileSync, spawn } from 'child_process';
 import { dirname, join } from 'path';
 import { pathToFileURL } from 'url';
 import type { Manifest, ManifestItem } from './github.js';
-import { downloadFile, getBundledSkillPath, getBundledMcpPath, PACKAGE_ROOT } from './github.js';
+import {
+    downloadFile,
+    getBundledSkillPath,
+    getBundledMcpPath,
+    getBundledExpectedHash,
+    PACKAGE_ROOT,
+} from './github.js';
+import type { ManifestCategory } from './github.js';
 import {
     readLockfile,
     writeLockfile,
@@ -231,7 +238,7 @@ export async function probeMcpServer(
                 params: {
                     protocolVersion: '2025-03-26',
                     capabilities: {},
-                    clientInfo: { name: 'ostacky-installer', version: '0.9.0' },
+                    clientInfo: { name: 'ostacky-installer', version: '0.9.1' },
                 },
             });
         });
@@ -323,6 +330,31 @@ function upsertLockfile(
 // ─── Install / uninstall ──────────────────────────────────────────────────────
 
 /**
+ * Verifica el árbol real de un asset bundleado contra el manifest EMBEBIDO en
+ * el paquete (mismo origen que los assets). El manifest remoto de GitHub nunca
+ * participa: puede divergir del tarball npm publicado.
+ *
+ * No lanza cuando el nombre no está en el bundleado (el call site ya valida
+ * que el asset existe antes de hashear).
+ */
+export function assertBundledTreeHash(category: ManifestCategory, name: string, actualHash: string): void {
+    const expected = getBundledExpectedHash(category, name);
+    if (expected && actualHash !== expected) {
+        const labels: Record<string, string> = {
+            skills: 'skill',
+            mcpServers: 'MCP server',
+            agents: 'agente',
+            commands: 'command',
+        };
+        throw new Error(
+            `Tree hash inválido para ${labels[category] ?? category} "${name}"\n` +
+                `  esperado: ${expected}\n` +
+                `  recibido: ${actualHash}`
+        );
+    }
+}
+
+/**
  * Reads a bundled asset file from the package (assets/ directory).
  * Returns null if the file doesn't exist in the bundle.
  */
@@ -380,13 +412,7 @@ export async function installSkill(item: ManifestItem, manifest: Manifest, paths
 
     const treeHash = computeTreeHash(src);
 
-    if (item.sha256 && treeHash !== item.sha256) {
-        throw new Error(
-            `Tree hash inválido para skill "${item.name}"\n` +
-                `  esperado: ${item.sha256}\n` +
-                `  recibido: ${treeHash}`
-        );
-    }
+    assertBundledTreeHash('skills', item.name, treeHash);
 
     const dest = join(paths.skills, item.name);
     if (existsSync(dest)) {
@@ -450,16 +476,11 @@ export async function installMcpServer(item: ManifestItem, manifest: Manifest, p
         );
     }
 
-    // Hash siempre se computa del source (assets/mcp/<name>/) para tracking
+    // Hash siempre se computa del source (assets/mcp/<name>/) para tracking.
+    // La validación usa el manifest bundleado, no el remoto (ver assertBundledTreeHash).
     const treeHash = computeTreeHash(src);
 
-    if (item.sha256 && treeHash !== item.sha256) {
-        throw new Error(
-            `Tree hash inválido para MCP server "${item.name}"\n` +
-                `  esperado: ${item.sha256}\n` +
-                `  recibido: ${treeHash}`
-        );
-    }
+    assertBundledTreeHash('mcpServers', item.name, treeHash);
 
     const nodeExecutable = getVerifiedNodeExecutable();
     const projectRoot = dirname(paths.root);
