@@ -64,7 +64,7 @@ export function getBundledMcpPath(name: string): string {
  *
  * Nunca uses el manifest remoto de GitHub para verificar integridad: el tag y
  * el tarball npm pueden divergir (prepublishOnly regenera archivos sin
- * commitear). Ver tests/manifest-integrity.test.ts (incidente v0.9.2).
+ * commitear). Ver tests/manifest-integrity.test.ts (incidente v0.9.3).
  * Retorna null cuando el nombre no existe en el bundle.
  */
 export function getBundledExpectedHash(category: ManifestCategory, name: string): string | null {

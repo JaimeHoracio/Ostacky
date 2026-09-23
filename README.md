@@ -145,6 +145,8 @@ Actualizaciones disponibles
 
 Solo descarga los items que cambiaron de versión.
 
+> **Nota:** `@latest` y `update` son cosas distintas. `npx ostacky@latest` fuerza a descargar la **última versión publicada** del instalador (el `@latest` es el tag de npm) y, sin subcomando, abre el menú interactivo. `npx ostacky update` corre la **acción de actualizar** (trae el manifest remoto y actualiza lo instalado según el lockfile) con la versión del instalador que npx resuelva (puede ser cacheada). Para ambas garantías, combinalos: `npx ostacky@latest update`.
+
 ### Desinstalar
 
 ```bash
@@ -246,37 +248,37 @@ Tras instalar (`--scope local`), el proyecto queda así:
 
 ```json
 {
-    "version": "0.9.2",
+    "version": "0.9.3",
     "lockedAt": "2025-01-01T00:00:00.000Z",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.9.2",
+    "tag": "v0.9.3",
     "agents": {
         "ostacky": {
-            "version": "0.9.2",
+            "version": "0.9.3",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "abc123..."
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.9.2",
+            "version": "0.9.3",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "def456..."
         },
         "opsx-sync": {
-            "version": "0.9.2",
+            "version": "0.9.3",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "ghi789..."
         }
     },
     "skills": {
-        "brainstorming": { "version": "0.9.2", ... },
-        "execution-mode-evaluation": { "version": "0.9.2", ... },
-        "openspec-propose": { "version": "0.9.2", ... }
+        "brainstorming": { "version": "0.9.3", ... },
+        "execution-mode-evaluation": { "version": "0.9.3", ... },
+        "openspec-propose": { "version": "0.9.3", ... }
     },
     "mcpServers": {
-        "ostacky-controller": { "version": "0.9.2", ... },
-        "openspec": { "version": "0.9.2", ... }
+        "ostacky-controller": { "version": "0.9.3", ... },
+        "openspec": { "version": "0.9.3", ... }
     }
 }
 ```
@@ -308,7 +310,7 @@ Es opcional y solo necesario si algo falló durante la instalación o si querés
 ## Seguridad
 
 - `opencode.jsonc` se versiona en el repo para compartir permisos y MCP de forma reproducible.
-- Las URLs de descarga usan **tags de GitHub** (ej. `v0.9.2`), nunca `main` — instalaciones reproducibles
+- Las URLs de descarga usan **tags de GitHub** (ej. `v0.9.3`), nunca `main` — instalaciones reproducibles
 - Cada path de archivo descargado es validado para prevenir **path traversal**
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
 - El cache local (`.opencode/cache/`) también valida integridad al servir archivos cacheados
@@ -365,7 +367,7 @@ CodeGraph está instalado en `.opencode/tools/codegraph/bin/codegraph` y se conf
 | `.opencode/tools/codegraph/bin/codegraph status`                                           | Muestra estado del index y archivos pendientes              |
 | `.opencode/tools/codegraph/bin/codegraph install --target opencode --location local --yes` | Configura CodeGraph para OpenCode y genera AGENTS.md        |
 
-> **Windows:** si ves `Command failed: cmd.exe /d /c call ... codegraph.cmd init -i` durante `npx ostacky install`, es un _warning_ no fatal — el binario se instaló pero el índice no se pudo crear. Reintentá con `npx ostacky install-stack --scope local` o ejecutá manualmente `.opencode\tools\codegraph\bin\codegraph.exe init -i` (o `codegraph.cmd` si no hay `.exe`) dentro del proyecto. Desde v0.9.2 el instalador usa el patrón resiliente de Engram (strip 0 + búsqueda recursiva) y loguea `projectRoot|toolsDir` para diagnosticar scope.
+> **Windows:** si ves `Command failed: cmd.exe /d /c call ... codegraph.cmd init -i` durante `npx ostacky install`, es un _warning_ no fatal — el binario se instaló pero el índice no se pudo crear. Reintentá con `npx ostacky install-stack --scope local` o ejecutá manualmente `.opencode\tools\codegraph\bin\codegraph.exe init -i` (o `codegraph.cmd` si no hay `.exe`) dentro del proyecto. Desde v0.9.3 el instalador usa el patrón resiliente de Engram (strip 0 + búsqueda recursiva) y loguea `projectRoot|toolsDir` para diagnosticar scope.
 
 ## Licencia
 
