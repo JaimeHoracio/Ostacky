@@ -1,7 +1,7 @@
 /**
  * Tiered helpers — single source of truth for trivial detection y niveles.
  *
- * Ambos plugins (ostacky-plugin.ts y engram.ts) importan de acá.
+ * Consumido por el plugin ostacky-controller/index.ts y engram.ts (mirror en package dir).
  * No duplicar regex. Cache-friendly: isTrivial no muta system[0], solo decide hint.
  * LEVEL_THRESHOLDS es la única definición de niveles (D6).
  */

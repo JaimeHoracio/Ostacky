@@ -118,19 +118,25 @@ function copyEngramPlugin(projectRoot: string): void {
 }
 
 function copyOstackyControllerPlugin(projectRoot: string): void {
-  const pluginSource = join(PACKAGE_ROOT, "assets", "plugins", "ostacky-plugin.ts");
-  const coreSource = join(PACKAGE_ROOT, "assets", "plugins", "controller-core.ts");
-  const securitySource = join(PACKAGE_ROOT, "assets", "plugins", "security.ts");
-  const tieredSource = join(PACKAGE_ROOT, "assets", "plugins", "tiered.ts");
+  const packageSource = join(PACKAGE_ROOT, "assets", "plugins", "ostacky-controller");
   const pluginsDir = join(projectRoot, ".opencode", "plugins");
-  if (!existsSync(pluginSource)) {
-    throw new Error(`Plugin bundleado de OstackyController no encontrado: ${pluginSource}`);
+  const packageDest = join(pluginsDir, "ostacky-controller");
+  if (!existsSync(join(packageSource, "index.ts"))) {
+    throw new Error(`Plugin bundleado de OstackyController no encontrado: ${packageSource}`);
   }
-  mkdirSync(pluginsDir, { recursive: true });
-  copyFileSync(pluginSource, join(pluginsDir, "ostacky-plugin.ts"));
-  if (existsSync(coreSource)) copyFileSync(coreSource, join(pluginsDir, "controller-core.ts"));
-  if (existsSync(securitySource)) copyFileSync(securitySource, join(pluginsDir, "security.ts"));
-  if (existsSync(tieredSource)) copyFileSync(tieredSource, join(pluginsDir, "tiered.ts"));
+  mkdirSync(packageDest, { recursive: true });
+  for (const f of ["index.ts", "controller-core.ts", "security.ts", "tiered.ts"]) {
+    const src = join(packageSource, f);
+    if (existsSync(src)) copyFileSync(src, join(packageDest, f));
+  }
+  // Limpieza legacy (v0.9.0 y anteriores copiaban 4 .ts sueltos que OpenCode
+  // carga como plugins independientes y fallan sin default export).
+  for (const f of ["ostacky-plugin.ts", "controller-core.ts", "security.ts", "tiered.ts"]) {
+    const legacy = join(pluginsDir, f);
+    try {
+      if (existsSync(legacy)) rmSync(legacy, { force: true });
+    } catch {}
+  }
   // Siempre local: state por worktree, hard-gate local.
 }
 
@@ -501,7 +507,8 @@ export function uninstallEngramConfig(): { success: boolean; message: string } {
  * - mcp.codegraph, mcp.engram entries from opencode.json
  * - .codegraph/ directory
  * - .opencode/tools/ directory
- * - .opencode/plugins/ostacky-plugin.ts y engram.ts (legacy guard/controller también)
+ * - Ostacky-owned plugins: .opencode/plugins/ostacky-controller/ + sueltos
+ *   legacy (ostacky-plugin.ts, controller-core.ts, security.ts, tiered.ts) + engram.ts
  * Does NOT touch global binaries (codegraph, engram) or Engram data.
  * Safe-delete: nunca borra plugins custom, solo allowlist Ostacky-owned.
  */
@@ -553,6 +560,28 @@ export function uninstallStackConfig(paths: OpenCodePaths): { success: boolean; 
       removed.push(".opencode/tools/");
     } catch {
       // no fatal
+    }
+  }
+
+  // 4. Remover plugins Ostacky-owned (package dir nuevo + sueltos legacy).
+  // Allowlist estricta: nunca toca plugins custom del usuario.
+  const ownedPlugins = [
+    "ostacky-controller",
+    "engram.ts",
+    "ostacky-plugin.ts",
+    "controller-core.ts",
+    "security.ts",
+    "tiered.ts",
+  ];
+  for (const name of ownedPlugins) {
+    const p = join(paths.plugins, name);
+    if (existsSync(p)) {
+      try {
+        rmSync(p, { recursive: true, force: true });
+        removed.push(`.opencode/plugins/${name}`);
+      } catch {
+        // no fatal
+      }
     }
   }
 

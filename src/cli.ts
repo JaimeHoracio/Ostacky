@@ -112,11 +112,15 @@ async function runDoctorCommand() {
     };
 
     // controller state — plugin active detection (controller-mcp-to-pluggin)
+    // Layout V2: package dir primero; sueltos legacy después (deprecated)
     const pluginPaths = [
+        join(cwd, 'assets', 'plugins', 'ostacky-controller', 'index.ts'),
+        join(opencodeDir, 'plugins', 'ostacky-controller', 'index.ts'),
+        join(cwd, '.opencode', 'plugins', 'ostacky-controller', 'index.ts'),
         join(cwd, 'assets', 'plugins', 'ostacky-plugin.ts'),
         join(opencodeDir, 'plugins', 'ostacky-plugin.ts'),
         join(cwd, '.opencode', 'plugins', 'ostacky-plugin.ts'),
-        // legacy fallback (pre-0.9.1)
+        // legacy fallback (pre-0.9.2)
         join(cwd, 'assets', 'plugins', 'ostacky-controller.ts'),
         join(opencodeDir, 'plugins', 'ostacky-controller.ts'),
         join(cwd, '.opencode', 'plugins', 'ostacky-controller.ts'),
@@ -359,8 +363,8 @@ async function runDoctorCommand() {
         const hasHonesty = ostackyMd.includes('Principios de honestidad');
         check('honesty: 7 SHALL', hasHonesty);
         if (!hasHonesty) console.log('  Expected: ## Principios de honestidad (SHALL) in ostacky.md');
-        // spec no-overwrite
-        const pluginPath = join(cwd, 'assets', 'plugins', 'ostacky-plugin.ts');
+        // spec no-overwrite (lee el entry del package dir, fallback al suelto legacy)
+        const pluginPath = join(cwd, 'assets', 'plugins', 'ostacky-controller', 'index.ts');
         if (existsSync(pluginPath)) {
             const plugin = readFileSync(pluginPath, 'utf-8');
             const hasSpecGuard = plugin.includes('getDiscoverySnapshot') && plugin.includes('specSnapshot');

@@ -238,7 +238,7 @@ export async function probeMcpServer(
                 params: {
                     protocolVersion: '2025-03-26',
                     capabilities: {},
-                    clientInfo: { name: 'ostacky-installer', version: '0.9.1' },
+                    clientInfo: { name: 'ostacky-installer', version: '0.9.2' },
                 },
             });
         });
@@ -683,7 +683,7 @@ export function uninstallAll(paths: OpenCodePaths): void {
     }
 
     // Safe-delete: NO borrar MCPs fuera del lockfile (evita borrar componentes previos del usuario).
-    // Solo limpiar plugins Ostacky-owned allowlist (incluye legacy guard/controller + mirrors self-contained) — nunca borrar plugins custom.
+    // Solo limpiar plugins Ostacky-owned allowlist (package dir + sueltos legacy + mirrors self-contained) — nunca borrar plugins custom.
     const ostackyPlugins = [
         'ostacky-plugin.ts',
         'engram.ts',
@@ -700,6 +700,13 @@ export function uninstallAll(paths: OpenCodePaths): void {
                 unlinkSync(fp);
             } catch {}
         }
+    }
+    // Package dir (formato V2 desde v0.9.2): requiere rm recursivo, no unlink
+    const packageDir = join(paths.plugins, 'ostacky-controller');
+    if (existsSync(packageDir)) {
+        try {
+            rmSync(packageDir, { recursive: true, force: true });
+        } catch {}
     }
 
     clearLockfile(paths.root);

@@ -49,7 +49,7 @@ describe('harden-compaction-resume: auto-inject recovery hint', () => {
         expect(hint!).toContain('T3');
         expect(hint!).toContain('T5');
         // verifica que el plugin realmente contiene el código
-        const pluginSrc = readFileSync('assets/plugins/ostacky-plugin.ts', 'utf-8');
+        const pluginSrc = readFileSync('assets/plugins/ostacky-controller/index.ts', 'utf-8');
         expect(pluginSrc).toContain('[RECOVERY:');
         const engramSrc = readFileSync('assets/plugins/engram.ts', 'utf-8');
         expect(engramSrc).toContain('[RECOVERY:');
@@ -68,7 +68,7 @@ describe('harden-compaction-resume: auto-inject recovery hint', () => {
         expect(isTrivial).toBe(true);
         // lógica de plugin exime trivial, así que aunque hay pending no inyecta
         expect(isTrivial).toBe(true);
-        const pluginSrc = readFileSync('assets/plugins/ostacky-plugin.ts', 'utf-8');
+        const pluginSrc = readFileSync('assets/plugins/ostacky-controller/index.ts', 'utf-8');
         expect(pluginSrc).toContain('isTrivial');
     });
 

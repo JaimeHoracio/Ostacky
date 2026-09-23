@@ -39,7 +39,7 @@ async function doUninstallTotal(paths: OpenCodePaths) {
     pathsToDelete.push(join(paths.mcp, name));
   }
   // Safe-delete: solo lo trackeado en lockfile. Preview muestra scope para evitar borrar scope equivocado.
-  // Plugins Ostacky-owned (ostacky-plugin.ts, engram.ts + legacy guard/controller) se informan aparte.
+  // Plugins Ostacky-owned (package dir ostacky-controller/, engram.ts + sueltos legacy) se informan aparte.
 
   p.note(
     [`Scope: ${paths.root}`, ...pathsToDelete].join("\n"),

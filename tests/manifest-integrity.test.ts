@@ -2,7 +2,7 @@
  * Regression: drift entre el manifest de GitHub (tag) y los assets bundleados
  * en el tarball npm.
  *
- * Incidente v0.9.1: loadManifest() baja manifest.json desde GitHub tag v0.9.1
+ * Incidente v0.9.2: loadManifest() baja manifest.json desde GitHub tag v0.9.2
  * (hash ac2f546) pero los assets de skills/MCP viven en el paquete npm
  * (hash 29857bf, regenerados por prepublishOnly sin commitear). La validación
  * de integridad fallaba para todos los usuarios.
@@ -20,7 +20,7 @@ import { assertBundledTreeHash, installSkill } from '../src/installer.js';
 import type { OpenCodePaths } from '../src/types.js';
 import { computeTreeHash } from '../src/fs.js';
 
-/** El hash real del tag v0.9.1 en GitHub, tal como quedó en el incidente. */
+/** El hash real del tag v0.9.2 en GitHub, tal como quedó en el incidente. */
 const STALE_REMOTE_HASH = 'ac2f5465f7bc9cc938fde549390ff0075e914983e10b7c4074fb9670ecb1fe03';
 
 function pathsFor(root: string): OpenCodePaths {
@@ -65,12 +65,12 @@ describe('integrity: hash esperado sale del manifest bundleado', () => {
                 name: 'brainstorming',
                 file: 'assets/skills/brainstorming/',
                 description: 'skill bundleada',
-                version: '0.9.1',
+                version: '0.9.2',
                 sha256: STALE_REMOTE_HASH,
             };
             const manifest: Manifest = {
-                version: '0.9.1',
-                tag: 'v0.9.1',
+                version: '0.9.2',
+                tag: 'v0.9.2',
                 repo: 'example/repo',
                 agents: [],
                 commands: [],

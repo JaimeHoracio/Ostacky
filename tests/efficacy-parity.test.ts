@@ -20,7 +20,7 @@ describe("efficacy-parity", () => {
   });
 
   it("coste efectivo con cache hit < 10% sobrecoste", () => {
-    const pluginPath = join(import.meta.dir, "..", "assets","plugins","ostacky-plugin.ts");
+    const pluginPath = join(import.meta.dir, "..", "assets","plugins","ostacky-controller","index.ts");
     const src = readFileSync(pluginPath, "utf-8");
     // Verify no system replacement that would cause miss 1.25x
     expect(src).not.toContain("output.system =");

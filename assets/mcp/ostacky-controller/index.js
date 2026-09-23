@@ -411,6 +411,22 @@ function fastFingerprint(filePath) {
     }
 }
 
+// Refresh honesto sin churn: resuelve a absoluto vía projectRoot para no depender de cwd.
+// Usado por stale-checks, complete_task y refreshFingerprint (fix post-complete refine).
+function fingerprintFor(filePath, statePath) {
+    try {
+        if (!filePath) return null;
+        const projectRoot = getProjectRoot(statePath);
+        const abs =
+            filePath.startsWith('/') || /^[A-Za-z]:/.test(filePath)
+                ? resolve(filePath)
+                : resolve(projectRoot, filePath);
+        return fastFingerprint(abs);
+    } catch {
+        return null;
+    }
+}
+
 class OstackyController {
     #statePath;
     #state;
@@ -1697,14 +1713,14 @@ class OstackyController {
         try {
             for (const [taskId, info] of Object.entries(this.#state.tasks || {})) {
                 if (info.status !== 'COMPLETED' || !info.filePath || !info.fileHash) continue;
-                const current = fastFingerprint(info.filePath);
+                const current = fingerprintFor(info.filePath, this.#statePath);
                 if (!current) staleFiles.push(`${taskId}:${info.filePath} (missing)`);
                 else if (current !== info.fileHash) staleFiles.push(`${taskId}:${info.filePath} (stale fingerprint)`);
                 seenFp2.add(info.filePath);
             }
             for (const [fp, stored] of Object.entries(this.#state.fileFingerprints || {})) {
                 if (seenFp2.has(fp)) continue;
-                const cur = fastFingerprint(fp);
+                const cur = fingerprintFor(fp, this.#statePath);
                 if (!cur) staleFiles.push(`${fp} (missing)`);
                 else if (cur !== stored) staleFiles.push(`${fp} (stale fingerprint)`);
             }
@@ -1764,7 +1780,7 @@ class OstackyController {
                 verificationFailed: verificationFailed.length ? verificationFailed : undefined,
                 current_state: this.#state.state,
                 attempted_transition: 'implementation_complete',
-                suggestion: `${detail} Completá cada task con Read fresco → validate_edit → edit → complete_task (con verificación) y luego reintentá implementation_complete sin force. Solo si querés descartar trabajo pendiente, escribí literal "confirmo forzar" en tu mensaje y reintentá con {force:true}. No propongo cancelar; propongo completar.`,
+                suggestion: `${detail} Si refinaste archivos tras el complete (fingerprint stale), llamá refresh_fingerprint({filePath}) por cada archivo y reintentá implementation_complete sin force. Solo si hay edición real pendiente: Read fresco → validate_edit → edit → complete_task. Solo si querés descartar trabajo pendiente, escribí literal "confirmo forzar" en tu mensaje y reintentá con {force:true}. No propongo cancelar; propongo completar.`,
             };
         }
         if (hasBlocking && force) {
@@ -1785,7 +1801,7 @@ class OstackyController {
                     verificationFailed: verificationFailed.length ? verificationFailed : undefined,
                     current_state: this.#state.state,
                     attempted_transition: 'implementation_complete',
-                    suggestion: `${detail} Para forzar el cierre, escribí literal "confirmo forzar" en tu mensaje (quedará auditado) y reintentá con {force:true}. Si no querés forzar, completá los pendientes y reintentá sin force.`,
+                    suggestion: `${detail} Para forzar el cierre, escribí literal "confirmo forzar" en tu mensaje (quedará auditado) y reintentá con {force:true}. Si no querés forzar y es solo stale por refino, llamá refresh_fingerprint({filePath}) y reintentá sin force.`,
                 };
             }
             const all = [...pending, ...staleFiles, ...verificationFailed].join(',');
@@ -1969,14 +1985,14 @@ class OstackyController {
         try {
             for (const [taskId, info] of Object.entries(this.#state.tasks || {})) {
                 if (info.status !== 'COMPLETED' || !info.filePath || !info.fileHash) continue;
-                const current = fastFingerprint(info.filePath);
+                const current = fingerprintFor(info.filePath, this.#statePath);
                 if (!current) staleFiles.push(`${taskId}:${info.filePath} (missing)`);
                 else if (current !== info.fileHash) staleFiles.push(`${taskId}:${info.filePath} (stale fingerprint)`);
                 seenFp.add(info.filePath);
             }
             for (const [fp, stored] of Object.entries(this.#state.fileFingerprints || {})) {
                 if (seenFp.has(fp)) continue;
-                const current = fastFingerprint(fp);
+                const current = fingerprintFor(fp, this.#statePath);
                 if (!current) staleFiles.push(`${fp} (missing)`);
                 else if (current !== stored) staleFiles.push(`${fp} (stale fingerprint)`);
             }
@@ -2448,11 +2464,11 @@ class OstackyController {
         }
         if (!this.#state.tasks) this.#state.tasks = {};
 
-        // O6: Use fast fingerprint if no hash provided
-        const effectiveHash = fileHash || (filePath ? fastFingerprint(filePath) : null);
+        // O6: Use fast fingerprint if no hash provided (absoluto vía projectRoot)
+        const effectiveHash = fileHash || (filePath ? fingerprintFor(filePath, this.#statePath) : null);
         // 1.6: fingerprint obligatorio si archivo existe
         if (filePath) {
-            const existsCheck = fastFingerprint(filePath);
+            const existsCheck = fingerprintFor(filePath, this.#statePath);
             if (existsCheck && !effectiveHash) {
                 return { error: 'fingerprint required: file exists but fileHash is null' };
             }
@@ -2559,6 +2575,58 @@ class OstackyController {
             status: 'COMPLETED',
             totalCompleted,
         };
+    }
+
+    /**
+     * Refresh honesto sin churn: re-sincroniza fingerprints con disco tras refino
+     * post-complete. Vale para SPEC y DIRECT, en EXECUTING_INLINE, EXECUTING_SUBAGENTS
+     * y SPECIFICATION. No exige oldString/newString ni reeditar.
+     */
+    async refreshFingerprint({ filePath, taskId } = {}) {
+        this.#load();
+        const allowed = ['EXECUTING_INLINE', 'EXECUTING_SUBAGENTS', 'SPECIFICATION'];
+        if (!allowed.includes(this.#state.state)) {
+            return { error: `Cannot refresh fingerprint from state ${this.#state.state}`, ok: false };
+        }
+        if (taskId && !isValidTaskId(taskId)) return { error: `invalid taskId: ${taskId}`, ok: false };
+        let target = filePath || null;
+        if (!target && taskId && this.#state.tasks?.[taskId]?.filePath) {
+            target = this.#state.tasks[taskId].filePath;
+        }
+        if (!target) return { error: 'filePath or taskId with file is required', ok: false };
+        if (!isPathInsideProject(target, this.#statePath)) {
+            return { error: `filePath outside projectRoot: ${target}`, ok: false, filePath: target };
+        }
+        if (this.isSensitiveFile(target) && !this.#state.allowedFiles?.[target]) {
+            return { error: `BLOCKED: File ${target} requires check_file_access`, ok: false, filePath: target };
+        }
+        const projectRoot = getProjectRoot(this.#statePath);
+        const abs =
+            target.startsWith('/') || /^[A-Za-z]:/.test(target) ? resolve(target) : resolve(projectRoot, target);
+        if (!existsSync(abs)) return { error: `file not found: ${target}`, ok: false, filePath: target };
+        const current = fingerprintFor(target, this.#statePath);
+        if (!current) return { error: `cannot fingerprint: ${target}`, ok: false, filePath: target };
+        const updatedTasks = [];
+        if (!this.#state.fileFingerprints) this.#state.fileFingerprints = {};
+        this.#state.fileFingerprints[target] = current;
+        if (taskId && this.#state.tasks?.[taskId]) {
+            this.#state.tasks[taskId].fileHash = current;
+            if (!this.#state.tasks[taskId].filePath) this.#state.tasks[taskId].filePath = target;
+            updatedTasks.push(taskId);
+        }
+        for (const [tid, info] of Object.entries(this.#state.tasks || {})) {
+            if (info.filePath === target && !updatedTasks.includes(tid)) {
+                info.fileHash = current;
+                updatedTasks.push(tid);
+            }
+        }
+        await this.#persist();
+        await this.#audit(
+            'EXECUTING',
+            'refresh_fingerprint',
+            `filePath=${target} tasks=${updatedTasks.join(',') || '-'}`
+        );
+        return { ok: true, filePath: target, fingerprint: current, updatedTasks };
     }
 
     async verifyTask({ taskId, filePath: filePathParam } = {}) {
@@ -2785,7 +2853,7 @@ function safeHandler(fn, options = {}) {
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.9.1',
+    version: '0.9.2',
 });
 
 server.registerTool(
@@ -3326,6 +3394,23 @@ server.registerTool(
     })
 );
 
+server.registerTool(
+    'refresh_fingerprint',
+    {
+        description:
+            'Re-sincroniza fingerprints con disco tras refino post-complete, sin reeditar. ' +
+            'Vale para SPEC y DIRECT, en EXECUTING_INLINE, EXECUTING_SUBAGENTS y SPECIFICATION.',
+        inputSchema: z.object({
+            filePath: z.string().optional().describe('File path refinado tras complete.'),
+            taskId: z.string().optional().describe('Task ID (si se omite filePath se usa su archivo).'),
+        }),
+    },
+    safeHandler(async ({ filePath, taskId }) => {
+        log('tool:refresh_fingerprint', { filePath, taskId });
+        return await controller.refreshFingerprint({ filePath, taskId });
+    })
+);
+
 /**
  * Graceful shutdown: clean up tmp/lock files and flush state.
  */
@@ -3357,7 +3442,7 @@ function setupGracefulShutdown(ctrl) {
 }
 
 async function main() {
-    log('Starting ostacky-controller MCP v0.9.1...');
+    log('Starting ostacky-controller MCP v0.9.2...');
     log('State path:', { path: statePath });
     // Clean up stale tmp/lock files from previous runs
     cleanupTmpFiles(statePath);

@@ -14,7 +14,10 @@
  *   hooks (event.sessionID) rather than relying on a session.created event.
  */
 
-import { Plugin } from "@opencode/plugin"
+// NOTA: sin `import { Plugin }` runtime a propósito — el server V2 no resuelve
+// `@opencode/plugin` desde `.opencode/plugins/` y `Plugin.define()` es
+// passthrough ({id, setup}). `import type` se borra al transpilar.
+import type { Plugin } from "@opencode/plugin"
 import { join, dirname, basename, delimiter } from "node:path"
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "node:fs"
 import { spawn, spawnSync } from "node:child_process"
@@ -197,7 +200,8 @@ function stripJsoncComments(text: string): string {
 
 // ─── Plugin ──────────────────────────────────────────────────────────────────
 
-export default Plugin.define({
+// Objeto literal directo (ver nota en imports).
+export default {
   id: "engram",
   async setup(ctx) {
     const directory = ctx.location.directory
@@ -645,4 +649,4 @@ export default Plugin.define({
 
     return () => eventController.abort()
   },
-})
+}

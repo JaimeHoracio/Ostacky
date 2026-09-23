@@ -11,7 +11,11 @@
  * CodeGraph preventivo: bloquea Read/Grep masivo sin Discovery hit.
  */
 
-import { Plugin } from "@opencode/plugin"
+// NOTA: sin `import { Plugin } from "@opencode/plugin"` a propósito — el server
+// V2 no resuelve ese paquete desde `.opencode/plugins/` (Die ResolveMessage) y
+// `Plugin.define()` es passthrough ({id, setup}). Objeto literal + `import type`
+// (solo tipos, borrado al transpilar) cargan sin dependencias externas.
+import type { Plugin } from "@opencode/plugin"
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, statSync, readdirSync, unlinkSync } from "node:fs"
 import { join, dirname, basename, resolve, relative, delimiter } from "node:path"
 import { SENSITIVE_DEFAULT, BASH_SENSITIVE_RE, isSensitive, extractPathsFromBash } from "./security.ts"
@@ -178,7 +182,9 @@ function extractPathsFromPatch(patchText: string): string[] {
 
 // ─── Plugin ──────────────────────────────────────────────────────────────────
 
-export default Plugin.define({
+// Objeto literal directo (ver nota en imports): el server V2 acepta
+// `{ id, setup }` sin pasar por `Plugin.define()`.
+export default {
   id: "ostacky-controller",
   async setup(ctx) {
     const directory = ctx.location.directory
@@ -374,9 +380,27 @@ export default Plugin.define({
         const isCodeFile = /\.(ts|js|tsx|jsx|mts|cts)$/i.test(targetPath) || targetPath.includes("src/") || targetPath.includes("assets/") || args?.pattern?.includes("*.ts")
         // harden-task-integrity 1.3: eximir reads de tasks.md del gate (no requiere CodeGraph)
         const isSpecTasksPath = targetPath.includes("openspec/changes") || targetPath.includes("openspec/specs")
+        // Docs y markdown nunca son código: no exigir Discovery (fix over-blocking assets/docs)
+        const isDocsPath = targetPath.includes("assets/docs") || targetPath.includes("/docs/") || /\.md$/i.test(targetPath) || /\.json$/i.test(targetPath)
         // Grep on *.md should not be blocked
         const isLiteralGrep = tool === "grep" && (args?.include?.endsWith(".md") || args?.include?.endsWith(".json"))
-        if (isCodeFile && !isLiteralGrep && !isSpecTasksPath) {
+        // Refresh honesto: revalidación post-complete necesita Read fresco sin Discovery hit.
+        // Vale para SPEC y DIRECT, INLINE y SUBAGENTS: si el path está trackeado en
+        // tasks/fileFingerprints/lastValidated, no exigir Discovery.
+        let isTaskTracked = false
+        try {
+          const st = freshState
+          if (st && targetPath) {
+            const fps = Object.keys(st.fileFingerprints || {})
+            const taskFiles = Object.values(st.tasks || {}).map((t: any) => t.filePath).filter(Boolean)
+            const lvFile = (st.lastValidated as any)?.filePath || null
+            isTaskTracked =
+              fps.some((fp) => targetPath.endsWith(fp) || fp.endsWith(targetPath) || targetPath.includes(fp) || fp.includes(targetPath)) ||
+              taskFiles.some((fp: string) => targetPath.endsWith(fp) || fp.endsWith(targetPath) || targetPath.includes(fp) || fp.includes(targetPath)) ||
+              (lvFile ? targetPath.endsWith(lvFile) || lvFile.endsWith(targetPath) : false)
+          }
+        } catch {}
+        if (isCodeFile && !isLiteralGrep && !isSpecTasksPath && !isDocsPath && !isTaskTracked) {
           const hasDiscoveryHit = discoveryHitByRequest.get(sessionId) ?? getDiscoveryCacheHit(directory)
           const codegraphOk = isCodegraphAvailable(directory)
           if (codegraphOk && !hasDiscoveryHit) {
@@ -420,7 +444,9 @@ export default Plugin.define({
       // ── 3.5) Shell file-mutation gate (harden-task-integrity: shell mutante requiere validate_edit) ──
       if (tool === "shell" && freshState && ["EXECUTING_INLINE", "EXECUTING_SUBAGENTS"].includes(freshState.state)) {
         const cmdForMutation: string = args?.command || args?.cmd || ""
-        const isMutating = /[>]{1,2}\s*\S+|\bsed\b[^|;]*-i|\btruncate\b|\btee\b|\bcp\s+|\bmv\s+|python.*open.*w/.test(cmdForMutation)
+        // Fix falso positivo: `2>&1`, `1>&2`, `2>/dev/null` son redirects de stderr, no mutación.
+        const cmdSansStderr = cmdForMutation.replace(/2>&1/g, "").replace(/1>&2/g, "").replace(/2>\s*\/dev\/null/g, "")
+        const isMutating = /(^|[^0-9&])>{1,2}\s*(?!&)\S+|\bsed\b[^|;]*-i|\btruncate\b|\btee\b|\bcp\s+|\bmv\s+|python.*open.*w/.test(cmdSansStderr)
         if (isMutating) {
           const mPaths = extractPathsFromBash(cmdForMutation)
           for (const p of mPaths) {
@@ -711,4 +737,4 @@ export default Plugin.define({
       eventController.abort()
     }
   },
-})
+}

@@ -128,20 +128,25 @@ export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths): Pr
     }
   }
 
-  // Plugins: ostacky-plugin.ts + engram.ts (guard deprecated y eliminado, legacy ostacky-controller.ts no se instala)
+  // Plugins: package dir ostacky-controller/ + engram.ts (formato V2 — cada
+  // .ts suelto se carga como plugin independiente, los helpers no van sueltos)
   try {
     const { copyFileSync, mkdirSync, existsSync, rmSync } = await import("fs");
     const { join } = await import("path");
     const { PACKAGE_ROOT } = await import("../github.js");
     const { findProjectRoot } = await import("../fs.js");
-    const src = join(PACKAGE_ROOT, "assets", "plugins", "ostacky-plugin.ts");
-    const dest = join(paths.plugins, "ostacky-plugin.ts");
-    if (existsSync(src)) {
-      mkdirSync(paths.plugins, { recursive: true });
-      copyFileSync(src, dest);
+    const packageSrc = join(PACKAGE_ROOT, "assets", "plugins", "ostacky-controller");
+    const packageDest = join(paths.plugins, "ostacky-controller");
+    if (existsSync(join(packageSrc, "index.ts"))) {
+      mkdirSync(packageDest, { recursive: true });
+      for (const f of ["index.ts", "controller-core.ts", "security.ts", "tiered.ts"]) {
+        const s = join(packageSrc, f);
+        if (existsSync(s)) copyFileSync(s, join(packageDest, f));
+      }
     }
-    // Cleanup legacy: remover guard y controller viejos si quedaron de instalaciones previas
-    for (const legacy of ["ostacky-guard.ts", "ostacky-controller.ts"]) {
+    // Cleanup legacy: sueltos que el server carga como plugins y fallan (sin default),
+    // más guard/controller viejos de instalaciones previas
+    for (const legacy of ["ostacky-plugin.ts", "controller-core.ts", "security.ts", "tiered.ts", "ostacky-guard.ts", "ostacky-controller.ts"]) {
       const lp = join(paths.plugins, legacy);
       if (existsSync(lp)) try { rmSync(lp, { force: true }); } catch {}
     }

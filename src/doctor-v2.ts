@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, readdirSync } from "fs";
 import { join, delimiter, isAbsolute } from "path";
 import { findOpenCodeConfig, readOpenCodeConfig } from "./config.js";
 import { findOpenCodeDir } from "./fs.js";
@@ -14,8 +14,12 @@ export function checkDoctorV2(projectRoot: string): string[] {
   const cwd = projectRoot;
   const opencodeDir = findOpenCodeDir(cwd) || join(cwd, ".opencode");
 
-  // 1) Plugin: existe no basta — debe ser API V2
+  // 1) Plugin: existe no basta — debe ser API V2.
+  // Layout V2: package dir (un ID = un directorio); sueltos legacy se aceptan
+  // pero los helpers sin default siempre fallan en el server (ver 1b).
   const pluginPaths = [
+    join(opencodeDir, "plugins", "ostacky-controller", "index.ts"),
+    join(cwd, ".opencode", "plugins", "ostacky-controller", "index.ts"),
     join(opencodeDir, "plugins", "ostacky-plugin.ts"),
     join(cwd, ".opencode", "plugins", "ostacky-plugin.ts"),
     join(cwd, "assets", "plugins", "ostacky-plugin.ts"),
@@ -31,6 +35,37 @@ export function checkDoctorV2(projectRoot: string): string[] {
       lines.push(`⚠️ controller: no se pudo leer ${found}`);
     }
   }
+
+  // 1b) Helpers sueltos sin default: el server los carga como plugins y fallan
+  const pluginsDir = join(opencodeDir, "plugins");
+  for (const f of ["controller-core.ts", "security.ts", "tiered.ts"]) {
+    try {
+      const p = join(pluginsDir, f);
+      if (existsSync(p) && !readFileSync(p, "utf-8").includes("export default")) {
+        lines.push(`⚠️ plugins/${f} suelto sin default — el server lo carga como plugin y falla; mové a plugins/ostacky-controller/ o re-corré install (doctor no lo modifica)`);
+      }
+    } catch {}
+  }
+
+  // 1c) Plugins globales V1: warn-only, jamás modificar (son del usuario)
+  try {
+    const home = process.env.HOME || process.env.USERPROFILE || "";
+    const globalPlugins = home ? join(home, ".config", "opencode", "plugins") : "";
+    if (globalPlugins) {
+      let entries: string[] = [];
+      try {
+        entries = readdirSync(globalPlugins).filter((e) => e.endsWith(".ts"));
+      } catch {}
+      for (const e of entries) {
+        try {
+          const src = readFileSync(join(globalPlugins, e), "utf-8");
+          if (src.includes("@opencode-ai/") || !src.includes("export default")) {
+            lines.push(`⚠️ global ${e} con formato V1 (@opencode-ai/* o sin default) — no corre en server V2; actualizalo o borralo a mano (doctor no lo modifica)`);
+          }
+        } catch {}
+      }
+    }
+  } catch {}
 
   // 2) Config MCP: forma servers + legacy propio
   const configPath = findOpenCodeConfig(cwd);

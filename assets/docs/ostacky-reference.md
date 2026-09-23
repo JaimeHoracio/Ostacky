@@ -48,6 +48,10 @@ Allowlist: `.env.example/.template/.sample` nunca bloquea. `extractPathsFromBash
 
 `content` requerido salvo `content:"hash:"+fastFingerprint` cuando `lastValidated.filePath==filePath && fingerprint==hash` y fingerprint coincide con disco → EDITABLE sin body. Hash stale → CONFLICT `stale fingerprint`.
 
+## refresh_fingerprint (revalidación sin churn)
+
+Tras refino post-complete (archivo ya correcto, sin edición pendiente): `refresh_fingerprint({filePath})` o `refresh_fingerprint({taskId})` re-sincroniza `tasks[].fileHash` + `fileFingerprints` con disco, sin `oldString/newString`. Vale para SPEC y DIRECT, en `EXECUTING_INLINE`, `EXECUTING_SUBAGENTS` y `SPECIFICATION`. Luego `verifyIntegrity.ok` → `implementation_complete` sin `force`.
+
 ## Enforcement (plugin)
 
 El plugin hace cumplir `PENDING` en `ctx.tool.hook("execute.before")`; `lastCheck={revision, result}` cachea ALLOW por revisión, revalida si cambia o >5 tools; `BLOCKED` nunca cacheado. Métricas `stateCheckCount` cuentan checks del plugin (no del LLM).
@@ -64,15 +68,15 @@ Principio: **eficacia > recorte** — si recorte rompiera caché y saliera más 
 
 ## Security single-source
 
-`src/security.ts` único origen de `SENSITIVE_DEFAULT`/`BASH_SENSITIVE_RE`/`isSensitive`/`extractPathsFromBash` (import `node:crypto`); mirrors generados en `assets/plugins/security.ts` (solo Sensitive guard, sin crypto) y `assets/mcp/ostacky-controller/security.js` vía `bun run scripts/sync-controller-core.ts`. `ostacky-plugin.ts` importa de `./security.ts` self-contained (no `../../src`). `BASH_SENSITIVE_RE` arriba. `OSTACKY_SENSITIVE_PATTERNS` override.
+`src/security.ts` único origen de `SENSITIVE_DEFAULT`/`BASH_SENSITIVE_RE`/`isSensitive`/`extractPathsFromBash` (import `node:crypto`); mirrors generados en `assets/plugins/ostacky-controller/security.ts` (solo Sensitive guard, sin crypto) y `assets/mcp/ostacky-controller/security.js` vía `bun run scripts/sync-controller-core.ts`. `assets/plugins/ostacky-controller/index.ts` importa de `./security.ts` self-contained (no `../../src`). `BASH_SENSITIVE_RE` arriba. `OSTACKY_SENSITIVE_PATTERNS` override.
 
 ## Tiered single-source
 
-`src/tiered.ts` único origen de `isTrivial(msg,state)` + `getControllerState(dir)`. `ostacky-plugin.ts` importa de `./tiered.ts` mirror (generado vía `sync-controller-core.ts`), `engram.ts` inlined (misma regex, evita import dinámico). No duplicar regex. Ver `assets/plugins/ostacky-plugin.ts` y `assets/plugins/engram.ts`.
+`src/tiered.ts` único origen de `isTrivial(msg,state)` + `getControllerState(dir)`. `index.ts` importa de `./tiered.ts` mirror (generado vía `sync-controller-core.ts`), `engram.ts` inlined (misma regex, evita import dinámico). No duplicar regex. Ver `assets/plugins/ostacky-controller/` y `assets/plugins/engram.ts`.
 
 ## Controller single-source
 
-`src/controller-core.ts` CANÓNICO para `STATES/TRANSITIONS/DEFAULT_STATE`; mirrors generados en `assets/plugins/controller-core.ts` (TS) y `assets/mcp/ostacky-controller/controller-core.js` (JS strippado) vía `bun run scripts/sync-controller-core.ts` (prebuild). No editar mirrors. `ostacky-plugin.ts` importa de `./controller-core.ts` self-contained.
+`src/controller-core.ts` CANÓNICO para `STATES/TRANSITIONS/DEFAULT_STATE`; mirrors generados en `assets/plugins/ostacky-controller/controller-core.ts` (TS) y `assets/mcp/ostacky-controller/controller-core.js` (JS strippado) vía `bun run scripts/sync-controller-core.ts` (prebuild). No editar mirrors. `index.ts` importa de `./controller-core.ts` self-contained. Import siempre `./security.ts` (el server V2 no resuelve `.js→.ts`).
 
 ## Prompt-efficiency
 

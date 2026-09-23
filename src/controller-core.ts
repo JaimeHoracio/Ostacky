@@ -1,6 +1,6 @@
 /**
  * controller-core — CANÓNICO Single source of truth para TRANSITIONS, STATES, DEFAULT_STATE y helpers.
- * Mirrors generados en assets/plugins/controller-core.ts y assets/mcp/ostacky-controller/controller-core.js
+ * Mirrors generados en assets/plugins/ostacky-controller/controller-core.ts y assets/mcp/ostacky-controller/controller-core.js
  * via `bun run scripts/sync-controller-core.ts` (prebuild). No editar mirrors directamente.
  */
 

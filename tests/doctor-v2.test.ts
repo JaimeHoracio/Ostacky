@@ -88,4 +88,41 @@ describe('checkDoctorV2', () => {
         mkdirSync(TEST_ROOT, { recursive: true });
         expect(() => checkDoctorV2(TEST_ROOT)).not.toThrow();
     });
+
+    it('accepts the ostacky-controller package dir', () => {
+        writeProject({
+            'opencode.json': '{}',
+            '.opencode/plugins/ostacky-controller/index.ts': `import { Plugin } from "@opencode/plugin"\nexport default Plugin.define({ id: "ostacky-controller", async setup(ctx) {} })`,
+        });
+        const lines = checkDoctorV2(TEST_ROOT);
+        expect(lines.some((l) => l.startsWith('✅ controller: plugin V2'))).toBe(true);
+    });
+
+    it('warns on loose helper files without default export', () => {
+        writeProject({
+            'opencode.json': '{}',
+            '.opencode/plugins/ostacky-controller/index.ts': `import { Plugin } from "@opencode/plugin"\nexport default Plugin.define({ id: "ostacky-controller", async setup(ctx) {} })`,
+            '.opencode/plugins/security.ts': `export const SENSITIVE_DEFAULT: string[] = [];`,
+        });
+        const lines = checkDoctorV2(TEST_ROOT);
+        expect(lines.some((l) => l.includes('security.ts') && l.includes('sin default'))).toBe(true);
+    });
+
+    it('warns warn-only on global V1 plugins without touching them', () => {
+        const prevHome = process.env.HOME;
+        const fakeHome = join(import.meta.dir, '.test-doctor-v2-home');
+        if (existsSync(fakeHome)) rmSync(fakeHome, { recursive: true, force: true });
+        mkdirSync(join(fakeHome, '.config', 'opencode', 'plugins'), { recursive: true });
+        writeFileSync(join(fakeHome, '.config', 'opencode', 'plugins', 'engram.ts'), `export const Engram = async (ctx: any) => ({})`, 'utf-8');
+        process.env.HOME = fakeHome;
+        try {
+            writeProject({ 'opencode.json': '{}' });
+            const lines = checkDoctorV2(TEST_ROOT);
+            expect(lines.some((l) => l.includes('global') && l.includes('engram.ts'))).toBe(true);
+            expect(existsSync(join(fakeHome, '.config', 'opencode', 'plugins', 'engram.ts'))).toBe(true);
+        } finally {
+            process.env.HOME = prevHome;
+            rmSync(fakeHome, { recursive: true, force: true });
+        }
+    });
 });

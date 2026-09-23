@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 describe("codegraph-gate", () => {
   it("Read src/auth.ts sin Discovery → BLOCKED sugiere cache", () => {
-    const pluginPath = join(import.meta.dir, "..", "assets","plugins","ostacky-plugin.ts");
+    const pluginPath = join(import.meta.dir, "..", "assets","plugins","ostacky-controller","index.ts");
     const src = readFileSync(pluginPath, "utf-8");
     expect(src).toContain("Usá getDiscoverySnapshot primero");
     expect(src).toContain("isCodegraphAvailable");
@@ -19,7 +19,7 @@ describe("codegraph-gate", () => {
   });
 
   it("Grep solo para literales no-código", () => {
-    const pluginPath = join(import.meta.dir, "..", "assets","plugins","ostacky-plugin.ts");
+    const pluginPath = join(import.meta.dir, "..", "assets","plugins","ostacky-controller","index.ts");
     const src = readFileSync(pluginPath, "utf-8");
     expect(src).toContain("isLiteralGrep");
   });

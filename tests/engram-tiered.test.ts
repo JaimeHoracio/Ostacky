@@ -6,8 +6,8 @@ describe("engram-tiered", () => {
   it("entrypoint nativo V2", () => {
     const pluginPath = join(import.meta.dir, "..", "assets", "plugins", "engram.ts");
     const src = readFileSync(pluginPath, "utf-8");
-    expect(src).toContain('from "@opencode/plugin"');
-    expect(src).toContain("Plugin.define");
+    expect(src).toContain('import type { Plugin } from "@opencode/plugin"');
+    expect(src).toContain("export default {");
     expect(src).toContain('id: "engram"');
     expect(src).toContain('ctx.session.hook("prompt"');
     expect(src).toContain('ctx.session.hook("context"');

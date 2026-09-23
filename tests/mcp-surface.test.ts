@@ -14,7 +14,7 @@ describe("mcp-surface", () => {
   });
 
   it("conserva las tools vivas clave", () => {
-    for (const name of ["'ping'", "'start_request'", "'get_state'", "'record_discovery'", "'consume_route_decision'", "'complete_task'"]) {
+    for (const name of ["'ping'", "'start_request'", "'get_state'", "'record_discovery'", "'consume_route_decision'", "'complete_task'", "'refresh_fingerprint'"]) {
       expect(src.includes(name)).toBe(true);
     }
   });

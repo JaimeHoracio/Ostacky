@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
-const pluginPath = join(import.meta.dir, "..", "assets","plugins","ostacky-plugin.ts");
+const pluginPath = join(import.meta.dir, "..", "assets","plugins","ostacky-controller","index.ts");
 const pluginSrc = existsSync(pluginPath) ? readFileSync(pluginPath, "utf-8") : "";
 
 describe("controller-hybrid", () => {
@@ -12,9 +12,11 @@ describe("controller-hybrid", () => {
   });
 
   it("entrypoint nativo V2", () => {
-    expect(pluginSrc).toContain('from "@opencode/plugin"');
-    expect(pluginSrc).toContain("Plugin.define");
+    // Objeto literal directo: el server no resuelve @opencode/plugin runtime
+    expect(pluginSrc).toContain('import type { Plugin } from "@opencode/plugin"');
+    expect(pluginSrc).toContain("export default {");
     expect(pluginSrc).toContain('id: "ostacky-controller"');
+    expect(pluginSrc.includes("Plugin.define({")).toBe(false);
     expect(pluginSrc.includes("@opencode-ai/plugin")).toBe(false);
     expect(pluginSrc.includes("export const OstackyController: Plugin")).toBe(false);
   });
