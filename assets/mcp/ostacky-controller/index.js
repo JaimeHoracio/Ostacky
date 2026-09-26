@@ -42,6 +42,13 @@ import {
     getMaxTasks,
 } from './controller-core.js';
 
+// --- approved-but-blocked recovery (sin timers) ---
+// El PENDING que espera confirmación del usuario puede esperar indefinidamente (por diseño):
+// acá NO hay timeouts ni watchdogs de idle (ver tests/controller-source.test.ts).
+// Esto solo cuenta consumes fallidos cuando el usuario YA aprobó pero el consume no completa,
+// y al umbral habilita recovery (refresh_decision) sin ejecutar nada por sí mismo.
+const CONSUME_FAIL_THRESHOLD = 3;
+
 // --- Audit JSONL (D5) — single source: src/audit-jsonl.ts ---
 function getAuditPath(projectRoot) {
     return join(projectRoot, '.opencode', 'ostacky-audit.jsonl');
@@ -1042,6 +1049,27 @@ class OstackyController {
         return suggestions[state] || `Unexpected state: ${state}`;
     }
 
+    // --- approved-but-blocked: contador de consumes fallidos + hint de recovery ---
+    async #noteConsumeFailure(via, reason) {
+        const count = (this.#state.consumeFailedCount || 0) + 1;
+        this.#state.consumeFailedCount = count;
+        await this.#audit(
+            'WARN',
+            'consume_failed',
+            `${via}: ${reason} (attempt ${count}/${CONSUME_FAIL_THRESHOLD})${count >= CONSUME_FAIL_THRESHOLD ? ' — recovery available: call refresh_decision for fresh IDs, then retry' : ''}`
+        );
+        // Durability: el fallo y su evidencia nunca deben perderse en un restart
+        await this.#flushAudit(true);
+        return count;
+    }
+
+    #consumeRecoveryHint(count) {
+        if (count >= CONSUME_FAIL_THRESHOLD) {
+            return 'Recovery: call refresh_decision for fresh decision IDs, then retry the consume. The user approval still stands — only the IDs are repaired.';
+        }
+        return undefined;
+    }
+
     // --- 3.3: Degraded mode ---
     #enterDegradedMode(reason) {
         this.#degraded = true;
@@ -1100,6 +1128,7 @@ class OstackyController {
             fileFingerprints: {},
             expectedTasks: null,
             expectedTaskCount: null,
+            consumeFailedCount: 0,
             error: null,
         });
         await this.#audit(
@@ -1138,6 +1167,7 @@ class OstackyController {
             );
         await this.#transition(to, { error: null });
         await this.#audit('DISCOVERY', 'record_clarification');
+        await this.#flushAudit(true);
         return { state: this.#state.state, revision: this.#state.revision };
     }
 
@@ -1221,6 +1251,7 @@ class OstackyController {
             lastProposal,
         });
         await this.#audit('ROUTE_DECISION_PENDING', 'record_discovery', `level=${level}, default=${defaultChoice}`);
+        await this.#flushAudit(true);
         // 8.2: reasoning sin plan → WARN
         if (!shownToUser && !isTrivial) {
             const auditId = `aud-${Date.now()}-${this.#state.auditSeq}`;
@@ -1352,13 +1383,25 @@ class OstackyController {
                 'consume_route_decision'
             );
         }
-        if (this.#state.routeDecisionId !== decisionId)
-            return this.#makeError('Decision ID mismatch', 'consume_route_decision');
+        if (this.#state.routeDecisionId !== decisionId) {
+            const fails = await this.#noteConsumeFailure('consume_route_decision', 'Decision ID mismatch');
+            const err = this.#makeError('Decision ID mismatch', 'consume_route_decision');
+            const hint = this.#consumeRecoveryHint(fails);
+            return hint ? { ...err, recovery: hint } : err;
+        }
         const to = this.#isAllowedTransition(this.#state.state, 'consume_route_decision', choice);
-        if (!to)
-            return this.#makeError(`Route ${choice} not allowed from ${this.#state.state}`, 'consume_route_decision');
-        await this.#transition(to, { routeChoice: choice });
+        if (!to) {
+            const fails = await this.#noteConsumeFailure('consume_route_decision', `choice ${choice} not allowed`);
+            const err = this.#makeError(
+                `Route ${choice} not allowed from ${this.#state.state}`,
+                'consume_route_decision'
+            );
+            const hint = this.#consumeRecoveryHint(fails);
+            return hint ? { ...err, recovery: hint } : err;
+        }
+        await this.#transition(to, { routeChoice: choice, consumeFailedCount: 0 });
         await this.#audit(to, 'consume_route_decision', `choice=${choice}`);
+        await this.#flushAudit(true);
         return { state: this.#state.state, revision: this.#state.revision, routeChoice: choice };
     }
 
@@ -1562,6 +1605,7 @@ class OstackyController {
             lastProposal: execLastProposal,
         });
         await this.#audit('EXECUTION_DECISION_PENDING', 'record_execution_analysis');
+        await this.#flushAudit(true);
         // fix-execution-analysis-validation: degraded/early-exit defaulted snapshot → WARN
         if (_snapshotDefaulted) {
             const auditId = `aud-${Date.now()}-${this.#state.auditSeq}`;
@@ -1678,14 +1722,52 @@ class OstackyController {
                 'consume_execution_decision'
             );
         }
-        if (this.#state.executionDecisionId !== decisionId)
-            return this.#makeError('Decision ID mismatch', 'consume_execution_decision');
+        if (this.#state.executionDecisionId !== decisionId) {
+            const fails = await this.#noteConsumeFailure('consume_execution_decision', 'Decision ID mismatch');
+            const err = this.#makeError('Decision ID mismatch', 'consume_execution_decision');
+            const hint = this.#consumeRecoveryHint(fails);
+            return hint ? { ...err, recovery: hint } : err;
+        }
         const to = this.#isAllowedTransition(this.#state.state, 'consume_execution_decision', mode);
-        if (!to)
-            return this.#makeError(`Mode ${mode} not allowed from ${this.#state.state}`, 'consume_execution_decision');
-        await this.#transition(to, { executionMode: mode });
+        if (!to) {
+            const fails = await this.#noteConsumeFailure('consume_execution_decision', `mode ${mode} not allowed`);
+            const err = this.#makeError(
+                `Mode ${mode} not allowed from ${this.#state.state}`,
+                'consume_execution_decision'
+            );
+            const hint = this.#consumeRecoveryHint(fails);
+            return hint ? { ...err, recovery: hint } : err;
+        }
+        await this.#transition(to, { executionMode: mode, consumeFailedCount: 0 });
         await this.#audit(to, 'consume_execution_decision', `mode=${mode}`);
+        await this.#flushAudit(true);
         return { state: this.#state.state, revision: this.#state.revision, executionMode: mode };
+    }
+
+    /**
+     * Regenera decision IDs frescos dentro del PENDING actual.
+     * Recovery para "usuario aprobó pero el consume no completa" (IDs viejos tras
+     * restart/compactación). No ejecuta nada: solo repara el tubo, la aprobación sigue valiendo.
+     */
+    async refreshDecision() {
+        this.#load();
+        const s = this.#state.state;
+        const prevFails = this.#state.consumeFailedCount || 0;
+        if (s === 'ROUTE_DECISION_PENDING') {
+            const routeDecisionId = 'route-' + Date.now();
+            await this.#transition(s, { routeDecisionId, consumeFailedCount: 0 });
+            await this.#audit(s, 'refresh_decision', `fresh routeDecisionId after ${prevFails} failed consume(s)`);
+            await this.#flushAudit(true);
+            return { state: this.#state.state, revision: this.#state.revision, routeDecisionId };
+        }
+        if (s === 'EXECUTION_DECISION_PENDING') {
+            const executionDecisionId = 'exec-' + Date.now();
+            await this.#transition(s, { executionDecisionId, consumeFailedCount: 0 });
+            await this.#audit(s, 'refresh_decision', `fresh executionDecisionId after ${prevFails} failed consume(s)`);
+            await this.#flushAudit(true);
+            return { state: this.#state.state, revision: this.#state.revision, executionDecisionId };
+        }
+        return this.#makeError(`No decision to refresh from state ${s}`, 'refresh_decision');
     }
 
     async implementationComplete({ force } = {}) {
@@ -2853,7 +2935,7 @@ function safeHandler(fn, options = {}) {
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.9.3',
+    version: '0.9.4',
 });
 
 server.registerTool(
@@ -2968,6 +3050,19 @@ server.registerTool(
     safeHandler(async ({ decisionId, mode }) => {
         log('tool:consume_execution_decision', { mode });
         return await controller.consumeExecutionDecision({ decisionId, mode });
+    })
+);
+
+server.registerTool(
+    'refresh_decision',
+    {
+        description:
+            'Regenerate fresh decision IDs within the current PENDING state (recovery when the user approved but consume keeps failing with stale IDs; executes nothing)',
+        inputSchema: z.object({}),
+    },
+    safeHandler(async () => {
+        log('tool:refresh_decision');
+        return await controller.refreshDecision();
     })
 );
 
@@ -3442,7 +3537,7 @@ function setupGracefulShutdown(ctrl) {
 }
 
 async function main() {
-    log('Starting ostacky-controller MCP v0.9.3...');
+    log('Starting ostacky-controller MCP v0.9.4...');
     log('State path:', { path: statePath });
     // Clean up stale tmp/lock files from previous runs
     cleanupTmpFiles(statePath);

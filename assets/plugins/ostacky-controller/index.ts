@@ -304,9 +304,16 @@ export default {
           lastCheck = { revision: freshState.revision, result: pendingStates.includes(freshState.state) ? "BLOCKED" : "ALLOW" }
         }
         if (lastCheck.result === "BLOCKED") {
-          const allowed = ["consume_route_decision", "consume_execution_decision", "record_clarification", "abandon", "check_file_access", "consume_file_access_decision", "record_user_confirmation"]
-          const isControllerTool = tool.startsWith("ostacky-controller_") || tool.startsWith("ostacky_") || allowed.some(t => tool.includes(t))
-          if (!isControllerTool) {
+          const allowed = ["consume_route_decision", "consume_execution_decision", "refresh_decision", "record_clarification", "abandon", "check_file_access", "consume_file_access_decision", "record_user_confirmation"]
+          // Observabilidad read-only: leer estado/auditoría para obtener decisionId no debe deadloquear
+          const observable = ["get_state", "get_audit", "get_metrics", "get_handoff", "get_available_transitions", "get_tasks"]
+          const isControllerTool = tool.startsWith("ostacky-controller_") || tool.startsWith("ostacky_") || allowed.some(t => tool.includes(t)) || observable.some(t => tool.includes(t))
+          // Code Mode deadlock fix: `execute` es wrapper cuyo outer siempre es "execute" — inspeccionar intent interno
+          const codeStr = typeof (args as any)?.code === "string" ? (args as any).code : typeof (args as any)?.input === "string" ? (args as any).input : ""
+          const isExecuteWithAllowed = tool === "execute" && codeStr && allowed.some(t => codeStr.includes(t))
+          // Observabilidad via execute wrapper: get_state/get_audit para obtener decisionId no deben bloquearse en PENDING
+          const isExecuteWithObservable = tool === "execute" && codeStr && observable.some(t => codeStr.includes(t))
+          if (!isControllerTool && !isExecuteWithAllowed && !isExecuteWithObservable) {
             throw new Error(`BLOCKED: call consume_* first — controller is in ${freshState.state}`)
           }
         }
