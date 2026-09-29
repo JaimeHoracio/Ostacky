@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { OstackyController, parseTasksMd } from '../assets/mcp/ostacky-controller/index.js';
 
 const TMP_PREFIX = join(tmpdir(), 'ostacky-harden-');
@@ -23,10 +23,24 @@ function writeTasks(changeId: string, lines: string[]) {
 
 describe('harden-task-integrity: parseTasksMd', () => {
     it('parses harden-task-integrity tasks.md numeric ids', async () => {
-        // use real project tasks.md
-        const realPath = resolve('.opencode', 'ostacky-state.json');
-        // the changeId is harden-task-integrity — file exists in repo
-        const ids = parseTasksMd('harden-task-integrity', realPath);
+        // Hermetic fixture: used to read the real repo .opencode state,
+        // which doesn't exist on fresh clones/CI. Same 7 numeric ids.
+        const statePath = join(tmp, '.opencode', 'ostacky-state.json');
+        mkdirSync(join(tmp, '.opencode'), { recursive: true });
+        writeTasks('harden-task-integrity', [
+            '# Tasks: harden-task-integrity',
+            '## 1. Group',
+            '- [ ] 1.1 first task',
+            '- [ ] 1.2 second',
+            '- [x] 1.3 done',
+            '## 2. Other',
+            '- [ ] 2.1 third',
+            '- [ ] 2.2 fourth',
+            '- [x] 2.3 fifth',
+            '## 3. Last',
+            '- [ ] 3.1 seventh',
+        ]);
+        const ids = parseTasksMd('harden-task-integrity', statePath);
         // should capture 1.1,1.2,1.3,2.1,2.2,2.3,3.1 (7 ids)
         expect(ids.length).toBe(7);
         expect(ids).toContain('1.1');

@@ -1,0 +1,10 @@
+{
+    "name": "openspec-mcp",
+    "version": "0.6.1",
+    "private": true,
+    "type": "module",
+    "dependencies": {
+        "@modelcontextprotocol/server": "^2.0.0-beta.5",
+        "zod": "^4.0.0"
+    }
+}

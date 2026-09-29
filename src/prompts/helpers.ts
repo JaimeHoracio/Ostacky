@@ -60,7 +60,7 @@ export function printPostInstallSteps(): void {
     [
       "Cerrá y reiniciá OpenCode si ya estaba corriendo (los MCP no recargan su config en caliente):",
       "  TUI → opencode",
-      "  Web → opencode web --port 4096",
+      "  Web → opencode pair (abrí el link/QR en el navegador)",
       "Seleccioná el agente: `/agents` → `ostacky` (o Shift+Tab / Ctrl+X A)",
       "Skills bundleadas en .opencode/skills/ — revisá cuáles activás",
       "¿Errores en el stack? Ejecutá /install-stack desde el chat de OpenCode",

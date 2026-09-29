@@ -400,11 +400,17 @@ export default {
           if (st && targetPath) {
             const fps = Object.keys(st.fileFingerprints || {})
             const taskFiles = Object.values(st.tasks || {}).map((t: any) => t.filePath).filter(Boolean)
-            const lvFile = (st.lastValidated as any)?.filePath || null
+            const lv: any = (st as any).lastValidated || null
+            const lvByFile = lv?.byFile && typeof lv.byFile === 'object' ? lv.byFile : null
+            const lvPaths: string[] = [
+              ...(lvByFile ? Object.keys(lvByFile) : []),
+              ...(lv?.filePath ? [lv.filePath as string] : []),
+            ]
+            const lvFile = lvPaths.length > 0 ? lvPaths : null
             isTaskTracked =
               fps.some((fp) => targetPath.endsWith(fp) || fp.endsWith(targetPath) || targetPath.includes(fp) || fp.includes(targetPath)) ||
               taskFiles.some((fp: string) => targetPath.endsWith(fp) || fp.endsWith(targetPath) || targetPath.includes(fp) || fp.includes(targetPath)) ||
-              (lvFile ? targetPath.endsWith(lvFile) || lvFile.endsWith(targetPath) : false)
+              (lvFile ? lvFile.some((lf) => targetPath.endsWith(lf) || lf.endsWith(targetPath)) : false)
           }
         } catch {}
         if (isCodeFile && !isLiteralGrep && !isSpecTasksPath && !isDocsPath && !isTaskTracked) {
@@ -465,8 +471,10 @@ export default {
             const exists = existsSync(abs)
             const isNewFile = !exists && !freshState.fileFingerprints?.[p] && !Object.values(freshState.tasks || {}).some((t: any) => t.filePath === p)
             if (isNewFile) continue
-            const lv = freshState.lastValidated
-            if (!lv || lv.filePath !== p) {
+            const lv: any = (freshState as any).lastValidated
+            const lvOk =
+              lv && ((lv.byFile && typeof lv.byFile === 'object' && lv.byFile[p]) || (lv as any).filePath === p)
+            if (!lvOk) {
               throw new Error(`BLOCKED: file mutation requires validate_edit/expectedTask for ${p} — usa validate_edit antes de shell mutante`)
             }
           }
@@ -526,8 +534,9 @@ export default {
             const claimed = oldString.slice(5)
             const currentFp = fastFingerprint(resolve(directory, targetPath))
             const s = readState(directory)
-            const last = s?.lastValidated
-            if (claimed !== currentFp || (last && last.filePath === targetPath && last.hash !== currentFp)) {
+            const last: any = s?.lastValidated
+            const lastEntry = last?.byFile?.[targetPath] || (last?.filePath === targetPath ? last : null)
+            if (claimed !== currentFp || (lastEntry && lastEntry.hash !== currentFp)) {
               // mark stale attempt
               try {
                 const st = readState(directory) || { ...DEFAULT_STATE }
@@ -535,6 +544,17 @@ export default {
                 persistState(directory, st)
               } catch {}
               throw new Error(`CONFLICT: stale fingerprint for ${targetPath}`)
+            }
+          } else if (oldString.length === 0) {
+            // fix-new-file-gate: modo create explícito — solo válido si el archivo no existe en disco
+            try {
+              const fullPath = resolve(directory, targetPath)
+              if (existsSync(fullPath)) {
+                throw new Error(`CONFLICT: file exists, use replace mode for ${targetPath}`)
+              }
+            } catch (e: any) {
+              if (e.message?.startsWith("CONFLICT")) throw e
+              // error de fs distinto de existencia -> seguir (write decidirá)
             }
           } else if (oldString.length > 0) {
             // Check fresh content has exactly one occurrence
@@ -558,12 +578,27 @@ export default {
               // file not exists -> allow write?
             }
           }
-          // Record lastValidated for future hash checks
+          // Record lastValidated per-file for future hash checks (fix-new-file-gate: mapa + fallback legacy)
           try {
             const st = readState(directory)
             if (st) {
               const fp = fastFingerprint(resolve(directory, targetPath))
-              st.lastValidated = { filePath: targetPath, hash: fp, ts: Date.now() }
+              const prev: any = (st as any).lastValidated
+              let byFile: Record<string, any> = {}
+              if (prev) {
+                if (prev.byFile && typeof prev.byFile === 'object') byFile = { ...prev.byFile }
+                else if (prev.filePath)
+                  byFile[prev.filePath] = { hash: prev.hash ?? null, ts: prev.ts ?? 0, mode: prev.mode ?? 'replace' }
+              }
+              const isCreate = oldString.length === 0
+              byFile[targetPath] = { hash: fp, ts: Date.now(), mode: isCreate ? 'create' : 'replace' }
+              ;(st as any).lastValidated = {
+                byFile,
+                filePath: targetPath,
+                hash: fp,
+                ts: Date.now(),
+                mode: isCreate ? 'create' : 'replace',
+              }
             }
           } catch {}
         }

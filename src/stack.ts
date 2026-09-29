@@ -4,6 +4,7 @@ import { execFileSync } from "child_process";
 import {
   findProjectRoot,
   findOpenCodeDir,
+  isGitRepo,
   downloadAndExtractWithRetry,
   findBinaryInDir,
   getCommandInvocation,
@@ -243,13 +244,22 @@ export async function installCodeGraph(toolsDir?: string): Promise<{ success: bo
     return failAfterExtraction(`CodeGraph fue extraído pero no se puede ejecutar: ${(error as Error).message}`);
   }
 
-  // Inicializar el índice de CodeGraph en el proyecto — con diagnóstico mejorado (copiado de robustez de Engram)
+  // Inicializar el índice de CodeGraph en el proyecto.
+  // Preflight sin git: el binario exige repo y su stderr es críptico; se salta
+  // el init con mensaje accionable (binario + MCP quedan listos, solo falta el índice).
   let indexWarning: string | null = null;
-  try {
-    runTool(localBin, ["init", "-i"], projectRoot, 120_000);
-  } catch (error) {
-    const msg = (error as Error).message;
-    indexWarning = `El índice no se pudo inicializar todavía: ${msg}. Sugerencia: ejecutá manualmente \`${localBin} init -i\` en ${projectRoot} o \`npx ostacky install-stack --scope local\` para reintentar. Si el path del binario (${localBin}) apunta a ${cgToolDir} y esperabas otro proyecto, verificá que corriste el comando dentro del proyecto correcto (con .git) y con --scope local.`;
+  if (!isGitRepo(projectRoot)) {
+    indexWarning =
+      `Sin repo git en ${projectRoot}: índice pendiente. ` +
+      `Ejecutá \`git init\` y reintentá con \`npx ostacky install-stack --scope local\`. ` +
+      `El binario y el MCP quedaron configurados.`;
+  } else {
+    try {
+      runTool(localBin, ["init", "-i"], projectRoot, 120_000);
+    } catch (error) {
+      const msg = (error as Error).message;
+      indexWarning = `El índice no se pudo inicializar todavía: ${msg}. Sugerencia: ejecutá manualmente \`${localBin} init -i\` en ${projectRoot} o \`npx ostacky install-stack --scope local\` para reintentar. Si el path del binario (${localBin}) apunta a ${cgToolDir} y esperabas otro proyecto, verificá que corriste el comando dentro del proyecto correcto (con .git) y con --scope local.`;
+    }
   }
 
   // Registrar directamente evita que `codegraph install` cree o mueva archivos

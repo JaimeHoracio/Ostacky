@@ -67,6 +67,24 @@ export function findProjectRoot(startDir: string = process.cwd()): string {
 }
 
 /**
+ * Indica si un directorio está dentro de un repo git (worktree-aware).
+ * Nunca lanza: retorna false si git no existe o el dir no es repo.
+ * Usado por el preflight del instalador para degradar el stack sin git.
+ */
+export function isGitRepo(dir: string = process.cwd()): boolean {
+  try {
+    const out = execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
+      encoding: "utf-8",
+      cwd: dir,
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+    return out === "true";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Resuelve el directorio .opencode — siempre local.
  * Solo existe scope "local": retorna `<projectRoot>/.opencode`.
  * Flags legacy `global|auto` son rechazados antes por `parseScopeArg`.
@@ -80,12 +98,13 @@ export function getOpenCodeDirForScope(scope: Scope, cwd: string = process.cwd()
 }
 
 /**
- * Parsea --scope de argv (soporta --scope local y --scope=local). Solo "local" es válido.
- * Flags legacy `global|auto` retornan "__legacy_global__" / "__legacy_auto__" para mensaje educativo.
+  * Parsea --scope de argv (soporta --scope local y --scope=local). Solo "local" es válido.
+ * Flags legacy `global|auto` y `-g` retornan "__legacy_global__" / "__legacy_auto__" para mensaje educativo.
  */
 export function parseScopeArg(argv: string[] = process.argv): Scope | "__legacy_global__" | "__legacy_auto__" | null {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
+    if (arg === "-g") return "__legacy_global__" as unknown as Scope;
     if (arg === "--scope" && i + 1 < argv.length) {
       const v = argv[i + 1];
       if (v === "local") return v;

@@ -27,7 +27,7 @@ ostacky — Instalador de agentes, comandos, skills y MCPs para OpenCode
 
 Uso:
   npx ostacky [--scope local]                    Menú interactivo (instalación completa, siempre local)
-  npx ostacky install [--scope local]            Instalar TODO (agente + skills + MCPs + CodeGraph + OpenSpec + Engram)
+  npx ostacky install [--scope local] [--no-stack]  Instalar TODO (agente + skills + MCPs + CodeGraph + OpenSpec + Engram; --no-stack omite el stack)
   npx ostacky add agent [--scope local]          Agregar agente(s)
   npx ostacky add command [--scope local]        Agregar command(s)
   npx ostacky add skill [--scope local]          Agregar skill(s)
@@ -73,6 +73,12 @@ function parseScopeArg(argv: string[] = process.argv): 'local' | null {
                 process.exit(1);
             }
         }
+        if (arg === '-g') {
+            console.error(
+                `Error: -g/global removido; Ostacky instala siempre local en <proyecto>/.opencode. Hacé cd al proyecto y re-ejecutá sin -g.`
+            );
+            process.exit(1);
+        }
     }
     return null;
 }
@@ -91,6 +97,7 @@ function withoutScopeArgs(argv: string[]): string[] {
 }
 const scope = parseScopeArg();
 const argvNoScope = withoutScopeArgs(process.argv);
+const noStack = process.argv.includes('--no-stack');
 const [, , cmd, subcmd] = argvNoScope;
 
 async function runDoctorCommand() {
@@ -120,7 +127,7 @@ async function runDoctorCommand() {
         join(cwd, 'assets', 'plugins', 'ostacky-plugin.ts'),
         join(opencodeDir, 'plugins', 'ostacky-plugin.ts'),
         join(cwd, '.opencode', 'plugins', 'ostacky-plugin.ts'),
-        // legacy fallback (pre-0.9.4)
+        // legacy fallback (pre-0.9.5)
         join(cwd, 'assets', 'plugins', 'ostacky-controller.ts'),
         join(opencodeDir, 'plugins', 'ostacky-controller.ts'),
         join(cwd, '.opencode', 'plugins', 'ostacky-controller.ts'),
@@ -498,7 +505,7 @@ async function main() {
     }
     switch (cmd) {
         case 'install':
-            await runInstallCommand(scope);
+            await runInstallCommand(scope, { noStack });
             break;
 
         case 'install-stack':

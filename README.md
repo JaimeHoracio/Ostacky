@@ -23,24 +23,26 @@ opencode
 
 Abre la interfaz de terminal interactiva. **Para elegir el agente Ostacky: usá `Tab` para navegar entre agentes** en el panel lateral, o escribí `/agent Ostacky` en el chat.
 
-### Web UI — para usar desde el navegador
+### Web UI — para usar desde el navegador (OpenCode v2)
 
 ```bash
-opencode web --port 4096
+opencode pair
 ```
 
-Abre OpenCode en el navegador en `http://localhost:4096`. **Para elegir el agente Ostacky: abrí el combo/selector de agentes** en la barra superior y seleccioná "Ostacky". Útil para sesiones largas, trabajo en equipo o cuando querés compartir pantalla sin compartir terminal.
+Abre el link de un solo uso (expira en 5 minutos) o escaneá el QR en el navegador para cargar la web UI con cookie de sesión (30 días). **Para elegir el agente Ostacky: abrí el combo/selector de agentes** en la barra superior y seleccioná "Ostacky". Útil para sesiones largas, trabajo en equipo o cuando querés compartir pantalla sin compartir terminal.
 
-Opciones útiles:
+> Por defecto el server corre en `http://127.0.0.1:49374` solo en localhost. Cambialo con `opencode service` (ver tabla). Docs: https://opencode.ai/v2/docs/cli/web
 
-| Comando                                         | Qué hace                                            |
-| ----------------------------------------------- | --------------------------------------------------- |
-| `opencode web`                                  | Puerto aleatorio, abre el navegador automáticamente |
-| `opencode web --port 4096`                      | Puerto fijo                                         |
-| `opencode web --hostname 0.0.0.0`               | Accesible desde la red local                        |
-| `opencode web --mdns`                           | Descubrible como `opencode.local`                   |
-| `OPENCODE_SERVER_PASSWORD=secreta opencode web` | Con autenticación HTTP Basic                        |
-| `opencode attach http://localhost:4096`         | Conectar una terminal TUI a un servidor web activo  |
+Opciones útiles (v2):
+
+| Comando                                            | Qué hace                                                        |
+| -------------------------------------------------- | --------------------------------------------------------------- |
+| `opencode pair`                                    | Muestra URL + QR para conectar web/app (links de un uso, 5 min) |
+| `opencode serve --hostname 0.0.0.0 --port 4096`    | Server dedicado en foreground (host remoto, Docker/systemd)     |
+| `opencode --server http://127.0.0.1:4096`          | Conectar un cliente TUI a un server activo                      |
+| `opencode service set hostname 0.0.0.0`            | Escuchar en red local (luego `opencode service start`)          |
+| `opencode service set port 49374`                  | Puerto fijo en vez del default del channel                      |
+| `opencode service set password "un-secreto-largo"` | Reemplaza password generado (rota todas las sesiones)           |
 
 > 💡 Si no tenés OpenCode instalado aún: `curl -fsSL https://opencode.ai/install | bash`
 
@@ -248,37 +250,37 @@ Tras instalar (`--scope local`), el proyecto queda así:
 
 ```json
 {
-    "version": "0.9.4",
+    "version": "0.9.5",
     "lockedAt": "2025-01-01T00:00:00.000Z",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.9.4",
+    "tag": "v0.9.5",
     "agents": {
         "ostacky": {
-            "version": "0.9.4",
+            "version": "0.9.5",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "abc123..."
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.9.4",
+            "version": "0.9.5",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "def456..."
         },
         "opsx-sync": {
-            "version": "0.9.4",
+            "version": "0.9.5",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "ghi789..."
         }
     },
     "skills": {
-        "brainstorming": { "version": "0.9.4", ... },
-        "execution-mode-evaluation": { "version": "0.9.4", ... },
-        "openspec-propose": { "version": "0.9.4", ... }
+        "brainstorming": { "version": "0.9.5", ... },
+        "execution-mode-evaluation": { "version": "0.9.5", ... },
+        "openspec-propose": { "version": "0.9.5", ... }
     },
     "mcpServers": {
-        "ostacky-controller": { "version": "0.9.4", ... },
-        "openspec": { "version": "0.9.4", ... }
+        "ostacky-controller": { "version": "0.9.5", ... },
+        "openspec": { "version": "0.9.5", ... }
     }
 }
 ```
@@ -293,7 +295,7 @@ Al terminar la instalación, el flujo normal es:
 
 1. **Iniciar OpenCode** (si no está corriendo):
     - **TUI:** `opencode` en tu terminal → seleccioná el agente con `/agents` (o atajos **Shift+Tab** / **Ctrl+X A**)
-    - **Web:** `opencode web --port 4096` y abrí `http://localhost:4096` → abrí el selector de agentes de la interfaz y elegí `ostacky`
+    - **Web:** `opencode pair` y abrí el link impreso (ej. `http://127.0.0.1:49374/auth/...`) o escaneá el QR → abrí el selector de agentes de la interfaz y elegí `ostacky`
 2. OpenCode detecta automáticamente los archivos nuevos en `.opencode/` al iniciar, no necesita recarga manual.
 3. Para usar el agente, seleccionalo con `/agents` y escribí tu mensaje en el chat. (En OpenCode v2, `@` es solo para referenciar archivos, no agentes.)
 
@@ -310,7 +312,7 @@ Es opcional y solo necesario si algo falló durante la instalación o si querés
 ## Seguridad
 
 - `opencode.jsonc` se versiona en el repo para compartir permisos y MCP de forma reproducible.
-- Las URLs de descarga usan **tags de GitHub** (ej. `v0.9.4`), nunca `main` — instalaciones reproducibles
+- Las URLs de descarga usan **tags de GitHub** (ej. `v0.9.5`), nunca `main` — instalaciones reproducibles
 - Cada path de archivo descargado es validado para prevenir **path traversal**
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
 - El cache local (`.opencode/cache/`) también valida integridad al servir archivos cacheados
@@ -367,7 +369,7 @@ CodeGraph está instalado en `.opencode/tools/codegraph/bin/codegraph` y se conf
 | `.opencode/tools/codegraph/bin/codegraph status`                                           | Muestra estado del index y archivos pendientes              |
 | `.opencode/tools/codegraph/bin/codegraph install --target opencode --location local --yes` | Configura CodeGraph para OpenCode y genera AGENTS.md        |
 
-> **Windows:** si ves `Command failed: cmd.exe /d /c call ... codegraph.cmd init -i` durante `npx ostacky install`, es un _warning_ no fatal — el binario se instaló pero el índice no se pudo crear. Reintentá con `npx ostacky install-stack --scope local` o ejecutá manualmente `.opencode\tools\codegraph\bin\codegraph.exe init -i` (o `codegraph.cmd` si no hay `.exe`) dentro del proyecto. Desde v0.9.4 el instalador usa el patrón resiliente de Engram (strip 0 + búsqueda recursiva) y loguea `projectRoot|toolsDir` para diagnosticar scope.
+> **Windows:** si ves `Command failed: cmd.exe /d /c call ... codegraph.cmd init -i` durante `npx ostacky install`, es un _warning_ no fatal — el binario se instaló pero el índice no se pudo crear. Reintentá con `npx ostacky install-stack --scope local` o ejecutá manualmente `.opencode\tools\codegraph\bin\codegraph.exe init -i` (o `codegraph.cmd` si no hay `.exe`) dentro del proyecto. Desde v0.9.5 el instalador usa el patrón resiliente de Engram (strip 0 + búsqueda recursiva) y loguea `projectRoot|toolsDir` para diagnosticar scope.
 
 ## Licencia
 

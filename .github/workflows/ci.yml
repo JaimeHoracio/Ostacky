@@ -19,6 +19,15 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      - name: Install MCP server dependencies
+        run: |
+          for dir in assets/mcp/*/; do
+            if [ -f "$dir/package.json" ]; then
+              echo "Installing deps in $dir"
+              (cd "$dir" && bun install --frozen-lockfile)
+            fi
+          done
+
       - name: Lint & Check
         run: bun run build
 

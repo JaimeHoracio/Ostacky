@@ -88,13 +88,13 @@ export async function runInteractiveMenu(scope?: Scope | null) {
   }
 }
 
-export async function runInstallCommand(scope?: Scope | null) {
+export async function runInstallCommand(scope?: Scope | null, opts?: { noStack?: boolean }) {
   p.intro(" OpenCode Installer ");
   await ensureOpencodeInstalled();
   const manifest = await loadManifest();
   const paths = await resolveOpenCodePaths(scope ?? null);
   if (!paths) { p.outro("Cancelado."); return; }
-  if (!(await doInstallAll(manifest, paths))) process.exitCode = 1;
+  if (!(await doInstallAll(manifest, paths, opts))) process.exitCode = 1;
   printPostInstallSteps();
   p.outro(process.exitCode ? "Instalación parcial." : "Instalación completada.");
 }

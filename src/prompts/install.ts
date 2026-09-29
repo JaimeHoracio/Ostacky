@@ -71,12 +71,14 @@ export async function doInstallStack(toolsDir?: string, projectRoot?: string): P
   return allOk;
 }
 
-export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths): Promise<boolean> {
+export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths, opts?: { noStack?: boolean }): Promise<boolean> {
   const spin = p.spinner();
   let errors = 0;
 
   p.log.info(`Scope → local | opencodeDir: ${paths.root} | tools: ${paths.tools}`);
-  ensureToolDirs(paths.tools, ["codegraph", "engram"]);
+  if (!opts?.noStack) {
+    ensureToolDirs(paths.tools, ["codegraph", "engram"]);
+  }
 
   for (const agent of manifest.agents) {
     spin.start(`Descargando agente: ${agent.name}  (${agent.version})`);
@@ -160,14 +162,20 @@ export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths): Pr
 
   let stackOk = true;
   let missingTools: string[] = [];
-  p.log.info("Instalando stack de herramientas...");
-  stackOk = await doInstallStack(paths.tools, dirname(paths.root));
-  if (!stackOk) errors++;
+  if (opts?.noStack) {
+    p.log.info("Stack omitido (--no-stack): solo núcleo (agente/commands/skills/MCPs/plugins).");
+  } else {
+    p.log.info("Instalando stack de herramientas...");
+    stackOk = await doInstallStack(paths.tools, dirname(paths.root));
+    if (!stackOk) errors++;
+  }
 
   const codegraphDir = join(paths.tools, "codegraph");
   const engramDir = join(paths.tools, "engram");
-  if (!existsSync(codegraphDir) || !findBinaryInDir(codegraphDir, "codegraph")) missingTools.push("CodeGraph");
-  if (!existsSync(engramDir) || !findBinaryInDir(engramDir, "engram")) missingTools.push("Engram");
+  if (!opts?.noStack) {
+    if (!existsSync(codegraphDir) || !findBinaryInDir(codegraphDir, "codegraph")) missingTools.push("CodeGraph");
+    if (!existsSync(engramDir) || !findBinaryInDir(engramDir, "engram")) missingTools.push("Engram");
+  }
 
   if (missingTools.length > 0) {
     p.log.warn(
@@ -176,10 +184,21 @@ export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths): Pr
     );
   }
 
-  if (errors === 0 && stackOk && missingTools.length === 0) {
+  // Cierre en dos secciones: el núcleo (agente/commands/skills/MCPs) se reporta
+  // separado del stack, para no manchar un agente bien instalado con un stack caído.
+  const coreOk = errors === 0;
+  const stackPartial = !stackOk || missingTools.length > 0;
+  if (coreOk && !stackPartial) {
     p.log.success("Todo instalado correctamente.");
+  } else if (coreOk) {
+    const missing = missingTools.length > 0 ? ` Faltan: ${missingTools.join(", ")}.` : "";
+    p.log.warn(
+      `Núcleo OK (agente/commands/skills/MCPs instalados). Stack parcial.${missing} ` +
+      `Revisá los mensajes de error arriba y reintentá con \`npx ostacky install-stack --scope local\`.`
+    );
   } else {
-    p.log.warn(`Instalación parcial: ${errors} componente(s) requieren atención.`);
+    p.log.warn(`Núcleo con errores: ${errors} componente(s) requieren atención. Revisá los mensajes de error arriba.`);
+    if (stackPartial) p.log.warn("Además el stack quedó parcial: reintentá con `npx ostacky install-stack --scope local`.");
   }
 
   // Automatizar .gitignore (no fatal)
@@ -190,5 +209,5 @@ export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths): Pr
     else if (gi.updated) p.log.info(`.gitignore actualizado: ${gi.patternsAdded.join(", ")}`);
   } catch {}
 
-  return errors === 0 && stackOk && missingTools.length === 0;
+  return coreOk && !stackPartial;
 }

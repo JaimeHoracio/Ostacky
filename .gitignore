@@ -5,10 +5,10 @@ dist/
 
 .opencode/
 opencode.*
-scripts/
 .worktrees/
 .codegraph
-openspec/
+# solo raiz (assets/mcp/openspec/ debe trackearse para CI)
+/openspec/
 
 # Ostacky
 .opencode/tools/
@@ -21,3 +21,6 @@ openspec/
 
 .agents/
 material/
+
+# Test artifacts (probe state, backups numerados)
+tests/.test-*

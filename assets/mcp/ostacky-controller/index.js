@@ -2382,6 +2382,47 @@ class OstackyController {
         };
     }
 
+    // --- fix-new-file-gate: ligadura validate → complete por filePath (mapa + fallback legacy) ---
+    _getValidatedFor(filePath) {
+        const lv = this.#state.lastValidated;
+        if (!lv || !filePath) return null;
+        if (lv.byFile && typeof lv.byFile === 'object' && lv.byFile[filePath]) return lv.byFile[filePath];
+        if (lv.filePath === filePath) return lv; // fallback slot legacy (single)
+        return null;
+    }
+    async _setValidatedFor(filePath, hash, mode) {
+        const prev = this.#state.lastValidated;
+        let byFile = {};
+        if (prev) {
+            if (prev.byFile && typeof prev.byFile === 'object') byFile = { ...prev.byFile };
+            else if (prev.filePath)
+                byFile[prev.filePath] = { hash: prev.hash ?? null, ts: prev.ts ?? 0, mode: prev.mode ?? 'replace' };
+        }
+        if (filePath) byFile[filePath] = { hash: hash ?? null, ts: Date.now(), mode: mode || 'replace' };
+        const keys = Object.keys(byFile);
+        if (keys.length > 50) {
+            keys.sort((a, b) => (byFile[a].ts || 0) - (byFile[b].ts || 0));
+            for (const k of keys.slice(0, keys.length - 50)) delete byFile[k];
+        }
+        this.#state.lastValidated = {
+            byFile,
+            filePath: filePath || null,
+            hash: hash ?? null,
+            ts: Date.now(),
+            mode: mode || 'replace',
+        };
+    }
+    async _clearValidatedFor(filePath) {
+        const lv = this.#state.lastValidated;
+        if (lv && lv.byFile && typeof lv.byFile === 'object') {
+            if (filePath && lv.byFile[filePath]) delete lv.byFile[filePath];
+            if (Object.keys(lv.byFile).length === 0) this.#state.lastValidated = null;
+            else this.#state.lastValidated = { byFile: lv.byFile, filePath: null, hash: null, ts: Date.now() };
+        } else {
+            this.#state.lastValidated = null;
+        }
+    }
+
     // --- O6: Validate edit with fast fingerprint + D6/D4 hard gate + 10.4 freshness ---
     async validateEdit({ oldString, newString, content, taskId, filePath } = {}) {
         this.#load();
@@ -2405,8 +2446,10 @@ class OstackyController {
                 await this.#persist();
             } catch {}
         }
-        // 10.4: validación de frescura — content debe coincidir con disco si filePath dado
-        if (filePath && typeof content === 'string') {
+        // 10.4: validación de frescura — content debe coincidir con disco si filePath dado.
+        // fix-new-file-gate: con oldString "" (intento create) no hay nada que comparar; la rama
+        // create más abajo produce el error preciso (file exists vs EDITABLE).
+        if (filePath && typeof content === 'string' && oldString !== '') {
             try {
                 const projectRoot = getProjectRoot(this.#statePath);
                 const absolutePath =
@@ -2435,12 +2478,8 @@ class OstackyController {
                         ? resolve(filePath)
                         : resolve(projectRoot, filePath);
                 const currentHash = fastFingerprint(absolutePath);
-                if (
-                    currentHash &&
-                    hashArg === currentHash &&
-                    this.#state.lastValidated?.filePath === filePath &&
-                    this.#state.lastValidated?.hash === currentHash
-                ) {
+                const _prevValidated = this._getValidatedFor(filePath);
+                if (currentHash && hashArg === currentHash && _prevValidated && _prevValidated.hash === currentHash) {
                     try {
                         content = readFileSync(absolutePath, 'utf8');
                     } catch {
@@ -2456,11 +2495,8 @@ class OstackyController {
             }
         }
         // 5.3: optimization — si fastFingerprint no cambió, no re-enviar content completo
-        if (
-            (typeof content !== 'string' || content.length === 0) &&
-            filePath &&
-            this.#state.lastValidated?.filePath === filePath
-        ) {
+        const _optValidated = filePath ? this._getValidatedFor(filePath) : null;
+        if ((typeof content !== 'string' || content.length === 0) && filePath && _optValidated) {
             try {
                 const projectRoot = getProjectRoot(this.#statePath);
                 const absolutePath =
@@ -2468,13 +2504,36 @@ class OstackyController {
                         ? resolve(filePath)
                         : resolve(projectRoot, filePath);
                 const currentHash = fastFingerprint(absolutePath);
-                if (currentHash && currentHash === this.#state.lastValidated.hash) {
+                if (currentHash && currentHash === _optValidated.hash) {
                     try {
                         const diskContent = readFileSync(absolutePath, 'utf8');
                         content = diskContent;
                     } catch {}
                 }
             } catch {}
+        }
+        // fix-new-file-gate: modo create — oldString "" + archivo inexistente en disco
+        if (typeof oldString === 'string' && oldString === '' && typeof newString === 'string' && filePath) {
+            if (newString.length === 0) {
+                return { outcome: 'CONFLICT', reason: 'newString required for create' };
+            }
+            try {
+                const projectRoot = getProjectRoot(this.#statePath);
+                const absolutePath =
+                    filePath.startsWith('/') || /^[A-Za-z]:/.test(filePath)
+                        ? resolve(filePath)
+                        : resolve(projectRoot, filePath);
+                if (existsSync(absolutePath)) {
+                    return { outcome: 'CONFLICT', reason: 'file exists, use replace mode', filePath };
+                }
+            } catch {
+                return { outcome: 'CONFLICT', reason: 'create validation failed', filePath };
+            }
+            await this._setValidatedFor(filePath, null, 'create');
+            try {
+                await this.#persist();
+            } catch {}
+            return { outcome: 'EDITABLE', taskId, mode: 'create' };
         }
         if (typeof content !== 'string' || typeof oldString !== 'string' || typeof newString !== 'string') {
             return { outcome: 'CONFLICT', reason: 'Missing required fields: content, oldString, newString' };
@@ -2520,7 +2579,7 @@ class OstackyController {
                     : resolve(projectRoot, filePath)
                 : null;
             const hash = absolutePath ? fastFingerprint(absolutePath) : null;
-            this.#state.lastValidated = { filePath: filePath || null, hash, ts: Date.now() };
+            await this._setValidatedFor(filePath || null, hash, 'replace');
             await this.#persist();
         } catch {}
         return { outcome: 'EDITABLE', taskId };
@@ -2565,7 +2624,9 @@ class OstackyController {
                 !this.#state.fileFingerprints?.[filePath] &&
                 !Object.values(this.#state.tasks || {}).some((t) => t.filePath === filePath))
         );
-        if (!this.#state.lastValidated || (filePath && this.#state.lastValidated.filePath !== filePath)) {
+        // fix-new-file-gate: ligadura por-archivo (create o replace); se consume solo ese path
+        const _ligadura = filePath ? this._getValidatedFor(filePath) : this.#state.lastValidated;
+        if (!_ligadura) {
             if (!isNewFile) {
                 return {
                     error: 'validate required',
@@ -2580,7 +2641,7 @@ class OstackyController {
                 `complete_task without prior validate_edit for ${filePath || taskId}${isNewFile ? ' (new file, WARN not BLOCK)' : ''}`
             );
         } else {
-            this.#state.lastValidated = null;
+            await this._clearValidatedFor(filePath);
         }
 
         // --- Generico: verificar task antes de marcar completa (evita invento)
@@ -2935,7 +2996,7 @@ function safeHandler(fn, options = {}) {
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.9.4',
+    version: '0.9.5',
 });
 
 server.registerTool(
@@ -3537,7 +3598,7 @@ function setupGracefulShutdown(ctrl) {
 }
 
 async function main() {
-    log('Starting ostacky-controller MCP v0.9.4...');
+    log('Starting ostacky-controller MCP v0.9.5...');
     log('State path:', { path: statePath });
     // Clean up stale tmp/lock files from previous runs
     cleanupTmpFiles(statePath);
