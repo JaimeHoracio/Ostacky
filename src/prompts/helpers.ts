@@ -1,6 +1,5 @@
 import * as p from "@clack/prompts";
-import { join } from "path";
-import { existsSync } from "fs";
+import { resolve } from "path";
 import {
   fetchManifest,
   fetchLatestManifest,
@@ -8,12 +7,11 @@ import {
   type ManifestItem,
 } from "../github.js";
 import {
-  findOpenCodeDir,
   findProjectRoot,
-  createOpenCodeDir,
   ensureOpenCodePaths,
-  ensureToolDirs,
   getOpenCodeDirForScope,
+  isGitRepo,
+  initGitRepo,
   type Scope,
 } from "../fs.js";
 import {
@@ -33,6 +31,52 @@ export function onCancel(value: unknown): asserts value is NonNullable<unknown> 
     p.outro("Operación cancelada.");
     process.exit(0);
   }
+}
+
+export interface GitPreflightResult {
+  projectRoot: string;
+  gitReady: boolean;
+}
+
+export interface GitPreflightOptions {
+  /** Pregunta inyectable (tests); por defecto `p.confirm`. Solo se llama en modo interactivo. */
+  confirm?: () => Promise<unknown>;
+  /** Por defecto `process.stdin.isTTY`. En no-interactivo nunca pregunta ni crea repos. */
+  interactive?: boolean;
+}
+
+/**
+ * Preflight Git compartido por las entradas de instalación ("Instalar todo",
+ * `install-stack`). Si hay repo, root=toplevel. Si no hay, ofrece `git init`
+ * (solo con confirmación explícita interactiva); al rechazar, sin git o en
+ * modo no-interactivo, advierte que el aislamiento por worktree no está
+ * disponible y sigue con cwd como root. Nunca crea un repo en silencio.
+ */
+export async function runGitPreflight(
+  cwd: string = process.cwd(),
+  opts?: GitPreflightOptions
+): Promise<GitPreflightResult> {
+  if (isGitRepo(cwd)) return { projectRoot: findProjectRoot(cwd), gitReady: true };
+  const interactive = opts?.interactive ?? process.stdin.isTTY === true;
+  if (interactive) {
+    const ask = opts?.confirm ?? (() => p.confirm({ message: `No hay repo Git en ${cwd}. ¿Inicializar uno? (recomendado para aislamiento por worktree)` }));
+    let answer: unknown = false;
+    try {
+      answer = await ask();
+    } catch {
+      answer = false;
+    }
+    if (answer === true) {
+      try {
+        initGitRepo(cwd);
+        return { projectRoot: findProjectRoot(cwd), gitReady: true };
+      } catch {
+        // git roto o ausente → degradar con warning abajo
+      }
+    }
+  }
+  p.log.warn("Sin repo Git: aislamiento por worktree no disponible; se instala en el directorio actual.");
+  return { projectRoot: resolve(cwd), gitReady: false };
 }
 
 export async function loadManifest(): Promise<Manifest> {
@@ -69,10 +113,14 @@ export function printPostInstallSteps(): void {
   );
 }
 
-export async function resolveOpenCodePaths(scope?: Scope | null): Promise<OpenCodePaths | null> {
+export async function resolveOpenCodePaths(scope?: Scope | null, opts?: { gitPreflight?: boolean }): Promise<OpenCodePaths | null> {
   // Solo scope local soportado — siempre resuelve local
   const cwd = process.cwd();
-  const dir = scope === "local" || !scope ? getOpenCodeDirForScope("local", cwd) : getOpenCodeDirForScope("local", cwd);
+  // Preflight solo en entradas de instalación ("Instalar todo", install-stack):
+  // ofrece git init y fija el root antes de crear .opencode. El resto
+  // (add/update/uninstall) resuelve el root sin preguntar ni crear nada.
+  const base = opts?.gitPreflight ? (await runGitPreflight(cwd)).projectRoot : cwd;
+  const dir = getOpenCodeDirForScope("local", base);
   if (scope && (scope as string) !== "local") {
     p.log.warn(`Scope ${(scope as string)} removido; usando local en ${dir}`);
   }

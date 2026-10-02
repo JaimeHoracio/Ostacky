@@ -33,7 +33,7 @@ jobs:
           done
 
       - name: Run tests
-        run: bun test
+        run: bun run test:safe
 
       - name: Check skill sync
         run: bun run check:skills

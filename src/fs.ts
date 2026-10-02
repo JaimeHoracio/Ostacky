@@ -42,9 +42,9 @@ export function findOpenCodeDir(startDir: string = process.cwd()): string | null
 }
 
 /**
- * Finds the project root by walking up and looking for .opencode or .git.
- * Falls back to cwd if neither is found.
- * Worktree-aware: tries `git rev-parse --show-toplevel` first (each worktree has its own root).
+ * Finds the project root: the Git toplevel when inside a repo, otherwise the
+ * invocation cwd itself. Never adopts an ancestor `.opencode`.
+ * Worktree-aware: `git rev-parse --show-toplevel` gives each worktree its own root.
  */
 export function findProjectRoot(startDir: string = process.cwd()): string {
   // Worktree isolation: git rev-parse gives the correct worktree root
@@ -52,18 +52,7 @@ export function findProjectRoot(startDir: string = process.cwd()): string {
     const out = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf-8", cwd: startDir, stdio: ["pipe", "pipe", "pipe"] }).trim();
     if (out && existsSync(out)) return resolve(out);
   } catch {}
-  let current = resolve(startDir);
-  while (true) {
-    if (
-      existsSync(join(current, ".opencode")) ||
-      existsSync(join(current, ".git"))
-    ) {
-      return current;
-    }
-    const parent = dirname(current);
-    if (parent === current) return resolve(startDir);
-    current = parent;
-  }
+  return resolve(startDir);
 }
 
 /**
@@ -85,15 +74,22 @@ export function isGitRepo(dir: string = process.cwd()): boolean {
 }
 
 /**
+ * Inicializa un repo Git en dir (`git init`). Lanza si git no existe o falla;
+ * el caller (preflight del instalador) decide cómo degradar.
+ */
+export function initGitRepo(dir: string): void {
+  execFileSync("git", ["init"], { cwd: dir, stdio: "pipe" });
+}
+
+/**
  * Resuelve el directorio .opencode — siempre local.
- * Solo existe scope "local": retorna `<projectRoot>/.opencode`.
+ * Solo existe scope "local": retorna `<root>/.opencode` donde root es el
+ * toplevel Git si hay repo, sino el cwd. Nunca adopta un `.opencode` ancestro.
  * Flags legacy `global|auto` son rechazados antes por `parseScopeArg`.
  */
 export function getOpenCodeDirForScope(scope: Scope, cwd: string = process.cwd()): string {
   // scope es siempre "local" — compatibilidad con parse legacy
   void scope;
-  const existing = findOpenCodeDir(cwd);
-  if (existing) return existing;
   return join(findProjectRoot(cwd), ".opencode");
 }
 

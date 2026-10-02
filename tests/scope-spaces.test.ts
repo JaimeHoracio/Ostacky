@@ -1,12 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import {
   getOpenCodeDirForScope,
   parseScopeArg,
   getCommandInvocation,
+  findProjectRoot,
+  isGitRepo,
+  isCommandAvailable,
 } from '../src/fs.js';
+import { runGitPreflight } from '../src/prompts/helpers.js';
 import { buildLocalMcpCommand } from '../src/stack.js';
 import { createMcpConfigEntry } from '../src/installer.js';
 import { findOpenCodeConfig, readOpenCodeConfig, writeOpenCodeConfig } from '../src/config.js';
@@ -127,5 +132,82 @@ describe('scope — solo local (global removido) con espacios', () => {
     const localTools = join(getOpenCodeDirForScope('local', spacedProj), 'tools');
     expect(localTools).toContain('My Project With Spaces');
     expect(localTools).not.toBe(join(tmpdir(), 'tools'));
+  });
+});
+
+describe('fix-location-project: root local y preflight git', () => {
+  it('proyecto sin git bajo home con .opencode instala en cwd y no toca el ancestro', () => {
+    const fakeHome = mkdtempSync(join(tmpdir(), 'ostacky-fakehome-'));
+    try {
+      mkdirSync(join(fakeHome, '.opencode'), { recursive: true });
+      const proj = join(fakeHome, 'mi proyecto');
+      mkdirSync(proj, { recursive: true });
+      expect(isGitRepo(proj)).toBe(false);
+      expect(getOpenCodeDirForScope('local', proj)).toBe(join(proj, '.opencode'));
+      // el ancestro queda intacto: no se crea nada dentro
+      expect(readdirSync(join(fakeHome, '.opencode'))).toEqual([]);
+    } finally {
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  it('findProjectRoot: subdir de repo git → toplevel (worktree isolation)', () => {
+    if (!isCommandAvailable('git')) return;
+    const dir = mkdtempSync(join(tmpdir(), 'ostacky-toplevel-'));
+    try {
+      execFileSync('git', ['init'], { cwd: dir, stdio: 'ignore' });
+      mkdirSync(join(dir, 'sub dir'), { recursive: true });
+      expect(findProjectRoot(join(dir, 'sub dir'))).toBe(resolve(dir));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('findProjectRoot: dir sin git → el propio cwd', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ostacky-noroot-'));
+    try {
+      expect(findProjectRoot(dir)).toBe(resolve(dir));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('preflight: decline → warn y root=cwd sin crear repo', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ostacky-decline-'));
+    try {
+      const res = await runGitPreflight(dir, { confirm: async () => false, interactive: true });
+      expect(res.gitReady).toBe(false);
+      expect(res.projectRoot).toBe(resolve(dir));
+      expect(existsSync(join(dir, '.git'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('preflight: accept con git → init y root=toplevel', async () => {
+    if (!isCommandAvailable('git')) return;
+    const dir = mkdtempSync(join(tmpdir(), 'ostacky-accept-'));
+    try {
+      const res = await runGitPreflight(dir, { confirm: async () => true, interactive: true });
+      expect(res.gitReady).toBe(true);
+      expect(res.projectRoot).toBe(resolve(dir));
+      expect(existsSync(join(dir, '.git'))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('preflight: no-interactivo no pregunta y sigue con cwd', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ostacky-noask-'));
+    try {
+      const res = await runGitPreflight(dir, {
+        confirm: async () => { throw new Error('no debe preguntar'); },
+        interactive: false,
+      });
+      expect(res.gitReady).toBe(false);
+      expect(res.projectRoot).toBe(resolve(dir));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

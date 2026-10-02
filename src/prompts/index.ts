@@ -16,7 +16,7 @@ export async function runInteractiveMenu(scope?: Scope | null) {
   await ensureOpencodeInstalled();
 
   const manifest = await loadManifest();
-  const paths = await resolveOpenCodePaths(scope ?? null);
+  const paths = await resolveOpenCodePaths(scope ?? null, { gitPreflight: true });
 
   if (!paths) {
     p.outro("Instalación cancelada.");
@@ -92,7 +92,7 @@ export async function runInstallCommand(scope?: Scope | null, opts?: { noStack?:
   p.intro(" OpenCode Installer ");
   await ensureOpencodeInstalled();
   const manifest = await loadManifest();
-  const paths = await resolveOpenCodePaths(scope ?? null);
+  const paths = await resolveOpenCodePaths(scope ?? null, { gitPreflight: true });
   if (!paths) { p.outro("Cancelado."); return; }
   if (!(await doInstallAll(manifest, paths, opts))) process.exitCode = 1;
   printPostInstallSteps();
@@ -146,7 +146,7 @@ export async function runAddMcpCommand(scope?: Scope | null) {
 export async function runInstallStackCommand(scope?: Scope | null) {
   await ensureOpencodeInstalled();
   p.intro(" OpenCode Installer — Stack ");
-  const paths = await resolveOpenCodePaths(scope ?? null);
+  const paths = await resolveOpenCodePaths(scope ?? null, { gitPreflight: true });
   if (!paths) { p.outro("Cancelado."); return; }
   ensureToolDirs(paths.tools, ["codegraph", "engram"]);
   const stackOk = await doInstallStack(paths.tools, dirname(paths.root));
