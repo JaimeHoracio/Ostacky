@@ -19,63 +19,101 @@ import {
 } from './prompts/index.js';
 import { existsSync, statSync, readFileSync, readdirSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
-import { computeTreeHash, findOpenCodeDir } from './fs.js';
+import { spawnSync } from 'node:child_process';
+import * as p from '@clack/prompts';
+import { computeTreeHash, findOpenCodeDir, getCommandInvocation } from './fs.js';
 import { ensureOpencodeInstalled } from './opencode.js';
+import { fetchLatestNpmVersion, decideOffer, canPrompt } from './version-check.js';
+
+/**
+ * Bare `npx ostacky`: busca la última versión publicada y, si la instalada
+ * es v1 o hay update, lo ofrece. Nunca muta sin confirmación explícita;
+ * sin red o no-interactivo sigue al menú (default seguro: No).
+ * Al confirmar, re-ejecuta con `ostacky@latest` (el instalador v2 limpia
+ * artefactos legacy durante la instalación) y sale.
+ */
+async function maybeOfferUpdateOrMigrate(installed: string, scope: 'local' | 'global' | null): Promise<void> {
+    const latest = await fetchLatestNpmVersion();
+    const offer = decideOffer(installed, latest);
+    if (offer.kind === 'none' || !offer.latest) return;
+    if (!canPrompt()) {
+        console.error(`Hay una versión más nueva de ostacky: ${offer.latest} (instalada: ${installed}). Re-ejecutá con npx ostacky@latest.`);
+        return;
+    }
+    if (offer.kind === 'migrate-v1') {
+        const confirm = await p.confirm({
+            message: `Tenés Ostacky v1 instalada (${installed}) y la última es ${offer.latest} (v2). ¿Desinstalar v1 e instalar v2? (los artefactos legacy se limpian automáticamente)${scope === 'global' ? ' (scope global)' : ''}`,
+            initialValue: true,
+        });
+        if (p.isCancel(confirm) || !confirm) return;
+    } else {
+        const confirm = await p.confirm({
+            message: `Hay una versión más nueva de ostacky: ${offer.latest} (instalada: ${installed}). ¿Actualizar y re-ejecutar con @latest?`,
+            initialValue: true,
+        });
+        if (p.isCancel(confirm) || !confirm) return;
+    }
+    const userArgs = process.argv.slice(2);
+    const invocation = getCommandInvocation('npx', ['ostacky@latest', ...userArgs]);
+    const res = spawnSync(invocation.command, invocation.args, { stdio: 'inherit' });
+    process.exit(res.status ?? 0);
+}
 
 const HELP = `
 ostacky — Instalador de agentes, comandos, skills y MCPs para OpenCode
 
 Uso:
-  npx ostacky [--scope local]                    Menú interactivo (instalación completa, siempre local)
-  npx ostacky install [--scope local] [--no-stack]  Instalar TODO (agente + skills + MCPs + CodeGraph + OpenSpec + Engram; --no-stack omite el stack)
-  npx ostacky add agent [--scope local]          Agregar agente(s)
-  npx ostacky add command [--scope local]        Agregar command(s)
-  npx ostacky add skill [--scope local]          Agregar skill(s)
-  npx ostacky add mcp [--scope local]            Agregar MCP server(s)
-  npx ostacky install-stack [--scope local]      Instalar solo el stack de herramientas (CodeGraph, OpenSpec, Engram)
+  npx ostacky [--scope local|global]             Menú interactivo (default: local en <proyecto>/.opencode)
+  npx ostacky install [--scope local|global] [--no-stack]  Instalar TODO (agente + skills + MCPs + CodeGraph + OpenSpec + Engram; --no-stack omite el stack)
+  npx ostacky add agent [--scope local|global]   Agregar agente(s)
+  npx ostacky add command [--scope local|global] Agregar command(s)
+  npx ostacky add skill [--scope local|global]   Agregar skill(s)
+  npx ostacky add mcp [--scope local|global]     Agregar MCP server(s)
+  npx ostacky install-stack [--scope local]      Instalar solo el stack de herramientas (CodeGraph, OpenSpec, Engram — siempre local por proyecto)
   npx ostacky uninstall-stack [--scope local]    Remover la configuración del stack del proyecto
   npx ostacky doctor                           Diagnostica locks, tools, state health
   npx ostacky status [--json]                  Muestra estado del controller sin MCP
-  npx ostacky update [--scope local]             Actualizar instalación
-  npx ostacky uninstall [--scope local]          Desinstalar todo
-  npx ostacky uninstall agent [--scope local]    Desinstalar agente(s)
-  npx ostacky uninstall command [--scope local]  Desinstalar command(s)
-  npx ostacky uninstall skill [--scope local]    Desinstalar skill(s)
-  npx ostacky uninstall mcp [--scope local]      Desinstalar MCP server(s)
+  npx ostacky update [--scope local|global]      Actualizar instalación
+  npx ostacky uninstall [--scope local|global]   Desinstalar todo
+  npx ostacky uninstall agent [--scope local|global]    Desinstalar agente(s)
+  npx ostacky uninstall command [--scope local|global]  Desinstalar command(s)
+  npx ostacky uninstall skill [--scope local|global]    Desinstalar skill(s)
+  npx ostacky uninstall mcp [--scope local|global]      Desinstalar MCP server(s)
   npx ostacky --help             Mostrar esta ayuda
   npx ostacky --version          Mostrar versión
 
 Scope:
-  --scope local   Escribe en <proyecto>/.opencode (siempre local, instalador único)
-  Sin flag        Asume local implícito (no pregunta global)
+  --scope local    Escribe en <proyecto>/.opencode (default; no pregunta global)
+  --scope global   Escribe en el config dir global de OpenCode (~/.config/opencode, respeta XDG_CONFIG_HOME)
+  Sin flag         Asume local implícito
 `.trim();
 
-function parseScopeArg(argv: string[] = process.argv): 'local' | null {
+function parseScopeArg(argv: string[] = process.argv): 'local' | 'global' | null {
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i];
         if (arg === '--scope' && i + 1 < argv.length) {
             const v = argv[i + 1];
-            if (v === 'local') return v;
-            if (v === 'global' || v === 'auto') {
+            if (v === 'local' || v === 'global') return v;
+            if (v === 'auto') {
                 console.error(
-                    `Error: --scope ${v} removido; Ostacky instala siempre local en <proyecto>/.opencode. Hacé cd al proyecto y re-ejecutá con --scope local.`
+                    `Error: --scope auto removido; usá --scope local o --scope global explícito.`
                 );
                 process.exit(1);
             }
         }
         if (arg.startsWith('--scope=')) {
             const v = arg.split('=')[1];
-            if (v === 'local') return v as 'local';
-            if (v === 'global' || v === 'auto') {
+            if (v === 'local' || v === 'global') return v as 'local' | 'global';
+            if (v === 'auto') {
                 console.error(
-                    `Error: --scope ${v} removido; Ostacky instala siempre local en <proyecto>/.opencode. Hacé cd al proyecto y re-ejecutá con --scope local.`
+                    `Error: --scope auto removido; usá --scope local o --scope global explícito.`
                 );
                 process.exit(1);
             }
         }
         if (arg === '-g') {
             console.error(
-                `Error: -g/global removido; Ostacky instala siempre local en <proyecto>/.opencode. Hacé cd al proyecto y re-ejecutá sin -g.`
+                `Error: -g removido; usá --scope global (instalación global) o --scope local (default por proyecto).`
             );
             process.exit(1);
         }
@@ -127,7 +165,7 @@ async function runDoctorCommand() {
         join(cwd, 'assets', 'plugins', 'ostacky-plugin.ts'),
         join(opencodeDir, 'plugins', 'ostacky-plugin.ts'),
         join(cwd, '.opencode', 'plugins', 'ostacky-plugin.ts'),
-        // legacy fallback (pre-0.9.6)
+        // legacy fallback (pre-0.9.7)
         join(cwd, 'assets', 'plugins', 'ostacky-controller.ts'),
         join(opencodeDir, 'plugins', 'ostacky-controller.ts'),
         join(cwd, '.opencode', 'plugins', 'ostacky-controller.ts'),
@@ -509,11 +547,21 @@ async function main() {
             break;
 
         case 'install-stack':
-            await runInstallStackCommand(scope);
+            if (scope === 'global') {
+                console.error(
+                    `Aviso: el stack (CodeGraph/Engram) se instala siempre local por proyecto. Ignorando --scope global y usando local.`
+                );
+            }
+            await runInstallStackCommand(null);
             break;
 
         case 'uninstall-stack':
-            await runUninstallStackCommand(scope);
+            if (scope === 'global') {
+                console.error(
+                    `Aviso: el stack es siempre local por proyecto. Ignorando --scope global y usando local.`
+                );
+            }
+            await runUninstallStackCommand(null);
             break;
 
         case 'add':
@@ -580,7 +628,8 @@ async function main() {
                 console.error(`Comando desconocido: "${cmd}". Usá --help para ver los comandos disponibles.`);
                 process.exit(1);
             }
-            // Sin argumentos → menú interactivo (siempre local)
+            // Sin argumentos → check última versión + oferta v1→v2, luego menú (default local)
+            await maybeOfferUpdateOrMigrate(packageJson.version, scope);
             await runInteractiveMenu(scope);
     }
 }

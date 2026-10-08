@@ -1,6 +1,7 @@
 ---
 description: Sincroniza el grafo de CodeGraph y luego los delta specs del change activo con la implementación
 agent: build
+subagent: false
 ---
 
 Sincroniza primero el grafo y luego los delta specs (`proposal.md` / `design.md` / `tasks.md`) del change activo en `openspec/changes/<name>/` con el estado actual de la implementación.

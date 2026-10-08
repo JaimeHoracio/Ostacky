@@ -238,7 +238,7 @@ export async function probeMcpServer(
                 params: {
                     protocolVersion: '2025-03-26',
                     capabilities: {},
-                    clientInfo: { name: 'ostacky-installer', version: '0.9.6' },
+                    clientInfo: { name: 'ostacky-installer', version: '0.9.7' },
                 },
             });
         });
@@ -483,7 +483,10 @@ export async function installMcpServer(item: ManifestItem, manifest: Manifest, p
     assertBundledTreeHash('mcpServers', item.name, treeHash);
 
     const nodeExecutable = getVerifiedNodeExecutable();
-    const projectRoot = dirname(paths.root);
+    // Global: la config vive DENTRO del dir global (<globalDir>/opencode.json);
+    // local: en el project root (dirname de <root>/.opencode).
+    const { getGlobalOpenCodeDir: getGlobalDir } = await import('./fs.js');
+    const projectRoot = paths.root === getGlobalDir() ? paths.root : dirname(paths.root);
     const dest = join(paths.mcp, item.name);
     const staging = `${dest}.staging-${process.pid}-${Date.now()}`;
     const statePath = item.name === 'ostacky-controller' ? join(paths.root, 'ostacky-state.json') : undefined;
@@ -701,7 +704,7 @@ export function uninstallAll(paths: OpenCodePaths): void {
             } catch {}
         }
     }
-    // Package dir (formato V2 desde v0.9.6): requiere rm recursivo, no unlink
+    // Package dir (formato V2 desde v0.9.7): requiere rm recursivo, no unlink
     const packageDir = join(paths.plugins, 'ostacky-controller');
     if (existsSync(packageDir)) {
         try {

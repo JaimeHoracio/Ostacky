@@ -109,16 +109,35 @@ npx ostacky
 
 Detecta automáticamente el directorio `.opencode/` del proyecto (o lo crea) y muestra un menú para elegir qué hacer.
 
-### Instalar todo
+### Instalar todo (local, default)
 
 ```bash
-npx ostacky install                 # siempre local en <proyecto>/.opencode
-npx ostacky install --scope local   # <proyecto>/.opencode (único scope soportado)
+npx ostacky install                 # local en <proyecto>/.opencode (default)
+npx ostacky install --scope local   # <proyecto>/.opencode (explícito)
 ```
 
 Descarga todos los agentes y commands definidos en el manifest y los escribe en `<proyecto>/.opencode`. Además copia los plugins **Ostacky-owned** `ostacky-plugin.ts` + `engram.ts` en `.opencode/plugins/` (el legacy `ostacky-guard.ts` fue fusionado en `ostacky-plugin.ts` y ya no se instala; `ostacky-controller.ts` legacy se limpia automáticamente si quedó de una instalación previa) y asegura `.gitignore` con ` .opencode/tools/, .codegraph/, .opencode/cache/, ostacky-state.json*`.
 
-> **Instalación siempre local:** Ostacky vive por proyecto/worktree (CodeGraph index `.codegraph/` y `ostacky-state.json` aislados). Si ves `C:\Users\...\ .opencode\tools\codegraph` y esperabas `D:\mi-proyecto\.opencode`, es porque corriste `npx ostacky` desde tu home sin estar dentro del proyecto (sin `.git`). Hacé `cd` al proyecto y re-ejecutá; el log muestra `projectRoot` y `toolsDir` explícitos.
+> **Instalación local (default):** Ostacky vive por proyecto/worktree (CodeGraph index `.codegraph/` y `ostacky-state.json` aislados). Si ves `C:\Users\...\ .opencode\tools\codegraph` y esperabas `D:\mi-proyecto\.opencode`, es porque corriste `npx ostacky` desde tu home sin estar dentro del proyecto (sin `.git`). Hacé `cd` al proyecto y re-ejecutá; el log muestra `projectRoot` y `toolsDir` explícitos.
+
+### Instalación global (opt-in)
+
+```bash
+npx ostacky --scope global           # menú interactivo global
+npx ostacky install --scope global   # núcleo global (agente + commands + skills + MCPs + plugins)
+```
+
+Escribe el núcleo en el config dir global de OpenCode sin tocar ningún proyecto:
+
+| SO | Dir global |
+|---|---|
+| Linux / macOS | `~/.config/opencode` (respeta `XDG_CONFIG_HOME`) |
+| Windows | config dir global de OpenCode según SO |
+| WSL | como Linux |
+
+El stack de binarios (CodeGraph, Engram) es **siempre local por proyecto**: con `--scope global` se omite y se indica instalarlo por proyecto (`npx ostacky install-stack` dentro del proyecto). La config global acepta `opencode.json` o `opencode.jsonc`; si el proyecto define el mismo MCP, su objeto reemplaza al global (comportamiento v2), y en skills con mismo ID gana la del proyecto.
+
+> **Migración v1 → v2:** `npx ostacky` (sin subcomando) busca la última versión publicada y, si detecta v1 instalada, ofrece desinstalar v1 e instalar v2 (siempre con confirmación; sin red o no-interactivo sigue al menú sin preguntar).
 
 ### Agregar agentes o commands individualmente
 
@@ -152,8 +171,9 @@ Solo descarga los items que cambiaron de versión.
 ### Desinstalar
 
 ```bash
-npx ostacky uninstall                          # qué borrar en <proyecto>/.opencode
+npx ostacky uninstall                          # qué borrar en <proyecto>/.opencode (default local)
 npx ostacky uninstall --scope local            # fuerza scope local
+npx ostacky uninstall --scope global           # qué borrar en el dir global
 ```
 
 **Safe-delete:** solo borra lo trackeado en `.opencode/ostacky-lock.json` (agentes, commands, skills, MCPs) — nunca toca componentes previos del usuario que no estén en el lockfile. Antes de borrar muestra preview con `Scope: <ruta>` + lista de paths y pide confirmación. Los plugins Ostacky-owned (`ostacky-plugin.ts`, `engram.ts` + legacy `ostacky-guard.ts`/`ostacky-controller.ts` si quedaron) se limpian automáticamente via allowlist, nunca se borran plugins custom.
@@ -250,37 +270,37 @@ Tras instalar (`--scope local`), el proyecto queda así:
 
 ```json
 {
-    "version": "0.9.6",
+    "version": "0.9.7",
     "lockedAt": "2025-01-01T00:00:00.000Z",
     "repo": "JaimeHoracio/Ostacky",
-    "tag": "v0.9.6",
+    "tag": "v0.9.7",
     "agents": {
         "ostacky": {
-            "version": "0.9.6",
+            "version": "0.9.7",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "abc123..."
         }
     },
     "commands": {
         "install-stack": {
-            "version": "0.9.6",
+            "version": "0.9.7",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "def456..."
         },
         "opsx-sync": {
-            "version": "0.9.6",
+            "version": "0.9.7",
             "installedAt": "2025-01-01T00:00:00.000Z",
             "sha256": "ghi789..."
         }
     },
     "skills": {
-        "brainstorming": { "version": "0.9.6", ... },
-        "execution-mode-evaluation": { "version": "0.9.6", ... },
-        "openspec-propose": { "version": "0.9.6", ... }
+        "brainstorming": { "version": "0.9.7", ... },
+        "execution-mode-evaluation": { "version": "0.9.7", ... },
+        "openspec-propose": { "version": "0.9.7", ... }
     },
     "mcpServers": {
-        "ostacky-controller": { "version": "0.9.6", ... },
-        "openspec": { "version": "0.9.6", ... }
+        "ostacky-controller": { "version": "0.9.7", ... },
+        "openspec": { "version": "0.9.7", ... }
     }
 }
 ```
@@ -312,7 +332,7 @@ Es opcional y solo necesario si algo falló durante la instalación o si querés
 ## Seguridad
 
 - `opencode.jsonc` se versiona en el repo para compartir permisos y MCP de forma reproducible.
-- Las URLs de descarga usan **tags de GitHub** (ej. `v0.9.6`), nunca `main` — instalaciones reproducibles
+- Las URLs de descarga usan **tags de GitHub** (ej. `v0.9.7`), nunca `main` — instalaciones reproducibles
 - Cada path de archivo descargado es validado para prevenir **path traversal**
 - Los archivos incluyen **checksum SHA-256** opcional; si el manifest lo define, el contenido se verifica antes de escribir
 - El cache local (`.opencode/cache/`) también valida integridad al servir archivos cacheados
@@ -369,7 +389,7 @@ CodeGraph está instalado en `.opencode/tools/codegraph/bin/codegraph` y se conf
 | `.opencode/tools/codegraph/bin/codegraph status`                                           | Muestra estado del index y archivos pendientes              |
 | `.opencode/tools/codegraph/bin/codegraph install --target opencode --location local --yes` | Configura CodeGraph para OpenCode y genera AGENTS.md        |
 
-> **Windows:** si ves `Command failed: cmd.exe /d /c call ... codegraph.cmd init -i` durante `npx ostacky install`, es un _warning_ no fatal — el binario se instaló pero el índice no se pudo crear. Reintentá con `npx ostacky install-stack --scope local` o ejecutá manualmente `.opencode\tools\codegraph\bin\codegraph.exe init -i` (o `codegraph.cmd` si no hay `.exe`) dentro del proyecto. Desde v0.9.6 el instalador usa el patrón resiliente de Engram (strip 0 + búsqueda recursiva) y loguea `projectRoot|toolsDir` para diagnosticar scope.
+> **Windows:** si ves `Command failed: cmd.exe /d /c call ... codegraph.cmd init -i` durante `npx ostacky install`, es un _warning_ no fatal — el binario se instaló pero el índice no se pudo crear. Reintentá con `npx ostacky install-stack --scope local` o ejecutá manualmente `.opencode\tools\codegraph\bin\codegraph.exe init -i` (o `codegraph.cmd` si no hay `.exe`) dentro del proyecto. Desde v0.9.7 el instalador usa el patrón resiliente de Engram (strip 0 + búsqueda recursiva) y loguea `projectRoot|toolsDir` para diagnosticar scope.
 
 ## Licencia
 

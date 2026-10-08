@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import {
   getOpenCodeDirForScope,
+  getGlobalOpenCodeDir,
   parseScopeArg,
   getCommandInvocation,
   findProjectRoot,
@@ -32,7 +33,7 @@ afterEach(() => {
   }
 });
 
-describe('scope — solo local (global removido) con espacios', () => {
+describe('scope — local default + global opt-in con espacios', () => {
   it('getOpenCodeDirForScope siempre retorna local aunque cwd tenga espacios', () => {
     const spacedCwd = join(tmpRoot, 'My Project');
     mkdirSync(spacedCwd, { recursive: true });
@@ -49,14 +50,28 @@ describe('scope — solo local (global removido) con espacios', () => {
     expect(localEmpty).toBe(join(emptySpaced, '.opencode'));
   });
 
-  it('parseScopeArg solo acepta local; global/auto retornan legacy marker para error educativo', () => {
+  it('parseScopeArg acepta local|global; auto/-g retornan legacy marker para error educativo', () => {
     expect(parseScopeArg(['node', 'cli', '--scope', 'local'])).toBe('local');
-    // global/auto ahora retornan marker legacy (cli hace exit educativo)
-    expect(parseScopeArg(['node', 'cli', '--scope=global'])).toBe('__legacy_global__');
+    expect(parseScopeArg(['node', 'cli', '--scope', 'global'])).toBe('global');
+    expect(parseScopeArg(['node', 'cli', '--scope=global'])).toBe('global');
+    // auto/-g son legacy (cli hace exit educativo)
     expect(parseScopeArg(['node', 'cli', 'install', '--scope', 'auto'])).toBe('__legacy_auto__');
+    expect(parseScopeArg(['node', 'cli', 'install', '-g'])).toBe('__legacy_global__');
     expect(parseScopeArg(['node', 'cli', 'install', '--scope=local', 'extra'])).toBe('local');
     expect(parseScopeArg(['node', 'cli', 'install'])).toBe(null);
     expect(parseScopeArg(['node', 'cli', '--scope', 'invalid'])).toBe(null);
+  });
+
+  it('getGlobalOpenCodeDir resuelve por SO (XDG/APPDATA/home)', () => {
+    expect(getGlobalOpenCodeDir({ platform: 'linux', env: { XDG_CONFIG_HOME: '/custom/cfg' }, home: '/home/u' })).toBe('/custom/cfg/opencode');
+    expect(getGlobalOpenCodeDir({ platform: 'darwin', env: {}, home: '/Users/u' })).toBe('/Users/u/.config/opencode');
+    expect(getGlobalOpenCodeDir({ platform: 'win32', env: { APPDATA: 'C:\\Users\\A\\AppData\\Roaming' }, home: 'C:\\Users\\A' })).toBe('C:\\Users\\A\\AppData\\Roaming/opencode');
+    expect(getGlobalOpenCodeDir({ platform: 'win32', env: {}, home: '/home/u' })).toBe('/home/u/.config/opencode');
+  });
+
+  it('getOpenCodeDirForScope global retorna dir global sin requerir proyecto', () => {
+    const g = getOpenCodeDirForScope('global', tmpRoot);
+    expect(g).toBe(getGlobalOpenCodeDir());
   });
 
   it('getCommandInvocation NO hace pre-quoting con espacios (array seguro vía libuv)', () => {

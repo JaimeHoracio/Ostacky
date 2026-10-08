@@ -114,15 +114,27 @@ export function printPostInstallSteps(): void {
 }
 
 export async function resolveOpenCodePaths(scope?: Scope | null, opts?: { gitPreflight?: boolean }): Promise<OpenCodePaths | null> {
-  // Solo scope local soportado — siempre resuelve local
+  // Global: dir global de OpenCode, sin git ni proyecto. Local (default): preflight + root.
+  const effective = scope ?? "local";
+  if (effective === "global") {
+    const { getGlobalOpenCodeDir } = await import("../fs.js");
+    const dir = getGlobalOpenCodeDir();
+    try {
+      const paths = ensureOpenCodePaths(dir);
+      p.note(dir, "Instalación global");
+      return paths;
+    } catch (e) {
+      throw e;
+    }
+  }
   const cwd = process.cwd();
   // Preflight solo en entradas de instalación ("Instalar todo", install-stack):
   // ofrece git init y fija el root antes de crear .opencode. El resto
   // (add/update/uninstall) resuelve el root sin preguntar ni crear nada.
   const base = opts?.gitPreflight ? (await runGitPreflight(cwd)).projectRoot : cwd;
   const dir = getOpenCodeDirForScope("local", base);
-  if (scope && (scope as string) !== "local") {
-    p.log.warn(`Scope ${(scope as string)} removido; usando local en ${dir}`);
+  if (scope && (scope as string) !== "local" && (scope as string) !== "global") {
+    p.log.warn(`Scope ${(scope as string)} no soportado; usando local en ${dir}`);
   }
   try {
     const paths = ensureOpenCodePaths(dir);

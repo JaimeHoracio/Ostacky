@@ -16,7 +16,7 @@ export async function runInteractiveMenu(scope?: Scope | null) {
   await ensureOpencodeInstalled();
 
   const manifest = await loadManifest();
-  const paths = await resolveOpenCodePaths(scope ?? null, { gitPreflight: true });
+  const paths = await resolveOpenCodePaths(scope ?? null, { gitPreflight: scope !== "global" });
 
   if (!paths) {
     p.outro("Instalación cancelada.");
@@ -92,9 +92,9 @@ export async function runInstallCommand(scope?: Scope | null, opts?: { noStack?:
   p.intro(" OpenCode Installer ");
   await ensureOpencodeInstalled();
   const manifest = await loadManifest();
-  const paths = await resolveOpenCodePaths(scope ?? null, { gitPreflight: true });
+  const paths = await resolveOpenCodePaths(scope ?? null, { gitPreflight: scope !== "global" });
   if (!paths) { p.outro("Cancelado."); return; }
-  if (!(await doInstallAll(manifest, paths, opts))) process.exitCode = 1;
+  if (!(await doInstallAll(manifest, paths, { ...opts, scope: scope ?? "local" }))) process.exitCode = 1;
   printPostInstallSteps();
   p.outro(process.exitCode ? "Instalación parcial." : "Instalación completada.");
 }

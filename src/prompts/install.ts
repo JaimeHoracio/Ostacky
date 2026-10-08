@@ -71,12 +71,15 @@ export async function doInstallStack(toolsDir?: string, projectRoot?: string): P
   return allOk;
 }
 
-export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths, opts?: { noStack?: boolean }): Promise<boolean> {
+export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths, opts?: { noStack?: boolean; scope?: string }): Promise<boolean> {
   const spin = p.spinner();
   let errors = 0;
 
-  p.log.info(`Scope → local | opencodeDir: ${paths.root} | tools: ${paths.tools}`);
-  if (!opts?.noStack) {
+  const isGlobal = opts?.scope === "global";
+  p.log.info(`Scope → ${isGlobal ? "global" : "local"} | opencodeDir: ${paths.root} | tools: ${paths.tools}`);
+  if (isGlobal) {
+    p.log.info("Scope global: núcleo (agente/commands/skills/MCPs/plugins) en dir global; el stack (CodeGraph/Engram) es siempre local por proyecto — omitido aquí. Instalalo por proyecto con `npx ostacky install-stack --scope local`.");
+  } else if (!opts?.noStack) {
     ensureToolDirs(paths.tools, ["codegraph", "engram"]);
   }
 
@@ -162,7 +165,9 @@ export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths, opt
 
   let stackOk = true;
   let missingTools: string[] = [];
-  if (opts?.noStack) {
+  if (isGlobal) {
+    p.log.info("Scope global: stack omitido (siempre local por proyecto).");
+  } else if (opts?.noStack) {
     p.log.info("Stack omitido (--no-stack): solo núcleo (agente/commands/skills/MCPs/plugins).");
   } else {
     p.log.info("Instalando stack de herramientas...");
@@ -172,7 +177,7 @@ export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths, opt
 
   const codegraphDir = join(paths.tools, "codegraph");
   const engramDir = join(paths.tools, "engram");
-  if (!opts?.noStack) {
+  if (!isGlobal && !opts?.noStack) {
     if (!existsSync(codegraphDir) || !findBinaryInDir(codegraphDir, "codegraph")) missingTools.push("CodeGraph");
     if (!existsSync(engramDir) || !findBinaryInDir(engramDir, "engram")) missingTools.push("Engram");
   }
@@ -201,12 +206,14 @@ export async function doInstallAll(manifest: Manifest, paths: OpenCodePaths, opt
     if (stackPartial) p.log.warn("Además el stack quedó parcial: reintentá con `npx ostacky install-stack --scope local`.");
   }
 
-  // Automatizar .gitignore (no fatal)
+  // Automatizar .gitignore (no fatal; solo local — global no tiene proyecto)
   try {
-    const projectRoot = dirname(paths.root);
-    const gi = ensureGitignore(projectRoot);
-    if (gi.created) p.log.info(`.gitignore creado con patrones Ostacky`);
-    else if (gi.updated) p.log.info(`.gitignore actualizado: ${gi.patternsAdded.join(", ")}`);
+    if (!isGlobal) {
+      const projectRoot = dirname(paths.root);
+      const gi = ensureGitignore(projectRoot);
+      if (gi.created) p.log.info(`.gitignore creado con patrones Ostacky`);
+      else if (gi.updated) p.log.info(`.gitignore actualizado: ${gi.patternsAdded.join(", ")}`);
+    }
   } catch {}
 
   return coreOk && !stackPartial;

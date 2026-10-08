@@ -28,8 +28,13 @@ export function checkDoctorV2(projectRoot: string): string[] {
   if (found) {
     try {
       const src = readFileSync(found, "utf-8");
-      const isV2 = src.includes("Plugin.define") && src.includes("@opencode/plugin") && !src.includes("@opencode-ai/plugin");
-      if (isV2) lines.push(`✅ controller: plugin V2 (${found})`);
+      // Check estructural (no por menciones en comentarios): V2 = `export default`
+      // sin paquete legacy `@opencode-ai/*` en runtime. El plugin Ostacky usa
+      // objeto literal + `import type` a propósito (el server V2 no resuelve
+      // `@opencode/plugin` en runtime desde `.opencode/plugins/`).
+      const hasDefault = /export\s+default/.test(src);
+      const hasLegacyPkg = src.includes("@opencode-ai/");
+      if (hasDefault && !hasLegacyPkg) lines.push(`✅ controller: plugin V2 (${found})`);
       else lines.push(`⚠️ controller: plugin legacy V1 en ${found} — no corre en V2, reinstalá con ostacky`);
     } catch {
       lines.push(`⚠️ controller: no se pudo leer ${found}`);
@@ -113,14 +118,42 @@ export function checkDoctorV2(projectRoot: string): string[] {
     }
   }
 
-  // 4) Commands locales existen (detecta proyecto movido)
+  // 4) Entradas mcp.servers con forma V2 (type/command-url/disabled/timeout) + binarios locales
   for (const [name, entry] of Object.entries(servers)) {
     if (!entry || typeof entry !== "object") continue;
-    const cmd = (entry as Record<string, unknown>).command;
-    if ((entry as Record<string, unknown>).type === "local" && Array.isArray(cmd) && typeof cmd[0] === "string") {
-      const bin = cmd[0] as string;
-      const ok = isAbsolute(bin) ? existsSync(bin) : lookupOnPath(bin) !== null;
-      if (!ok) lines.push(`⚠️ mcp.servers.${name} command no existe (${bin}) — ¿proyecto movido? re-corré install`);
+    const e = entry as Record<string, unknown>;
+    if (e.type !== "local" && e.type !== "remote") {
+      lines.push(`⚠️ mcp.servers.${name} sin type local|remote — V2 lo requiere (ver mcp-servers)`);
+      continue;
+    }
+    if ("enabled" in e) {
+      lines.push(`⚠️ mcp.servers.${name} usa enabled (forma V1) — V2 usa disabled invertido`);
+    }
+    if (typeof e.timeout === "number") {
+      lines.push(`⚠️ mcp.servers.${name} timeout numérico (forma V1) — V2 usa timeout: { catalog, execution }`);
+    }
+    if (e.type === "local") {
+      const cmd = e.command;
+      if (!Array.isArray(cmd) || typeof cmd[0] !== "string") {
+        lines.push(`⚠️ mcp.servers.${name} local sin command array — V2 requiere command: [bin, ...args]`);
+      } else {
+        const bin = cmd[0] as string;
+        const ok = isAbsolute(bin) ? existsSync(bin) : lookupOnPath(bin) !== null;
+        if (!ok) lines.push(`⚠️ mcp.servers.${name} command no existe (${bin}) — ¿proyecto movido? re-corré install`);
+      }
+    } else {
+      if (typeof e.url !== "string" || !/^https?:\/\//.test(e.url)) {
+        lines.push(`⚠️ mcp.servers.${name} remote sin url absoluta — V2 requiere url https://...`);
+      }
+      const oauth = (e as Record<string, unknown>).oauth;
+      if (oauth && typeof oauth === "object") {
+        for (const k of ["clientId", "clientSecret", "callbackPort", "redirectUri"]) {
+          if (k in (oauth as object)) {
+            lines.push(`⚠️ mcp.servers.${name} oauth.${k} camelCase (forma V1) — V2 usa snake_case`);
+            break;
+          }
+        }
+      }
     }
   }
 

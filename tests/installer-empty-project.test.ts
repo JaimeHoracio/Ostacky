@@ -51,8 +51,9 @@ describe('installer-empty-project: -g legacy', () => {
         expect(parseScopeArg(['node', 'ostacky', '-g'])).toBe('__legacy_global__');
     });
 
-    it('--scope global retorna marcador legacy', () => {
-        expect(parseScopeArg(['node', 'ostacky', '--scope', 'global'])).toBe('__legacy_global__');
+    it('--scope global es scope válido (opt-in global)', () => {
+        expect(parseScopeArg(['node', 'ostacky', '--scope', 'global'])).toBe('global');
+        expect(parseScopeArg(['node', 'ostacky', '--scope=global'])).toBe('global');
     });
 
     it('--scope local sigue válido', () => {

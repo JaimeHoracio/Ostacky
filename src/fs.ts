@@ -12,12 +12,13 @@ import {
   renameSync,
 } from "fs";
 import { createHash } from "crypto";
+import { homedir } from "os";
 import { join, resolve, dirname, relative, basename } from "path";
 import { execFileSync } from "child_process";
 import { sha256 } from "./security.js";
 import type { OpenCodePaths } from "./types.js";
 
-export type Scope = "local";
+export type Scope = "local" | "global";
 
 export const USER_AGENT = "ostacky-installer";
 
@@ -82,20 +83,45 @@ export function initGitRepo(dir: string): void {
 }
 
 /**
- * Resuelve el directorio .opencode — siempre local.
- * Solo existe scope "local": retorna `<root>/.opencode` donde root es el
- * toplevel Git si hay repo, sino el cwd. Nunca adopta un `.opencode` ancestro.
- * Flags legacy `global|auto` son rechazados antes por `parseScopeArg`.
+ * Resuelve el config dir GLOBAL de OpenCode (scope global).
+ * Linux/macOS: `~/.config/opencode` respetando `XDG_CONFIG_HOME`
+ * (`$XDG_CONFIG_HOME/opencode` cuando está seteado). Windows: config dir
+ * global de OpenCode según SO (`%APPDATA%/opencode` con fallback a
+ * `~/.config/opencode`). WSL se trata como Linux (platform linux).
+ */
+export function getGlobalOpenCodeDir(opts?: {
+  platform?: string;
+  env?: NodeJS.ProcessEnv;
+  home?: string;
+}): string {
+  const platform = opts?.platform ?? process.platform;
+  const env = opts?.env ?? process.env;
+  const home = opts?.home ?? homedir();
+  const xdg = env.XDG_CONFIG_HOME?.trim();
+  if (xdg) return join(xdg, "opencode");
+  if (platform === "win32") {
+    const appdata = env.APPDATA?.trim();
+    if (appdata) return join(appdata, "opencode");
+  }
+  return join(home, ".config", "opencode");
+}
+
+/**
+ * Resuelve el directorio .opencode según scope.
+ * - `local` (default): `<root>/.opencode` donde root es el toplevel Git si
+ *   hay repo, sino el cwd. Nunca adopta un `.opencode` ancestro.
+ * - `global`: config dir global de OpenCode (ver `getGlobalOpenCodeDir`);
+ *   no requiere git ni proyecto.
  */
 export function getOpenCodeDirForScope(scope: Scope, cwd: string = process.cwd()): string {
-  // scope es siempre "local" — compatibilidad con parse legacy
-  void scope;
+  if (scope === "global") return getGlobalOpenCodeDir();
   return join(findProjectRoot(cwd), ".opencode");
 }
 
 /**
-  * Parsea --scope de argv (soporta --scope local y --scope=local). Solo "local" es válido.
- * Flags legacy `global|auto` y `-g` retornan "__legacy_global__" / "__legacy_auto__" para mensaje educativo.
+ * Parsea --scope de argv (soporta --scope local|global y --scope=local|global).
+ * `auto` y `-g` retornan "__legacy_auto__" para mensaje educativo
+ * (usar `--scope global` o `--scope local` explícito).
  */
 export function parseScopeArg(argv: string[] = process.argv): Scope | "__legacy_global__" | "__legacy_auto__" | null {
   for (let i = 0; i < argv.length; i++) {
@@ -103,14 +129,12 @@ export function parseScopeArg(argv: string[] = process.argv): Scope | "__legacy_
     if (arg === "-g") return "__legacy_global__" as unknown as Scope;
     if (arg === "--scope" && i + 1 < argv.length) {
       const v = argv[i + 1];
-      if (v === "local") return v;
-      if (v === "global") return "__legacy_global__" as unknown as Scope;
+      if (v === "local" || v === "global") return v;
       if (v === "auto") return "__legacy_auto__" as unknown as Scope;
     }
     if (arg.startsWith("--scope=")) {
       const v = arg.split("=")[1];
-      if (v === "local") return v as Scope;
-      if (v === "global") return "__legacy_global__" as unknown as Scope;
+      if (v === "local" || v === "global") return v as Scope;
       if (v === "auto") return "__legacy_auto__" as unknown as Scope;
     }
   }
