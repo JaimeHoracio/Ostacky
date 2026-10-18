@@ -45,13 +45,17 @@ export function getOpencodeVersion(): string | null {
 
 /**
  * Devuelve el comando de instalación recomendado según el sistema operativo.
- * Basado en https://opencode.ai/download y https://opencode.ai/v2/docs/cli
+ * Basado en https://opencode.ai/v2/docs (instalación) y https://opencode.ai/download (binarios sueltos).
  *
- * - macOS / Linux: `curl -fsSL https://opencode.ai/install | bash` (oficial, hoy entrega V2)
- *   alternativas: brew install anomalyco/tap/opencode | npm install -g opencode-ai
- * - Windows: `npm install -g opencode-ai` (funciona con npm/bun/pnpm)
- *   alternativas: choco install opencode | scoop install opencode | brew en WSL
- * - Arch Linux: pacman/paru (informado solo como display)
+ * OJO: Ostacky exige OpenCode V2 (ver `ensureOpencodeInstalled`). `/install` sin `/v2`
+ * y el paquete npm `opencode-ai` pertenecen a la línea V1: usarlos instala V1 y el
+ * gate de versión corta la instalación.
+ *
+ * - macOS / Linux: `curl -fsSL https://opencode.ai/v2/install | bash`
+ *   alternativas: brew install anomalyco/tap/opencode-v2 | npm install -g @opencode/cli
+ * - Windows: `npm install -g @opencode/cli` (npm/bun/pnpm)
+ *   alternativa: binario suelto de https://opencode.ai/download | WSL recomendado
+ * - Arch Linux: paru -S opencode-beta (informado solo como display)
  */
 export function getOpencodeInstallCommand(
   platform: string = process.platform,
@@ -59,26 +63,26 @@ export function getOpencodeInstallCommand(
 ): { display: string; command: string; args: string[]; note?: string } {
   if (platform === "win32") {
     return {
-      display: "npm install -g opencode-ai",
+      display: "npm install -g @opencode/cli",
       command: "npm",
-      args: ["install", "-g", "opencode-ai"],
-      note: "Alternativas Windows: choco install opencode | scoop install opencode | mise use -g github:anomalyco/opencode (ver https://opencode.ai/download). WSL recomendado.",
+      args: ["install", "-g", "@opencode/cli"],
+      note: "Alternativas Windows: binario suelto desde https://opencode.ai/download | WSL recomendado (OpenCode no soporta package managers de Windows).",
     };
   }
   if (platform === "darwin") {
     return {
-      display: "curl -fsSL https://opencode.ai/install | bash",
+      display: "curl -fsSL https://opencode.ai/v2/install | bash",
       command: "bash",
-      args: ["-c", "curl -fsSL https://opencode.ai/install | bash"],
-      note: "Alternativa macOS: brew install anomalyco/tap/opencode (tap oficial, más actualizado que brew install opencode)",
+      args: ["-c", "curl -fsSL https://opencode.ai/v2/install | bash"],
+      note: "Alternativa macOS: brew install anomalyco/tap/opencode-v2 (tap oficial) | npm install -g @opencode/cli",
     };
   }
   // linux y otros unix
   return {
-    display: "curl -fsSL https://opencode.ai/install | bash",
+    display: "curl -fsSL https://opencode.ai/v2/install | bash",
     command: "bash",
-    args: ["-c", "curl -fsSL https://opencode.ai/install | bash"],
-    note: "Alternativas Linux: npm install -g opencode-ai | bun add -g opencode-ai | brew install anomalyco/tap/opencode | paru -S opencode (Arch)",
+    args: ["-c", "curl -fsSL https://opencode.ai/v2/install | bash"],
+    note: "Alternativas Linux: npm install -g @opencode/cli | bun install -g --trust @opencode/cli | brew install anomalyco/tap/opencode-v2 | paru -S opencode-beta (Arch)",
   };
 }
 
@@ -132,16 +136,16 @@ export async function ensureOpencodeInstalled(): Promise<void> {
     if (platform === "win32") {
       // Windows: npm es el método más universal (también funciona con bun/pnpm/yarn)
       // Intentar npm; si no está, el error caerá al catch y se mostrarán alternativas.
-      execSync("npm install -g opencode-ai", { stdio: "inherit", shell: "cmd.exe" });
+      execSync("npm install -g @opencode/cli", { stdio: "inherit", shell: "cmd.exe" });
     } else {
       // Unix: script oficial. Requiere curl + bash.
       // Verificar curl disponible antes de intentar.
       if (!isCommandAvailable("curl")) {
         spin.stop("curl no disponible");
         p.log.warn("curl no está instalado — se intentará con npm como fallback.");
-        execSync("npm install -g opencode-ai", { stdio: "inherit", shell: "/bin/bash" });
+        execSync("npm install -g @opencode/cli", { stdio: "inherit", shell: "/bin/bash" });
       } else {
-        execSync("curl -fsSL https://opencode.ai/install | bash", { stdio: "inherit", shell: "/bin/bash" });
+        execSync("curl -fsSL https://opencode.ai/v2/install | bash", { stdio: "inherit", shell: "/bin/bash" });
       }
     }
     spin.stop("Instalación ejecutada, verificando...");
@@ -154,10 +158,10 @@ export async function ensureOpencodeInstalled(): Promise<void> {
       p.note(
         [
           "Intentá manualmente una de estas opciones:",
-          "  npm install -g opencode-ai",
-          "  choco install opencode",
-          "  scoop install opencode",
-          "  (WSL) curl -fsSL https://opencode.ai/install | bash",
+          "  npm install -g @opencode/cli",
+          "  bun install -g --trust @opencode/cli",
+          "  binario suelto: https://opencode.ai/download",
+          "  (WSL) curl -fsSL https://opencode.ai/v2/install | bash",
           "Luego verificá: opencode --version",
           "Docs: https://opencode.ai/download",
         ].join("\n"),
@@ -168,8 +172,8 @@ export async function ensureOpencodeInstalled(): Promise<void> {
         [
           "Intentá manualmente:",
           `  ${info.display}`,
-          "  npm install -g opencode-ai  (si no tenés curl)",
-          "  brew install anomalyco/tap/opencode  (macOS/Linux con brew)",
+          "  npm install -g @opencode/cli  (si no tenés curl)",
+          "  brew install anomalyco/tap/opencode-v2  (macOS/Linux con brew)",
           "Luego verificá: opencode --version",
           "Docs: https://opencode.ai/download",
         ].join("\n"),

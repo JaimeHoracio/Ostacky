@@ -259,6 +259,65 @@ function isCodegraphAvailable(directory: string): boolean {
   } catch { return false }
 }
 
+/**
+ * ¿Este read/grep/glob esta sujeto al gate de discovery?
+ * Exenciones: docs/json/md, openspec/changes|specs, grep de literales, y archivos ya
+ * trackeados (refresh honesto post-complete necesita Read fresco sin Discovery hit).
+ */
+export function isCodeReadGated(input: {
+  isCodeFile: boolean
+  isLiteralGrep: boolean
+  isSpecTasksPath: boolean
+  isDocsPath: boolean
+  isTaskTracked: boolean
+}): boolean {
+  return (
+    input.isCodeFile &&
+    !input.isLiteralGrep &&
+    !input.isSpecTasksPath &&
+    !input.isDocsPath &&
+    !input.isTaskTracked
+  )
+}
+
+/**
+ * Predicado puro del gate de CodeGraph: ¿bloquear esta lectura de codigo?
+ *
+ * Extraido a funcion para poder testear el INVARIANTE, no el mensaje. El test anterior hacia
+ * `expect(src).toContain("Usa getDiscoverySnapshot primero")`: verificaba que el texto existiera
+ * y pasaba verde con el gate inescapable adentro (fix-codegraph-gate).
+ */
+export function shouldBlockCodeRead(input: {
+  isCodeFile: boolean
+  isLiteralGrep: boolean
+  isSpecTasksPath: boolean
+  isDocsPath: boolean
+  isTaskTracked: boolean
+  codegraphOk: boolean
+  hasDiscoveryHit: boolean
+}): boolean {
+  return isCodeReadGated(input) && input.codegraphOk && !input.hasDiscoveryHit
+}
+
+/**
+ * Tools cuyo completado constituye evidencia REAL de discovery estructural en la sesion.
+ *
+ * `codegraph_explore` es la senal fuerte: llamada real, resultado inspeccionable por el plugin.
+ * `getDiscoverySnapshot` cuenta tambien cuando exista como tool (ver change `discovery-cache-tool`).
+ *
+ * Historia (fix-codegraph-gate): antes la UNICA senal era `getDiscoverySnapshot`, una tool que nunca
+ * se registro ni en el plugin ni en el MCP. `hasDiscoveryHit` era siempre false y el gate bloqueaba
+ * todo read/grep/glob de codigo sin salida posible; un `codegraph_explore` completado NO lo abria,
+ * contradiciendo la instruccion "CodeGraph primero" del agente.
+ */
+export function marksDiscovery(toolName: string): boolean {
+  return (
+    toolName.includes("codegraph_explore") ||
+    toolName.includes("getDiscoverySnapshot") ||
+    toolName.includes("get_discovery_snapshot")
+  )
+}
+
 function jsonContent(value: unknown): { content: string } {
   try {
     return { content: JSON.stringify(value) ?? "null" }
@@ -519,14 +578,19 @@ export default {
               (lvFile ? lvFile.some((lf) => targetPath.endsWith(lf) || lf.endsWith(targetPath)) : false)
           }
         } catch {}
-        if (isCodeFile && !isLiteralGrep && !isSpecTasksPath && !isDocsPath && !isTaskTracked) {
-          const hasDiscoveryHit = discoveryHitByRequest.get(sessionId) ?? getDiscoveryCacheHit(directory)
-          const codegraphOk = isCodegraphAvailable(directory)
-          if (codegraphOk && !hasDiscoveryHit) {
-            // Allow if file is not indexable or trivial?
-            // Block with suggestion
-            throw new Error(`BLOCKED: Usá getDiscoverySnapshot primero — sugerencia: getDiscoverySnapshot("${targetPath || "query"}")`)
-          }
+        // Orden cheap -> caro: el path no hace I/O; codegraph y la cache en disco solo se evalúan
+        // si el path esta realmente sujeto al gate (`read`/`grep`/`glob` corren en cada turno).
+        const gated = isCodeReadGated({ isCodeFile, isLiteralGrep, isSpecTasksPath, isDocsPath, isTaskTracked })
+        const codegraphOk = gated ? isCodegraphAvailable(directory) : false
+        const hasDiscoveryHit = codegraphOk
+          ? (discoveryHitByRequest.get(sessionId) ?? getDiscoveryCacheHit(directory))
+          : false
+        if (shouldBlockCodeRead({
+          isCodeFile, isLiteralGrep, isSpecTasksPath, isDocsPath, isTaskTracked, codegraphOk, hasDiscoveryHit,
+        })) {
+          throw new Error(
+            `BLOCKED: sin discovery estructural en esta sesión — llamá codegraph_codegraph_explore("${targetPath || "query"}") antes de Read/Grep/Glob de código`
+          )
         }
       }
 
@@ -722,18 +786,13 @@ export default {
       // Track discovery hit to allow subsequent Reads
       const tool: string = event.tool as string
       const sessionId: string = (event.sessionID ?? "default") as string
-      const resultText = event.status === "completed" && event.result ? JSON.stringify(event.result) : ""
-      if (tool.includes("getDiscoverySnapshot") || tool.includes("get_discovery_snapshot")) {
-        // if output indicates hit, mark it
+      // (fix-codegraph-gate) Evidencia REAL de discovery: un `codegraph_explore` completado en ESTA
+      // sesión abre el gate de lecturas de código. Se marca aunque el resultado venga vacío, a
+      // propósito: "CodeGraph no tiene este archivo en su índice" es justamente el caso donde el
+      // Read TIENE que poder pasar. `getDiscoverySnapshot` queda aceptado para cuando sea una tool.
+      if (marksDiscovery(tool)) {
         try {
-          const text = resultText
-          if (text && !text.includes("null") && text.length > 10) {
-            discoveryHitByRequest.set(sessionId, true)
-          }
-          // Engram hit via discovery snapshot (contiene engramHits)
-          if (text && text.includes("engramHits")) {
-            engramHitBySession.set(sessionId, true)
-          }
+          if (event.status === "completed") discoveryHitByRequest.set(sessionId, true)
         } catch {}
       }
       // Track Engram hit (mem_search / mem_context / dedup) para soft gate 1.6

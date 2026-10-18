@@ -9,7 +9,7 @@ Ostacky es un **agent harness** para [OpenCode](https://opencode.ai): el orquest
 | [Superpowers](https://github.com/obra/superpowers)        | Ejecución           | CÓMO se implementa, prueba y revisa    |
 | [Engram](https://github.com/Gentleman-Programming/engram) | Memoria persistente | QUÉ aprendimos en sesiones anteriores  |
 
-Ostacky las rutea según el **nivel de impacto del cambio**, preguntándote antes de actuar: cambios grandes van por OpenSpec (spec-driven development), cambios chicos ejecutan directo con skills de Superpowers.
+Ostacky las rutea según el **nivel de impacto del cambio** y **te pregunta antes de actuar**:
 
 | Nivel   | Cuándo aplica                            | Flujo                                                                  |
 | ------- | ---------------------------------------- | ---------------------------------------------------------------------- |
@@ -17,12 +17,12 @@ Ostacky las rutea según el **nivel de impacto del cambio**, preguntándote ante
 | **0+1** | 5-10 líneas, 1-2 archivos, sin API nueva | CodeGraph → vos elegís: spec o directo                                 |
 | **1+**  | >10 líneas, API pública, refactors       | CodeGraph → OpenSpec → execution-mode-evaluation → subagentes o inline |
 
-Antes de ejecutar, Ostacky muestra qué tasks tocan los mismos archivos para que elijas el modo de ejecución informado (inline secuencial o subagentes en paralelo).
+Antes de ejecutar te muestra qué tasks comparten archivos, así elegís el modo de ejecución con información en mano.
 
 ## Requisitos
 
 - [Node.js](https://nodejs.org/) >= 20 (para `npx`) o [Bun](https://bun.sh/) >= 1.x (para `bunx` o desarrollo)
-- [OpenCode](https://opencode.ai) instalado: `curl -fsSL https://opencode.ai/install | bash`
+- [OpenCode](https://opencode.ai) instalado ([docs](https://opencode.ai/v2/docs)): `bun install -g --trust @opencode/cli` o `npm install -g @opencode/cli` (el `--trust` de Bun habilita el postinstall que elige tu binario nativo)
 - Git recomendado: con git hay aislamiento por worktree; sin git Ostacky instala en el directorio actual con un aviso
 - **WSL:** seguí las instrucciones de **Linux** — WSL corre un kernel Linux real, no uses los comandos de PowerShell aunque estés en Windows
 
@@ -31,7 +31,7 @@ Antes de ejecutar, Ostacky muestra qué tasks tocan los mismos archivos para que
 No requiere instalación global ni clonar el repositorio:
 
 ```bash
-npx ostacky          # menú interactivo
+npx ostacky          # menú interactivo (te pregunta el scope)
 bunx ostacky         # lo mismo con Bun
 ```
 
@@ -44,13 +44,11 @@ npx ostacky install --scope local   # explícito
 
 Instala el núcleo (agente, commands, skills, MCPs, plugins) más el stack de herramientas (CodeGraph, Engram) en `<proyecto>/.opencode`, y asegura `.gitignore` con `.opencode/tools/`, `.codegraph/`, `.opencode/cache/` y `ostacky-state.json*`.
 
-> Si el log muestra `toolsDir` en tu home (ej. `C:\Users\...\.opencode\tools\codegraph`) y esperabas tu proyecto, es porque corriste el comando fuera de un repo git. Hacé `cd` al proyecto y re-ejecutá.
-
 ### Global (opt-in)
 
 ```bash
 npx ostacky --scope global           # menú interactivo global
-npx ostacky install --scope global   # núcleo global (agente + commands + skills + MCPs + plugins)
+npx ostacky install --scope global   # el mismo núcleo, sin el stack
 ```
 
 Escribe el núcleo en el config dir global de OpenCode, sin tocar ningún proyecto:
@@ -81,8 +79,6 @@ Con `--scope global` el stack (CodeGraph, Engram) **se omite** — se instala po
 
 > Por defecto la web corre en `http://127.0.0.1:49374` solo en localhost. Docs: https://opencode.ai/v2/docs/cli/web
 
-Si algo del stack falló durante la instalación, regeneralo sin salir de la sesión: seleccioná `ostacky` y ejecutá `/install-stack` en el chat.
-
 ## Uso diario
 
 ```bash
@@ -102,7 +98,7 @@ npx ostacky uninstall-stack                    # limpia config del stack del pro
 npx ostacky --version  |  npx ostacky --help
 ```
 
-**Safe-delete:** solo borra lo trackeado en `ostacky-lock.json` — nunca toca componentes tuyos. Muestra preview con `Scope: <ruta>` y pide confirmación. Los plugins Ostacky-owned se limpian por allowlist; los custom no se tocan.
+**Safe-delete:** solo borra lo trackeado en `ostacky-lock.json` — nunca toca componentes tuyos. Muestra preview con `Scope: <ruta>` y pide confirmación. Los plugins que instaló Ostacky no están en el lockfile: se limpian por allowlist; los tuyos no se tocan.
 
 ## Qué se instala
 
@@ -129,7 +125,7 @@ Local (`<proyecto>/.opencode`) o global (mismo árbol bajo el dir global, sin st
 └── ostacky-lock.json       ← versiones instaladas (agents, commands, skills, mcpServers)
 ```
 
-`plugins/` y `tools/` **no** se trackean en el lockfile (allowlist Ostacky-owned). Instalaciones viejas con archivos legacy sueltos (`ostacky-plugin.ts`, `ostacky-guard.ts`, `ostacky-controller.ts`) se limpian automáticamente.
+`plugins/` y `tools/` **no** se trackean en el lockfile. Instalaciones viejas con archivos legacy sueltos (`ostacky-plugin.ts`, `ostacky-guard.ts`, `ostacky-controller.ts`) se limpian automáticamente.
 
 ```json
 {
@@ -142,7 +138,7 @@ Local (`<proyecto>/.opencode`) o global (mismo árbol bajo el dir global, sin st
 }
 ```
 
-Versionado con checksums: sumá `ostacky-lock.json` a git para que el equipo instale exactamente las mismas versiones. Las descargas usan tags de GitHub (nunca `main`) y cada path se valida contra path traversal.
+Versionado con checksums: sumá `ostacky-lock.json` a git para que el equipo instale exactamente las mismas versiones (mismo tag y mismos checksums).
 
 ## Comandos útiles
 
@@ -159,21 +155,18 @@ Engram y CodeGraph viven en `.opencode/tools/<herramienta>/bin/` y se exponen co
 
 ## Troubleshooting
 
-- **Instalé fuera del proyecto / sin git:** hacé `cd` al proyecto y re-ejecutá. El log muestra `projectRoot` y `toolsDir` explícitos para diagnosticar scope.
+- **Instalé fuera del proyecto / sin git:** el log muestra `projectRoot` y `toolsDir` explícitos; si `toolsDir` apunta a tu home (ej. `C:\Users\...\.opencode\tools\codegraph`) y esperabas tu proyecto, corriste el comando fuera de un repo git. Hacé `cd` al proyecto y re-ejecutá.
 - **El install global creó `.opencode/` local:** actualizá (`npx ostacky@latest`) y reinstalá — el menú interactivo ya propaga el scope y el stack se omite en global.
 - **Windows `cmd.exe ... codegraph.cmd init -i` durante el install:** warning no fatal — el binario quedó, solo falta el índice. Reintentá con `npx ostacky install-stack --scope local` o corré `.opencode\tools\codegraph\bin\codegraph.exe init -i` dentro del proyecto.
-- **¿Errores en el stack?** Desde el chat de OpenCode: `/install-stack`.
+- **¿Errores en el stack?** Elegí el agente `ostacky` y ejecutá `/install-stack` en el chat: regenera el stack sin salir de la sesión.
 
 ## Seguridad
 
 - `opencode.jsonc` puede versionarse para compartir permisos y MCP de forma reproducible.
-- Descargas por tags de GitHub + validación anti path-traversal + checksums SHA-256 del manifest + cache local con validación de integridad.
+- Descargas por tags de GitHub (nunca `main`), validación anti path-traversal y checksums SHA-256 del manifest.
+- Cache local en `.opencode/cache/<repo>/<tag>/<ruta>` con validación de integridad: si el hash cacheado coincide, no hay petición de red.
 - Lectura/escritura de `*.env` y `.secret/**` bloqueadas con `deny` (la sesión sigue por `experimental.continue_loop_on_deny`).
 - Patrones sensibles configurables: `OSTACKY_SENSITIVE_PATTERNS="**/.env*,**/.secrets/**" bunx ostacky doctor` (allowlist: `.env.example/.template/.sample`). Fuente única en `src/security.ts`; verificá con `npx ostacky doctor`.
-
-## Cache
-
-Descargas en `.opencode/cache/<repo>/<tag>/<ruta>`. Si el archivo cacheado tiene el hash correcto, no hay petición de red.
 
 ## Licencia
 
