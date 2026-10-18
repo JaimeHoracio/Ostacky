@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createMcpConfigEntry, probeMcpServer, uninstallMcpServer } from '../src/installer.js';
 import type { OpenCodePaths } from '../src/types.js';
@@ -8,7 +8,11 @@ const PROBE_STATE = join(import.meta.dir, '.test-controller-probe-state.json');
 
 afterEach(() => {
     if (existsSync(PROBE_STATE)) rmSync(PROBE_STATE, { force: true });
-    if (existsSync(PROBE_STATE + '.backup')) rmSync(PROBE_STATE + '.backup', { force: true });
+    for (const entry of readdirSync(import.meta.dir)) {
+        if (entry.startsWith('.test-controller-probe-state.json.')) {
+            rmSync(join(import.meta.dir, entry), { force: true });
+        }
+    }
 });
 
 describe('createMcpConfigEntry', () => {
@@ -67,7 +71,13 @@ describe('createMcpConfigEntry', () => {
                 PROBE_STATE
             )
         ).resolves.toBeUndefined();
-        expect(existsSync(PROBE_STATE + '.backup')).toBe(false);
+        // Regresión "sin basura": el probe ejercita start_request → el controller real
+        // rota backups (.backup/.backup.1/.backup.2) y locks. NINGÚN derivado debe
+        // sobrevivir en el dir (antes quedaba .test-controller-probe-state.json.backup.1).
+        const leftovers = readdirSync(import.meta.dir).filter((entry) =>
+            entry.startsWith('.test-controller-probe-state.json')
+        );
+        expect(leftovers).toEqual([]);
     });
 
     it('probes non-controller MCPs (e.g. openspec) with handshake-only validation (regression: E2)', async () => {

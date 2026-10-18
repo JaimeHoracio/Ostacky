@@ -41,7 +41,7 @@ export async function runInteractiveMenu(scope?: Scope | null) {
 
   switch (action as string) {
     case "all":
-      if (!(await doInstallAll(manifest, paths))) process.exitCode = 1;
+      if (!(await doInstallAll(manifest, paths, { scope: scope ?? "local" }))) process.exitCode = 1;
       printPostInstallSteps();
       p.outro(process.exitCode ? "Instalación parcial." : "Listo.");
       break;
@@ -66,6 +66,11 @@ export async function runInteractiveMenu(scope?: Scope | null) {
       p.outro("Listo.");
       break;
     case "stack": {
+      if ((scope ?? "local") === "global") {
+        p.log.warn("El stack (CodeGraph/Engram) es siempre local por proyecto. En scope global se omite; usá `npx ostacky install-stack --scope local` dentro del proyecto.");
+        p.outro("Listo.");
+        break;
+      }
       ensureToolDirs(paths.tools, ["codegraph", "engram"]);
       const stackOk = await doInstallStack(paths.tools, dirname(paths.root));
       if (!stackOk) process.exitCode = 1;

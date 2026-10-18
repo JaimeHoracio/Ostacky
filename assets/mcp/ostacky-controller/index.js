@@ -446,6 +446,11 @@ class OstackyController {
     #lockHeartbeatPath;
     #lockMaxAttempts = 5; // C1: 10→5 with jitter, overridable via opts for fast tests
     #lockOwner = false;
+    #lockDepth = 0; // multi-sesión: reentrancy (el lock se toma una vez por tool call)
+    #callerSessionId = null; // sessionId del caller (de _meta), solo en memoria
+    #loadedSnapshot = null; // huella del estado recién leído, para detectar "dirty"
+    #persistQueue = Promise.resolve(); // cola in-process: las escrituras nunca se solapan
+    #persistSeq = 0; // sufijo único por escritura (tmp.<pid>.<seq>)
 
     constructor(opts = {}) {
         this.#statePath = opts.statePath;
@@ -484,6 +489,76 @@ class OstackyController {
         }
     }
 
+    // ─── multi-sesión ────────────────────────────────────────────────────────
+    /**
+     * Re-lectura fresca desde disco. Invalida el cache #loaded y reusa la lógica
+     * de #load() (migraciones + fallback de backups). Se llama al INICIO de cada
+     * tool call, así dos procesos/sesiones nunca operan sobre un snapshot viejo
+     * (antes: `if (this.#loaded) return` hacía que el estado quedara congelado).
+     */
+    reloadFresh() {
+        this.#loaded = false;
+        this.#load();
+        this.#loadedSnapshot = this.#diffableState();
+    }
+
+    /**
+     * Huella serializada del estado (para el diff de "dirty").
+     * Excluye `lastHeartbeat` porque se actualiza en cada tool call y no debe
+     * forzar una escritura a disco (rotaría backups sin cambios reales).
+     */
+    #diffableState() {
+        if (!this.#state) return '';
+        try {
+            return safeJsonStringify({ ...this.#state, lastHeartbeat: 0 });
+        } catch {
+            return '';
+        }
+    }
+
+    /**
+     * Persiste si hubo mutaciones en memoria respecto de la última lectura/escritura.
+     * Es OBLIGATORIO ahora que reloadFresh() descarta el estado en memoria al inicio
+     * de cada tool call: sin esto, una mutación que no llamó a #persist (p.ej. el
+     * buffer de auditoría, o los campos de ownership) se perdería al siguiente call.
+     */
+    async persistIfDirty() {
+        if (!this.#statePath || !this.#state) return false;
+        // Drenar auditoría pendiente: el buffer vive solo en memoria, así que si no
+        // lo volcamos acá se perdería en el próximo reloadFresh().
+        try {
+            if (this.#auditBuffer.length > 0) await this.#flushAudit(false);
+        } catch {}
+        if (this.#diffableState() === this.#loadedSnapshot) return false;
+        await this.#persist();
+        this.#loadedSnapshot = this.#diffableState();
+        return true;
+    }
+
+    /** Registra el sessionId del caller actual (de `_meta["ai.opencode/sessionID"]`). */
+    setCallerSession(sessionId) {
+        this.#callerSessionId = typeof sessionId === 'string' && sessionId ? sessionId : null;
+    }
+
+    /** sessionId del caller actual, o null si el cliente no lo mandó. */
+    get callerSessionId() {
+        return this.#callerSessionId;
+    }
+
+    /**
+     * Toma el lock de estado por toda la duración de un tool call (read-modify-write
+     * serializado entre procesos/sesiones). Reentrante: #persist puede volver a
+     * pedirlo dentro de la misma operación.
+     */
+    async beginWrite() {
+        return this.#acquireLock();
+    }
+
+    /** Libera el lock tomado por beginWrite (reentrante). */
+    endWrite() {
+        this.#releaseLock();
+    }
+
     /**
      * Validates that a parsed state object has the required fields and valid values.
      * Returns null if valid, or an error message if invalid.
@@ -500,6 +575,13 @@ class OstackyController {
     // --- 3.4: State file locking (C1 fix: check stale BEFORE write, atomic wx, jitter, 15s stale, 1s timeout) ---
     async #acquireLock() {
         if (!this.#lockPath) return true;
+        // Reentrante: el boundary del tool ya tomó el lock (beginWrite) y #persist lo
+        // vuelve a pedir dentro de la MISMA operación. Sin esto, el segundo intento
+        // chocaba con nuestro propio lock (EEXIST) y hacía fallar la persistencia.
+        if (this.#lockDepth > 0) {
+            this.#lockDepth++;
+            return true;
+        }
         const maxAttempts = this.#lockMaxAttempts;
         const lockTimeout = 1000;
         const staleWindow = 15000;
@@ -546,6 +628,7 @@ class OstackyController {
                 }
                 this.#heartbeatLock();
                 this.#lockOwner = true;
+                this.#lockDepth = 1;
                 return true;
             } catch {
                 const base = Math.min(lockTimeout, 100 * Math.pow(2, attempt));
@@ -561,6 +644,12 @@ class OstackyController {
 
     #releaseLock() {
         if (!this.#lockPath) return;
+        // Reentrante: solo el nivel más externo libera de verdad.
+        if (this.#lockDepth > 1) {
+            this.#lockDepth--;
+            return;
+        }
+        this.#lockDepth = 0;
         // D2: verify ownership before deleting — never delete another process's lock
         try {
             const ownerPid = readFileSync(this.#lockPidPath, 'utf8').trim();
@@ -743,7 +832,24 @@ class OstackyController {
         this.#loaded = true;
     }
 
-    async #persist() {
+    /**
+     * Serializa las escrituras de estado DENTRO del proceso.
+     * Sin esto, un flush fire-and-forget (#enterDegradedMode/#exitDegradedMode) o un
+     * flush del watchdog puede interleavearse con el persist de un handler: ambos
+     * escriben el MISMO `tmp.<pid>` y el segundo rename falla con ENOENT (o, peor,
+     * se pierde la escritura). Ahora las escrituras se encolan: nunca se solapan.
+     */
+    #persist() {
+        const run = () => this.#persistInner();
+        const next = this.#persistQueue.then(run, run);
+        this.#persistQueue = next.then(
+            () => {},
+            () => {}
+        );
+        return next;
+    }
+
+    async #persistInner() {
         if (!this.#statePath) return;
 
         const dir = dirname(this.#statePath);
@@ -818,7 +924,7 @@ class OstackyController {
                 stateForSerialize.snapshots = { codegraph: null, execution: null };
                 serialized = safeJsonStringify(stateForSerialize, true);
             }
-            const tmp = this.#statePath + '.tmp.' + process.pid;
+            const tmp = this.#statePath + '.tmp.' + process.pid + '.' + ++this.#persistSeq;
             await writeFileAsync(tmp, serialized, 'utf8');
             await renameAsync(tmp, this.#statePath);
             // 2.1: backup rotativo 3 niveles best-effort
@@ -1100,25 +1206,79 @@ class OstackyController {
     async startRequest({ requestId, changeId, force = false } = {}) {
         this.#load();
 
+        const caller = this.#callerSessionId;
+        const owner = this.#state.ownerSessionId;
+        // OJO: `INTERPRETATION_PENDING` está en TERMINAL_STATES — es "terminal" para
+        // decidir si se RESUME, pero NO significa que no haya trabajo. Por eso separamos:
+        //  - resumeEligible: semántica ORIGINAL de start_request (no la tocamos).
+        //  - foreignOwnedWork: hay una request de OTRA sesión que todavía no terminó.
+        const resumeEligible = !TERMINAL_STATES.includes(this.#state.state) && !!this.#state.requestId;
+        const foreignOwnedWork =
+            !!this.#state.requestId &&
+            this.#state.state !== STATES.DONE &&
+            !!owner &&
+            !!caller &&
+            owner !== caller;
+
+        // ── Guard de ownership (multi-sesión) ──
+        // Si hay una request viva de OTRA sesión y no se fuerza, NO pisamos nada:
+        // devolvemos el estado real para que el caller haga un takeover explícito
+        // (force:true, auditado). Sin caller conocido (clientes que no mandan `_meta`)
+        // el guard no aplica: comportamiento idéntico al anterior.
+        if (foreignOwnedWork && !force) {
+            await this.#audit(
+                this.#state.state,
+                'start_request_conflict',
+                `caller=${caller} owner=${owner} requestId=${this.#state.requestId}`
+            );
+            return {
+                conflict: true,
+                state: this.#state.state,
+                revision: this.#state.revision,
+                requestId: this.#state.requestId,
+                ownerSessionId: owner,
+                callerSessionId: caller,
+                message:
+                    'Otra sesión posee la request activa. Reintentá con force:true para hacer takeover (queda auditado).',
+            };
+        }
+
         // If not forcing and current state is active (not terminal), resume instead of reset
-        if (!force && !TERMINAL_STATES.includes(this.#state.state) && this.#state.requestId) {
+        if (!force && resumeEligible) {
+            // Reclamamos ownership si no había dueño o si cambió (sesión única / reconexión).
+            if (caller && this.#state.ownerSessionId !== caller) {
+                this.#state.ownerSessionId = caller;
+            }
+            this.#state.ownerHeartbeat = Date.now();
             await this.#audit(
                 this.#state.state,
                 'start_request',
-                `resumed from ${this.#state.state}, requestId=${this.#state.requestId}`
+                `resumed from ${this.#state.state}, requestId=${this.#state.requestId}${caller ? `, session=${caller}` : ''}`
             );
             return {
                 state: this.#state.state,
                 revision: this.#state.revision,
                 requestId: this.#state.requestId,
+                ownerSessionId: this.#state.ownerSessionId,
                 continued: true,
             };
+        }
+
+        // Takeover EXPLÍCITO (force sobre una request viva de otra sesión) → auditado
+        if (force && foreignOwnedWork) {
+            await this.#audit(
+                this.#state.state,
+                'session_takeover',
+                `from=${owner} to=${caller} requestId=${this.#state.requestId}`
+            );
         }
 
         // Force reset or terminal state: create new session
         await this.#transition('INTERPRETATION_PENDING', {
             requestId: requestId || 'req-' + Date.now(),
             changeId: changeId || null,
+            ownerSessionId: caller || null,
+            ownerHeartbeat: Date.now(),
             routeDecisionId: null,
             routeChoice: null,
             executionDecisionId: null,
@@ -1140,6 +1300,7 @@ class OstackyController {
             state: this.#state.state,
             revision: this.#state.revision,
             requestId: this.#state.requestId,
+            ownerSessionId: this.#state.ownerSessionId,
             continued: false,
         };
     }
@@ -2189,6 +2350,15 @@ class OstackyController {
         return {
             revision: this.#state.revision,
             state: this.#state.state,
+            // multi-sesión: quién posee la request y quién está preguntando AHORA.
+            // Se calcula con el callerSessionId de ESTA llamada (no está persistido).
+            ownership: {
+                ownerSessionId: this.#state.ownerSessionId ?? null,
+                callerSessionId: this.#callerSessionId,
+                isOwner:
+                    !!this.#callerSessionId && this.#callerSessionId === (this.#state.ownerSessionId ?? null),
+                ownerHeartbeat: this.#state.ownerHeartbeat ?? 0,
+            },
             degraded: this.#degraded || !!this.#state.degraded,
             consecutiveFailures: this.#consecutiveFailures,
             taskCounts: {
@@ -2366,7 +2536,9 @@ class OstackyController {
 
     async getState() {
         this.#load();
-        return structuredClone(this.#state);
+        // callerSessionId es de la llamada actual (no del estado persistido):
+        // permite verificar de un vistazo qué sesión está operando.
+        return { ...structuredClone(this.#state), callerSessionId: this.#callerSessionId };
     }
 
     async getTasks() {
@@ -2924,16 +3096,55 @@ const controller = new OstackyController({ statePath });
  * @param {number} options.maxRetries - Maximum retry attempts (default: 0)
  * @param {number} options.baseTimeout - Base timeout in ms (default: 5000)
  */
+/**
+ * Extrae el sessionId de OpenCode del contexto del request.
+ * OpenCode lo manda como `_meta["ai.opencode/sessionID"]` en cada tools/call
+ * (aplica a tools directos y a Code Mode; puede faltar → degradamos a null,
+ * y con null NO se aplica guard de ownership para no romper clientes viejos).
+ */
+function extractCallerSessionId(ctx) {
+    try {
+        const meta = ctx && ctx.mcpReq && ctx.mcpReq._meta;
+        if (meta && typeof meta === 'object') {
+            const v = meta['ai.opencode/sessionID'];
+            if (typeof v === 'string' && v) return v;
+        }
+    } catch {}
+    // Fallback: sessionId del transporte (stdio → puede ser único por proceso,
+    // NO por sesión de OpenCode; por eso es solo fallback).
+    try {
+        if (ctx && typeof ctx.sessionId === 'string' && ctx.sessionId) return ctx.sessionId;
+    } catch {}
+    return null;
+}
+
 function safeHandler(fn, options = {}) {
     const { maxRetries = 0, baseTimeout = 5000 } = options;
 
-    return async (params) => {
+    return async (params, ctx) => {
+        // ── multi-sesión: identidad + estado fresco + lock por operación ──
+        // 1) sessionId del caller (de `_meta`), 2) re-lectura fresca desde disco
+        // (mata el snapshot congelado del cache `#loaded` cuando hay 2+ procesos),
+        // 3) lock reentrante durante TODO el read-modify-write → sin lost updates.
+        let heldLock = false;
+        try {
+            controller.setCallerSession(extractCallerSessionId(ctx));
+            controller.reloadFresh();
+            heldLock = await controller.beginWrite();
+        } catch {}
+        const endOp = () => {
+            if (!heldLock) return;
+            heldLock = false;
+            try {
+                controller.endWrite();
+            } catch {}
+        };
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
             const currentTimeout = baseTimeout * Math.pow(1.5, attempt);
             const start = Date.now();
             try {
                 const result = await Promise.race([
-                    fn(params),
+                    fn(params, ctx),
                     new Promise((_, reject) =>
                         setTimeout(() => reject(new Error(`timeout ${currentTimeout}ms`)), currentTimeout)
                     ),
@@ -2942,8 +3153,13 @@ function safeHandler(fn, options = {}) {
                 try {
                     await controller._recordToolDuration(duration);
                 } catch {}
+                // Flush si el handler mutó el estado sin persistir (audit buffer, ownership…)
+                try {
+                    await controller.persistIfDirty();
+                } catch {}
                 // Update heartbeat on successful completion
                 controller.updateHeartbeat();
+                endOp();
                 return { content: [{ type: 'text', text: safeJsonStringify(result) }] };
             } catch (error) {
                 const isTimeout = error && error.message && error.message.includes('timeout');
@@ -2969,6 +3185,7 @@ function safeHandler(fn, options = {}) {
                     try {
                         await controller._recordToolTimeout();
                     } catch {}
+                    endOp();
                     return {
                         content: [
                             {
@@ -2985,6 +3202,7 @@ function safeHandler(fn, options = {}) {
                     error: error.message,
                     stack: error.stack,
                 });
+                endOp();
                 return {
                     content: [{ type: 'text', text: safeJsonStringify({ error: error.message }) }],
                     isError: true,
@@ -2996,7 +3214,7 @@ function safeHandler(fn, options = {}) {
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.9.7',
+    version: '0.10.0',
 });
 
 server.registerTool(
@@ -3598,7 +3816,7 @@ function setupGracefulShutdown(ctrl) {
 }
 
 async function main() {
-    log('Starting ostacky-controller MCP v0.9.7...');
+    log('Starting ostacky-controller MCP v0.10.0...');
     log('State path:', { path: statePath });
     // Clean up stale tmp/lock files from previous runs
     cleanupTmpFiles(statePath);

@@ -141,6 +141,10 @@ export const DEFAULT_STATE: any = {
   pendingFileAccess: {},
   lastHeartbeat: 0,
   watchdogEnabled: true,
+  // multi-sesión: dueño de la request activa (sessionId de OpenCode vía _meta).
+  // null = sin dueño conocido. Es UN campo (se sobreescribe) — nunca un archivo por sesión.
+  ownerSessionId: null,
+  ownerHeartbeat: 0,
   ts: Date.now(),
   specNotInSync: false,
   engramBypassCount: 0,

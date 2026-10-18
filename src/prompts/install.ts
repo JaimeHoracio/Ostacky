@@ -23,6 +23,18 @@ export async function doInstallStack(toolsDir?: string, projectRoot?: string): P
   let allOk = true;
   const resolvedProjectRoot = projectRoot ?? dirname(dirname(toolsDir ?? join(process.cwd(), ".opencode", "tools")));
   const resolvedToolsDir = toolsDir ?? join(resolvedProjectRoot, ".opencode", "tools");
+  // Stack siempre local por proyecto: si llegan paths globales, no derivar un
+  // projectRoot erróneo (padre del dir global) ni crear artefactos en el cwd —
+  // omitir con aviso en vez de fallar.
+  try {
+    const { getGlobalOpenCodeDir } = await import("../fs.js");
+    const globalDir = getGlobalOpenCodeDir().replace(/\\/g, "/").toLowerCase();
+    const toolsNorm = resolvedToolsDir.replace(/\\/g, "/").toLowerCase();
+    if (toolsNorm === globalDir || toolsNorm.startsWith(globalDir + "/")) {
+      p.log.warn("Scope global: el stack (CodeGraph/Engram) es siempre local por proyecto — omitido aquí. Instalalo por proyecto con `npx ostacky install-stack --scope local`.");
+      return true;
+    }
+  } catch {}
   p.log.info(`Stack → projectRoot: ${resolvedProjectRoot} | toolsDir: ${resolvedToolsDir}`);
   // Advertencia si parece instalación en home sin proyecto (confusión local vs global)
   try {

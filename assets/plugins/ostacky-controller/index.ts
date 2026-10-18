@@ -73,31 +73,137 @@ function readState(directory: string): any | null {
   }
 }
 
-function persistState(directory: string, state: any): void {
+/** Sleep sincrónico acotado — los call sites del plugin son sync. */
+function sleepSync(ms: number): void {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+  } catch {
+    const end = Date.now() + ms
+    while (Date.now() < end) {
+      /* spin de último recurso */
+    }
+  }
+}
+
+function isPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Toma EL MISMO lock que el MCP (`<state>.lock.pid` con `wx`) para serializar
+ * plugin ↔ MCP cross-proceso. Devuelve una función de release; si no se pudo
+ * tomar, devuelve un no-op (la escritura sigue siendo segura por el merge).
+ */
+function acquireStateLock(statePath: string): () => void {
+  const pidPath = statePath + ".lock.pid"
+  const tsPath = statePath + ".lock.timestamp"
+  const staleWindow = 15_000
+  let acquired = false
+  for (let attempt = 0; attempt < 8 && !acquired; attempt++) {
+    // Lock viejo: solo lo liberamos si el dueño NO está vivo (mismo criterio que el MCP).
+    try {
+      const ts = parseInt(readFileSync(tsPath, "utf-8"), 10)
+      if (!Number.isNaN(ts) && Date.now() - ts >= staleWindow) {
+        const owner = parseInt(readFileSync(pidPath, "utf-8").trim(), 10)
+        if (!isPidAlive(owner)) {
+          try { unlinkSync(pidPath) } catch {}
+          try { unlinkSync(tsPath) } catch {}
+        }
+      }
+    } catch {}
+    try {
+      writeFileSync(pidPath, String(process.pid), { encoding: "utf-8", flag: "wx" })
+      try { writeFileSync(tsPath, String(Date.now()), "utf-8") } catch {}
+      acquired = true
+    } catch {
+      sleepSync(5 + attempt * 10)
+    }
+  }
+  if (!acquired) return () => {}
+  return () => {
+    try {
+      if (readFileSync(pidPath, "utf-8").trim() !== String(process.pid)) return
+    } catch {
+      return
+    }
+    try { unlinkSync(pidPath) } catch {}
+    try { unlinkSync(tsPath) } catch {}
+  }
+}
+
+let persistSeq = 0
+
+/**
+ * Merge puro: parte del estado FRESCO de disco y le aplica SOLO las claves que
+ * el plugin posee. Garantiza estructuralmente que una escritura del plugin no
+ * pueda borrar un avance del MCP (transición, audit, tasks, revision).
+ */
+export function mergePluginOwnedState(fresh: any, state: any, ownedKeys: string[]): any {
+  const payload: any = { ...fresh }
+  for (const k of ownedKeys) {
+    if (Object.prototype.hasOwnProperty.call(state, k)) payload[k] = state[k]
+  }
+  return payload
+}
+
+/**
+ * Persiste estado SIN poder pisar al MCP.
+ *
+ * El MCP es la autoridad de la máquina de estados; el plugin solo escribe un
+ * puñado de campos "advisory" (`ownedKeys`). Antes el plugin hacía
+ * readState → mutar → write del snapshot COMPLETO: si el MCP avanzaba en el
+ * medio (transición/audit/tasks), la escritura del plugin borraba ese avance.
+ *
+ * Ahora: (1) lock compartido con el MCP, (2) re-lectura fresca de disco DENTRO
+ * del lock, (3) se aplican SOLO las claves propias sobre el estado fresco,
+ * (4) write atómico (tmp único + rename). El `revision` se preserva del disco:
+ * las escrituras del plugin no son transiciones de la máquina de estados.
+ */
+export function persistState(directory: string, state: any, ownedKeys?: string[]): void {
   const p = getStatePath(directory)
   const dir = dirname(p)
   try { mkdirSync(dir, { recursive: true }) } catch {}
-  let serialized = JSON.stringify(state, null, 2)
-  if (serialized.length > MAX_STATE_FILE_SIZE) {
-    state.stateOversizedCount = (state.stateOversizedCount || 0) + 1
-    const trimmed = { ...state, snapshots: { codegraph: null, execution: null }, audit: (state.audit || []).slice(-50) }
-    serialized = JSON.stringify(trimmed, null, 2)
-    if (serialized.length > MAX_STATE_FILE_SIZE) return
-    state.snapshots = { codegraph: null, execution: null }
-    serialized = JSON.stringify(state, null, 2)
-  }
-  const tmp = p + ".tmp." + process.pid
+
+  const release = acquireStateLock(p)
   try {
-    writeFileSync(tmp, serialized, "utf-8")
-    renameSync(tmp, p)
-    try { renameSync(p + ".backup", p + ".backup.1") } catch {}
-    try { renameSync(p + ".backup.1", p + ".backup.2") } catch {}
+    let payload: any = state
+    if (ownedKeys && ownedKeys.length > 0) {
+      let fresh: any = null
+      try { fresh = JSON.parse(readFileSync(p, "utf-8")) } catch {}
+      if (fresh && typeof fresh === "object" && !Array.isArray(fresh)) {
+        payload = mergePluginOwnedState(fresh, state, ownedKeys)
+      }
+    }
+    let serialized = JSON.stringify(payload, null, 2)
+    if (serialized.length > MAX_STATE_FILE_SIZE) {
+      payload.stateOversizedCount = (payload.stateOversizedCount || 0) + 1
+      const trimmed = { ...payload, snapshots: { codegraph: null, execution: null }, audit: (payload.audit || []).slice(-50) }
+      serialized = JSON.stringify(trimmed, null, 2)
+      if (serialized.length > MAX_STATE_FILE_SIZE) return
+      payload.snapshots = { codegraph: null, execution: null }
+      serialized = JSON.stringify(payload, null, 2)
+    }
+    const tmp = p + ".tmp." + process.pid + "." + ++persistSeq
     try {
-      const backupTmp = p + ".backup.tmp." + process.pid
-      writeFileSync(backupTmp, serialized, "utf-8")
-      renameSync(backupTmp, p + ".backup")
+      writeFileSync(tmp, serialized, "utf-8")
+      renameSync(tmp, p)
+      try { renameSync(p + ".backup", p + ".backup.1") } catch {}
+      try { renameSync(p + ".backup.1", p + ".backup.2") } catch {}
+      try {
+        const backupTmp = p + ".backup.tmp." + process.pid + "." + persistSeq
+        writeFileSync(backupTmp, serialized, "utf-8")
+        renameSync(backupTmp, p + ".backup")
+      } catch {}
     } catch {}
-  } catch {}
+  } finally {
+    release()
+  }
 }
 
 function fastFingerprint(filePath: string): string | null {
@@ -226,7 +332,7 @@ export default {
           const pending = Array.isArray(s.expectedTasks) ? s.expectedTasks.filter((id: string) => !s.tasks?.[id] || s.tasks[id].status !== "COMPLETED").length : "?"
           const msg = `[ostacky] Sigo trabajando — ${s.state} • ${completed}/${total} (${pending} pendientes) • hace ${Math.round(idle/1000)}s sin output`
           try { console.log(msg) } catch {}
-          try { const st = readState(directory); if (st) { (st as any).lastPingTs = now; persistState(directory, st) } } catch {}
+          try { const st = readState(directory); if (st) { (st as any).lastPingTs = now; persistState(directory, st, ["lastPingTs"]) } } catch {}
         } catch {}
       }, 30_000)
       if (pingInterval && typeof (pingInterval as any).unref === 'function') (pingInterval as any).unref()
@@ -335,7 +441,7 @@ export default {
             if (st) {
               st.engramBypassCount = (st.engramBypassCount || 0) + 1
               // no persist cada vez si es muy frecuente: single-writer ya persiste en after, pero acá persistimos directo para auditoría
-              persistState(directory, st)
+              persistState(directory, st, ["engramBypassCount"])
             }
           } catch {}
         }
@@ -541,7 +647,7 @@ export default {
               try {
                 const st = readState(directory) || { ...DEFAULT_STATE }
                 st.staleContentAttempts = (st.staleContentAttempts || 0) + 1
-                persistState(directory, st)
+                persistState(directory, st, ["staleContentAttempts"])
               } catch {}
               throw new Error(`CONFLICT: stale fingerprint for ${targetPath}`)
             }
@@ -599,6 +705,13 @@ export default {
                 ts: Date.now(),
                 mode: isCreate ? 'create' : 'replace',
               }
+              // FIX multi-sesión: persistir lastValidated. Antes se mutaba un objeto
+              // local y se descartaba → complete_task leía un lastValidated viejo
+              // desde disco → CONFLICT → las tareas quedaban pending y el cierre
+              // (implementation_complete) se bloqueaba.
+              // `["lastValidated"]` = se escribe SOLO esa clave sobre el estado
+              // fresco que se re-lee bajo el lock compartido con el MCP.
+              persistState(directory, st, ["lastValidated"])
             }
           } catch {}
         }
@@ -636,7 +749,7 @@ export default {
           const shouldPersist = process.env.OSTACKY_PLUGIN_PERSIST === "1" || (now - (s.lastHeartbeat || 0) > 30000)
           if (shouldPersist) {
             s.lastHeartbeat = now
-            try { persistState(directory, s) } catch {}
+            try { persistState(directory, s, ["lastHeartbeat"]) } catch {}
           }
         }
       } catch {}

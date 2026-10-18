@@ -10,7 +10,7 @@ import {
     rmSync,
 } from 'fs';
 import { execFileSync, spawn } from 'child_process';
-import { dirname, join } from 'path';
+import { dirname, join, basename } from 'path';
 import { pathToFileURL } from 'url';
 import type { Manifest, ManifestItem } from './github.js';
 import {
@@ -238,7 +238,7 @@ export async function probeMcpServer(
                 params: {
                     protocolVersion: '2025-03-26',
                     capabilities: {},
-                    clientInfo: { name: 'ostacky-installer', version: '0.9.7' },
+                    clientInfo: { name: 'ostacky-installer', version: '0.10.0' },
                 },
             });
         });
@@ -246,13 +246,23 @@ export async function probeMcpServer(
         // Give controller shutdown handler time to finish (flush recreates file) before cleanup
         await new Promise((r) => setTimeout(r, 200));
         if (statePath) {
-            for (const p of [
+            const probeDir = dirname(statePath);
+            const probeBase = basename(statePath);
+            const probePrefix = probeBase + '.';
+            // Barrido por prefijo: agarra .backup, .backup.N, .backup.tmp.<pid>, .lock.pid,
+            // .lock.timestamp, .tmp.<pid> y cualquier derivado futuro del state del probe.
+            for (const p of readdirSync(probeDir)
+                .filter((entry) => entry === probeBase || entry.startsWith(probePrefix))
+                .map((entry) => join(probeDir, entry))
+                .concat([
                 statePath,
                 statePath + '.backup',
+                statePath + '.backup.1',
+                statePath + '.backup.2',
                 statePath + '.lock.pid',
                 statePath + '.lock.timestamp',
                 statePath + '.tmp.' + process.pid,
-            ]) {
+            ])) {
                 try {
                     if (existsSync(p)) rmSync(p, { force: true });
                 } catch {}
@@ -704,7 +714,7 @@ export function uninstallAll(paths: OpenCodePaths): void {
             } catch {}
         }
     }
-    // Package dir (formato V2 desde v0.9.7): requiere rm recursivo, no unlink
+    // Package dir (formato V2 desde v0.10.0): requiere rm recursivo, no unlink
     const packageDir = join(paths.plugins, 'ostacky-controller');
     if (existsSync(packageDir)) {
         try {
