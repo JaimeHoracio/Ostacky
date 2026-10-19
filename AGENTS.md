@@ -20,8 +20,7 @@ No usar `codegraph_explore` (single prefix) — ese nombre no existe en MCP (ver
 ## Env sensibles (hardening-v2)
 
 - `OSTACKY_SENSITIVE_PATTERNS` — overridea `SENSITIVE_DEFAULT` (`**/.env*`, `**/.secrets/**`, `**/*.pem`, `**/*.key`, `**/.aws/**`, `**/.ssh/**`, `**/credentials.json`, `**/.npmrc`). Ejemplo: `OSTACKY_SENSITIVE_PATTERNS="**/.env*,**/.secrets/**" bunx ostacky doctor`. Allowlist `.env.example/.template/.sample` nunca bloquea. Fuente única: `src/security.ts` (`SENSITIVE_DEFAULT`, `isSensitive`, `BASH_SENSITIVE_RE`, `extractPathsFromBash`) — guard y controller usan misma lógica.
-- `OSTACKY_CACHE_DISABLE=1` — desactiva cache filesystem de CodeGraph (`.opencode/cache/codegraph/`) para CI.
-- `OSTACKY_SENSITIVE_PATTERNS` y `OSTACKY_CACHE_DISABLE` se documentan en `README.md` y `doctor`.
+- `OSTACKY_SENSITIVE_PATTERNS` se documenta en `README.md` y `doctor`.
 
 ## Doctor
 

@@ -49,12 +49,8 @@ describe("controller-hybrid", () => {
     expect(pluginSrc).toContain("ostacky_get_handoff");
   });
 
-  it("cache único hit increments", () => {
-    const dcPath = join(import.meta.dir, "..", "src", "discovery-cache.ts");
-    const dcSrc = readFileSync(dcPath, "utf-8");
-    expect(dcSrc).toContain("getDiscoverySnapshot");
-    expect(dcSrc).toContain("DISCOVERY_CACHE_PREFIX");
-    expect(dcSrc).toContain("incrementDiscoveryHit");
+  it("no hay cache de discovery (superficie retirada)", () => {
+    expect(existsSync(join(import.meta.dir, "..", "src", "discovery-cache.ts"))).toBe(false);
   });
 
   it("router determinista 1+ estLines 10 fileCount1 downgrade", () => {

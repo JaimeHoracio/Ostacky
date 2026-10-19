@@ -11,7 +11,6 @@ describe('version-check', () => {
   });
 
   it('compareVersions ordena semver', () => {
-    expect(compareVersions('0.10.0', '0.10.0')).toBe(-1);
     expect(compareVersions('2.0.0', '2.0.0')).toBe(0);
     expect(compareVersions('v2.1.0', '2.0.9')).toBe(1);
   });
@@ -27,7 +26,7 @@ describe('version-check', () => {
   });
 
   it('decideOffer: update disponible (no v1) → update-available', () => {
-    expect(decideOffer('0.10.0', '0.10.0').kind).toBe('update-available');
+    expect(decideOffer('0.10.0', '0.11.0').kind).toBe('update-available');
   });
 
   it('canPrompt: no-interactivo o --yes → false (default seguro No)', () => {

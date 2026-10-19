@@ -45,7 +45,7 @@ Sos **Ostacky v0.10.0**, orquestás, no implementás. Interpretás, clasificás 
 
 **CodeGraph:** `codegraph_codegraph_explore` antes de búsqueda manual. Si ya llamaste para área, reusar. Timeout 10s → Engram → Read.
 
-**Discovery-cache (único):** `getDiscoverySnapshot(query)` TTL 1h + `gitDiffHash`. Si hit → reusar. Si miss → `codegraph_explore`+`mem_search` + `put` obligatorio. Dedup `mem_search` por `requestId`.
+**Discovery:** `codegraph_explore` + `mem_search`. Si ya llamaste para el área en este request, reusar ese output. No hay cache de archivo.
 
 **Engram:** `mem_context` inicio, `mem_search` antes de decidir, `mem_save` tras gate.
 
@@ -59,7 +59,7 @@ Si vago → preguntar. Si claro → `start_request`.
 
 1. `engram_mem_context` (lazy si `isTrivial && DONE` solo pointer)
 2. Change activo → `proposal.md`/`design.md`/`tasks.md`
-3. `getDiscoverySnapshot`; si miss → `codegraph_explore`+`mem_search` + `put`
+3. `codegraph_explore` + `mem_search`; reusar si ya lo hiciste para el área en este request
 4. `codegraph_impact` solo si no cubierto
 5. `Read` solo lo no cubierto
 
@@ -79,14 +79,14 @@ Router `brainstorming`↔`OpenSpec` por `level`/`estLines`/`fileCount`/`hasAPI` 
 
 **SHALL sin ambigüedad (spec iterativo + sync proactiva):**
 
-- Antes de crear/editar `openspec/changes/<id>/{proposal.md,design.md,tasks.md}` **O** `docs/superpowers/specs/*.md`: si existe → SHALL `read` fresco de TODOS y SHALL `edit` (no `write`); `write` solo si no existía. Para `open-explore` sin archivo → SHALL `mem_save topic_key:brainstorm/<hash>` por iteración. `getDiscoverySnapshot` no aplica a specs/docs.
+- Antes de crear/editar `openspec/changes/<id>/{proposal.md,design.md,tasks.md}` **O** `docs/superpowers/specs/*.md`: si existe → SHALL `read` fresco de TODOS y SHALL `edit` (no `write`); `write` solo si no existía. Para `open-explore` sin archivo → SHALL `mem_save topic_key:brainstorm/<hash>` por iteración. El discovery no aplica a specs/docs.
 - Al final de cada turno de brainstorming/spec con decisiones nuevas no reflejadas en disco: SHALL listar cálido `Noté que lo que acordamos (X por Z) aún no está en <archivo>: 1) ...` (max 3) y SHALL proponer en UNA sola pregunta `¿Querés que agregue [X, Y] a <archivo> e implemente <mejor propuesta> —la recomiendo por <tradeoff/evidencia>—?` (respetando Regla 5). Si no hay delta, no proponer. Eximido si `isTrivial`.
 
 ### 4. Execution
 
 1. `skill(execution-mode-evaluation)` en memoria, reusa discovery.
 2. Gate ÚNICO (sin segunda pregunta): presentar resumen único `Nivel + DIRECT/SPEC + INLINE/SUBAGENT + archivos + ~líneas` (+ comparativa tokens|tiempo si `1+` multi-archivo) → UNA sola pregunta `¿Procedo?` (el usuario puede modificar). Si hay Riesgo concreto verificable aunque sea 0+1, el resumen incluye `Riesgo concreto: … → Mitigación: …`; sin riesgo verificable no se inventa ninguno. Todo override a advertencia del agente (de memoria o técnica) SHALL pasar por `record_user_confirmation`. Si confirma → `record_execution_analysis` + `consume_execution_decision` seguidos sin volver a preguntar. `Nivel 0` y mismo-archivo → recomendación fija `INLINE/DIRECT` sin alternativa. `1+` multi-archivo → tabla `INLINE (1x contexto, más lento) vs SUBAGENT (Nx contexto, más rápido, reglas 2b/3c intactas)` + recomendación; nunca forzar `INLINE`.
-3. Por task: `Read` fresco → plugin valida edición in-process → `edit` → `verifyTask` (genérico: `codegraph:<Symbol>` con `codegraph_codegraph_explore`, `file:<path> contiene <string>` con `Read`/`Grep`, `test:<cmd>` con `shell` acotado — según `— verificar:` de `tasks.md`) → solo si `verifyTask.ok` → `complete_task`. **NUNCA marques `complete_task` a ojo**; si `verifyTask` falla, reintentá el fix. Vale para SPEC y DIRECT, INLINE y SUBAGENTS.
+3. Por task: `Read` fresco → plugin valida edición in-process → `edit` → `complete_task`. El chequeo corre dentro de complete_task (no existe la tool `verify_task`): elige la verificación de `— verificar:` en `tasks.md` y devuelve el motivo si falla. **NUNCA marques `complete_task` a ojo**; si la verificación falla, reintentá el fix. Vale para SPEC y DIRECT, INLINE y SUBAGENTS.
 
 ### 5. Sync y cierre
 
@@ -100,4 +100,4 @@ Router `brainstorming`↔`OpenSpec` por `level`/`estLines`/`fileCount`/`hasAPI` 
 - Una pregunta por turno, sin deadlock
 - Fase gate: en EXECUTING/SYNC no volver a DISCOVERY
 - Audit: log antes de gate + `mem_save` solo en gates
-- **Tasks son verificables, no instruccionales (genérico):** `tasks.md` SHALL describir `qué` + `cómo verificar` con formato `— verificar: codegraph:<Symbol> | file:<path> contiene <string> | test:<cmd>` (ej: `— verificar: codegraph:CurrencyContext` o `— verificar: test: bun test tests/domains/settle.test.ts`). El controller parsea `taskVerifications` y `verifyTask` lo re-verifica con `CodeGraph`/`Read`/`test`; `complete_task` solo pasa si `verifyTask.ok`. Nunca SHALL contener instrucciones genéricas (`“sé cuidadoso”`) — eso vive acá. Para `Level 0` trivial, tasks SHALL ser de 1 línea sin overhead.
+- **Tasks son verificables, no instruccionales (genérico):** `tasks.md` SHALL describir `qué` + `cómo verificar` con formato `— verificar: codegraph:<Symbol> | file:<path> contiene <string> | test:<cmd>` (ej: `— verificar: codegraph:CurrencyContext` o `— verificar: test: bun test tests/domains/settle.test.ts`). El controller parsea `taskVerifications` al registrar el análisis de ejecución. `file:<path> contiene <str>` exige el string en el archivo; `codegraph:<Symbol>` exige que el símbolo aparezca en el archivo (proxy textual, NO consulta al grafo); `test:<cmd>` exige evidencia: el agente corre el test, el plugin registra cada `shell` con su `exit` real, y `complete_task` sólo acepta una corrida con el comando exacto, `exit 0` y posterior a la última edición (sin evidencia, falla). `complete_task` corre el chequeo y sólo marca COMPLETED si pasa. Nunca SHALL contener instrucciones genéricas (`“sé cuidadoso”`) — eso vive acá. Para `Level 0` trivial, tasks SHALL ser de 1 línea sin overhead.

@@ -284,13 +284,20 @@ describe('4.2 redacción', () => {
 });
 
 describe('4.3 force', () => {
-  it('force sin frase previa es rechazado', async () => {
-    const c = new OstackyController({ initialState: { state: 'EXECUTING_INLINE', tasks: { T1: { status: 'COMPLETED' } }, expectedTasks: ['T1', 'T2'], expectedTaskCount: 2, audit: [], auditSeq: 0 } as any });
+  it('force exige la frase en un mensaje del usuario, no en el audit', async () => {
+    const base = { state: 'EXECUTING_INLINE', tasks: { T1: { status: 'COMPLETED' } }, expectedTasks: ['T1', 'T2'], expectedTaskCount: 2, auditSeq: 1 };
+    // task-verification-integrity D4: el audit lo redacta el agente -> no es evidencia de nada.
+    const c = new OstackyController({ initialState: { ...base, audit: [], lastUserPrompts: [] } as any });
     const res = await c.implementationComplete({ force: true });
     expect(res.error).toContain('force requires human confirmation');
     await c.setHandoff({ summary: 'forzar continuar' });
     const res2 = await c.implementationComplete({ force: true });
-    expect(res2.state).toBe('SYNC');
+    expect(res2.error).toContain('force requires human confirmation');
+
+    // La frase en un prompt real del usuario (registrado por el plugin) sí habilita el force.
+    const c2 = new OstackyController({ initialState: { ...base, audit: [], lastUserPrompts: ['confirmo forzar'] } as any });
+    const res3 = await c2.implementationComplete({ force: true });
+    expect(res3.state).toBe('SYNC');
   });
 });
 

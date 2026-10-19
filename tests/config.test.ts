@@ -235,4 +235,53 @@ describe('writeOpenCodeConfig', () => {
 
         expect(readdirSync(TEST_ROOT).some((entry) => entry.includes('.tmp.'))).toBe(false);
     });
+
+    it('guarda la config previa en .bak antes de reemplazarla', () => {
+        mkdirSync(TEST_ROOT, { recursive: true });
+        const configPath = join(TEST_ROOT, 'opencode.json');
+        writeFileSync(configPath, '{"mcp":{}}\n', 'utf-8');
+
+        setMcpEntryAtProjectRoot(TEST_ROOT, 'controller', { type: 'local', command: ['node', 'x.js'] });
+
+        expect(readFileSync(`${configPath}.bak`, 'utf-8')).toBe('{"mcp":{}}\n');
+    });
+
+    it('no crea .bak si la config no existía', () => {
+        mkdirSync(TEST_ROOT, { recursive: true });
+        setMcpEntryAtProjectRoot(TEST_ROOT, 'controller', { type: 'local', command: ['node', 'x.js'] });
+
+        expect(existsSync(join(TEST_ROOT, 'opencode.json.bak'))).toBe(false);
+    });
+
+    it('no pisa el .bak si el contenido no cambió', () => {
+        mkdirSync(TEST_ROOT, { recursive: true });
+        const configPath = join(TEST_ROOT, 'opencode.json');
+        writeFileSync(configPath, '{"mcp":{}}\n', 'utf-8');
+
+        setMcpEntryAtProjectRoot(TEST_ROOT, 'controller', { type: 'local', command: ['node', 'x.js'] });
+        setMcpEntryAtProjectRoot(TEST_ROOT, 'controller', { type: 'local', command: ['node', 'x.js'] });
+
+        // El .bak conserva el original, no la versión intermedia.
+        expect(readFileSync(`${configPath}.bak`, 'utf-8')).toBe('{"mcp":{}}\n');
+    });
+});
+
+describe('patchOpenCodeConfig: solo toca entradas Ostacky-owned', () => {
+    it('remueve el plugin de Superpowers y preserva plugin/plugins del usuario', () => {
+        mkdirSync(TEST_ROOT, { recursive: true });
+        const configPath = join(TEST_ROOT, 'opencode.json');
+        writeFileSync(
+            configPath,
+            JSON.stringify({
+                plugin: ['superpowers@git+https://github.com/obra/superpowers.git', 'mi-plugin-local'],
+                plugins: ['otro-plugin'],
+            }),
+            'utf-8'
+        );
+
+        patchOpenCodeConfig(TEST_ROOT);
+        const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+        expect(config.plugin).toEqual(['mi-plugin-local']);
+        expect(config.plugins).toEqual(['otro-plugin']);
+    });
 });

@@ -6,7 +6,7 @@
  * MCP queda thin solo para observabilidad (get_*).
  *
  * Single source security: mirrors generados desde src/security.ts via scripts/sync-controller-core.ts
- * Cache único: getDiscoverySnapshot es único entrypoint.
+ * Discovery: `codegraph_explore` completado; no hay cache de archivo.
  * Tiered cache-friendly: isTrivial sin reemplazar system[0], suffix hint + SKIP.
  * CodeGraph preventivo: bloquea Read/Grep masivo sin Discovery hit.
  */
@@ -228,25 +228,6 @@ function isPathInsideProject(filePath: string, directory: string): boolean {
   } catch { return false }
 }
 
-function getDiscoveryCacheHit(directory: string): boolean {
-  try {
-    const cacheDir = join(directory, ".opencode", "cache", "codegraph")
-    if (!existsSync(cacheDir)) return false
-    const files = readdirSync(cacheDir).filter((f: string) => f.startsWith("discovery-"))
-    if (files.length === 0) return false
-    // check if any file is recent (<1h) and valid
-    const now = Date.now()
-    for (const f of files) {
-      try {
-        const raw = readFileSync(join(cacheDir, f), "utf-8")
-        const data = JSON.parse(raw)
-        if (typeof data.ts === "number" && now - data.ts < 60*60*1000) return true
-      } catch {}
-    }
-    return false
-  } catch { return false }
-}
-
 function isCodegraphAvailable(directory: string): boolean {
   // If codegraph binary exists, assume OK. Otherwise fallback allows Read.
   try {
@@ -257,6 +238,217 @@ function isCodegraphAvailable(directory: string): boolean {
     if (lookupOnPath("codegraph")) return true
     return false
   } catch { return false }
+}
+
+/**
+ * ¿Este read/grep/glob esta sujeto al gate de discovery?
+ * Exenciones: docs/json/md, openspec/changes|specs, grep de literales, y archivos ya
+ * trackeados (refresh honesto post-complete necesita Read fresco sin Discovery hit).
+ */
+export function isCodeReadGated(input: {
+  isCodeFile: boolean
+  isLiteralGrep: boolean
+  isSpecTasksPath: boolean
+  isDocsPath: boolean
+  isTaskTracked: boolean
+}): boolean {
+  return (
+    input.isCodeFile &&
+    !input.isLiteralGrep &&
+    !input.isSpecTasksPath &&
+    !input.isDocsPath &&
+    !input.isTaskTracked
+  )
+}
+
+/**
+ * Predicado puro del gate de CodeGraph: ¿bloquear esta lectura de codigo?
+ *
+ * Extraido a funcion para poder testear el INVARIANTE, no el mensaje. El test anterior hacia
+ * `expect(src).toContain("Usa getDiscoverySnapshot primero")`: verificaba que el texto existiera
+ * y pasaba verde con el gate inescapable adentro (fix-codegraph-gate).
+ */
+export function shouldBlockCodeRead(input: {
+  isCodeFile: boolean
+  isLiteralGrep: boolean
+  isSpecTasksPath: boolean
+  isDocsPath: boolean
+  isTaskTracked: boolean
+  codegraphOk: boolean
+  hasDiscoveryHit: boolean
+}): boolean {
+  return isCodeReadGated(input) && input.codegraphOk && !input.hasDiscoveryHit
+}
+
+/**
+ * Tools cuyo completado constituye evidencia REAL de discovery estructural en la sesion.
+ *
+ * `codegraph_explore` es la senal fuerte: llamada real, resultado inspeccionable por el plugin.
+ * No hay cache de discovery: `getDiscoverySnapshot` nunca existió y se retiró.
+ *
+ * Historia (fix-codegraph-gate): antes la UNICA senal era `getDiscoverySnapshot`, una tool que nunca
+ * se registro ni en el plugin ni en el MCP. `hasDiscoveryHit` era siempre false y el gate bloqueaba
+ * todo read/grep/glob de codigo sin salida posible; un `codegraph_explore` completado NO lo abria,
+ * contradiciendo la instruccion "CodeGraph primero" del agente.
+ */
+export function marksDiscovery(toolName: string): boolean {
+  return (
+    toolName.includes("codegraph_explore")
+  )
+}
+
+/**
+ * Mismo criterio de "archivo de código" que el gate de read (index.ts:552),
+ * sin la cláusula de `pattern` que es específica de glob. Docs/JSON quedan fuera:
+ * un .md bajo assets/ es documentación, no código.
+ */
+export function isCodePath(p: string): boolean {
+  if (!p) return false
+  if (/\.(md|json)$/i.test(p)) return false
+  return /\.(ts|js|tsx|jsx|mts|cts)$/i.test(p) || p.includes("src/") || p.includes("assets/")
+}
+
+/**
+ * Evidencia de una corrida de shell para las tasks `test:` (change
+ * test-verification-execution). Devuelve null si el evento no permite afirmar
+ * nada: sin comando o sin `exit` numérico.
+ *
+ * NO consulta `status`: medido en OpenCode 2.0.32, `sh -c 'exit 3'` llega con
+ * `status: "completed"` y `result.metadata.status: "completed"`. El único dato
+ * veraz es `result.metadata.exit`.
+ */
+export function shellEvidence(event: any): { cmd: string; exit: number; ts: number } | null {
+  if (!event || event.tool !== "shell") return null
+  const cmd = event.input?.command
+  const exit = event.result?.metadata?.exit
+  if (typeof cmd !== "string" || !cmd.trim()) return null
+  if (typeof exit !== "number") return null
+  return { cmd: cmd.trim(), exit, ts: Date.now() }
+}
+
+/** Tools que mutan archivos: avanzan `lastMutationTs`. */
+export function isMutatingTool(tool: string): boolean {
+  return tool === "edit" || tool === "write" || tool === "patch"
+}
+
+/**
+ * Comando shell que escribe en disco. Predicado compartido por el gate de
+ * mutación y por `lastMutationTs`: si no se compartiera, un `sed -i` aprobado
+ * por el gate mutaría el código sin avanzar el timestamp, y una corrida de test
+ * previa seguiría contando como evidencia.
+ */
+export function isShellMutation(command: string): boolean {
+  if (!command) return false
+  // `2>&1`, `1>&2`, `2>/dev/null` son redirects de stderr, no mutación.
+  const cmdSansStderr = command.replace(/2>&1/g, "").replace(/1>&2/g, "").replace(/2>\s*\/dev\/null/g, "")
+  return /(^|[^0-9&])>{1,2}\s*(?!&)\S+|\bsed\b[^|;]*-i|\btruncate\b|\btee\b|\bcp\s+|\bmv\s+|\brm\s+|python.*open.*w/.test(cmdSansStderr)
+}
+
+/**
+ * Verbos cuyo output revela el CONTENIDO de un archivo. No incluye verbos que
+ * sólo mencionan paths (`bun test x.ts`, `tsc src/x.ts`, `git diff`): el gate
+ * distingue "revela" de "menciona" — ver change shell-code-read-gate.
+ */
+const SHELL_READ_VERBS = new Set([
+  "cat", "head", "tail", "sed", "awk", "grep", "rg", "ag", "ack", "less", "more",
+  "nl", "bat", "tac", "strings", "xxd", "od", "base64", "diff", "cut", "paste",
+  "sort", "uniq", "column", "expand", "fold",
+])
+
+const SHELL_WRAPPERS = new Set(["sudo", "env", "time", "command", "exec", "nohup"])
+
+/**
+ * Paths de código que `command` REVELA (no los que menciona).
+ *
+ * Fail-open por diseño: redirección => escritura, `sed -i` => escritura, verbo
+ * fuera de la allowlist => []. Un gate de shell nunca es hermético; el objetivo
+ * es quitar el bypass casual (`cat src/x.ts`), no demostrar imposibilidad.
+ * Bypass residual documentado en el spec: `git show`, `python -c`, `node -e`,
+ * `find -exec`, `xargs`.
+ */
+export function shellReadTargets(command: string): string[] {
+  if (!command) return []
+  const targets: string[] = []
+  // Split por pipes/separadores, NO por `>`: necesitamos ver la redirección.
+  const segments = command.replace(/&&/g, ";").replace(/\|\|/g, ";").split(/[|;\n]+/)
+  for (const seg of segments) {
+    const trimmed = seg
+      // Redirects de stderr no son escritura: sin esto, `cat src/x.ts 2>&1`
+      // pasaba el check `>` de abajo y se colaba del gate (bypass casual).
+      // Mismo criterio que isShellMutation, el sibling de este módulo.
+      .replace(/2>&1/g, "")
+      .replace(/1>&2/g, "")
+      .replace(/2>\s*\/dev\/null/g, "")
+      .trim()
+    if (!trimmed) continue
+    // Escritura real (cat > f, tee, heredoc): no es lectura.
+    if (/>/.test(trimmed)) continue
+    const tokens = (trimmed.match(/(?:[^\s"'`\\]+|"[^"]*"|'[^']*'|`[^`]*`)+/g) || [])
+      .map((t) => t.replace(/["'`]/g, "").replace(/\\/g, ""))
+      .filter(Boolean)
+    if (tokens.length === 0) continue
+    let i = 0
+    while (i < tokens.length && SHELL_WRAPPERS.has(tokens[i])) i++
+    const verb = tokens[i] || ""
+    const base = verb.split("/").pop() || verb
+    if (!SHELL_READ_VERBS.has(base)) continue
+    // sed -i es escritura in-place, no lectura.
+    if (base === "sed" && tokens.some((t) => t === "-i" || t.startsWith("-i") || t === "--in-place" || t.startsWith("--in-place"))) continue
+    // diff -q/--brief/--stat sólo compara metadatos: no revela contenido.
+    if (base === "diff" && tokens.some((t) => t === "-q" || t === "--quiet" || t === "--brief" || t === "--stat" || /^-[a-zA-Z]*q[a-zA-Z]*$/.test(t))) continue
+    for (const p of extractPathsFromBash(trimmed)) {
+      if (isCodePath(p)) targets.push(p)
+    }
+  }
+  return [...new Set(targets)]
+}
+
+/**
+ * Predicado puro del gate de shell: ¿leer este path por shell está EXENTO?
+ *
+ * Extraído del hook para poder testear el INVARIANTE (mismo criterio que
+ * shouldBlockCodeRead). Exenciones:
+ * 1. Paths FUERA del proyecto: no son código de este codebase (fixtures
+ *    temporales de tests, reportes generados); bloquearlos rompe pipelines sin
+ *    escape hatch — el falso positivo que el diseño prohibió.
+ * 2. Specs/docs (.md/.json, openspec, assets/docs).
+ * 3. Archivos ya trackeados en tasks/fileFingerprints/lastValidated (el refresh
+ *    honesto post-complete necesita re-leerlos).
+ */
+export function isShellPathExempt(p: string, directory: string, freshState: any): boolean {
+  if (!isPathInsideProject(p, directory)) return true
+  if (p.includes("openspec/changes") || p.includes("openspec/specs")) return true
+  if (p.includes("assets/docs") || p.includes("/docs/") || /\.md$/i.test(p) || /\.json$/i.test(p)) return true
+  try {
+    if (freshState) {
+      const fps = Object.keys(freshState.fileFingerprints || {})
+      const taskFiles = Object.values(freshState.tasks || {}).map((t: any) => t.filePath).filter(Boolean)
+      const lv: any = (freshState as any).lastValidated || null
+      const lvByFile = lv?.byFile && typeof lv.byFile === "object" ? lv.byFile : null
+      const lvPaths: string[] = [
+        ...(lvByFile ? Object.keys(lvByFile) : []),
+        ...(lv?.filePath ? [lv.filePath as string] : []),
+      ]
+      const matches = (f: string): boolean => p.endsWith(f) || f.endsWith(p) || p.includes(f) || f.includes(p)
+      if (fps.some(matches) || taskFiles.some(matches)) return true
+      if (lvPaths.some((lf) => p.endsWith(lf) || lf.endsWith(p))) return true
+    }
+  } catch {}
+  return false
+}
+
+/** Comandos `test:` declarados en taskVerifications, ya normalizados (sin prefijo). */
+export function testVerifyCommands(state: any): Set<string> {
+  const out = new Set<string>()
+  try {
+    for (const v of Object.values((state as any)?.taskVerifications || {})) {
+      if (typeof v === "string" && v.trim().startsWith("test:")) {
+        const cmd = v.trim().slice("test:".length).trim()
+        if (cmd) out.add(cmd)
+      }
+    }
+  } catch {}
+  return out
 }
 
 function jsonContent(value: unknown): { content: string } {
@@ -343,6 +535,18 @@ export default {
       const sessionId: string = event.sessionID ?? "default"
       const text = (event.prompt.text ?? "").trim()
       const state = readState(directory)
+      // task-verification-integrity D4: registrar el texto ORIGINAL del usuario (antes de los
+      // hints de abajo) para que `implementation_complete({force:true})` se apoye en evidencia
+      // real y no en el audit, que lo redacta el agente. `ownedKeys` evita pisar el avance del MCP.
+      // Cada prompt lleva `ts`: el MCP sólo acepta confirmaciones POSTERIORES al último
+      // intento de force, así un "¿qué hace force:true?" viejo no abre el gate.
+      if (text && state) {
+        try {
+          const prev = Array.isArray((state as any).lastUserPrompts) ? (state as any).lastUserPrompts : []
+          ;(state as any).lastUserPrompts = [...prev, { text: text.slice(0, 500), ts: Date.now() }].slice(-5)
+          persistState(directory, state, ["lastUserPrompts"])
+        } catch {}
+      }
       const currentState = state?.state ?? "DONE"
       const trivial = isTrivial(text, currentState)
       trivialBySession.set(sessionId, trivial)
@@ -519,14 +723,20 @@ export default {
               (lvFile ? lvFile.some((lf) => targetPath.endsWith(lf) || lf.endsWith(targetPath)) : false)
           }
         } catch {}
-        if (isCodeFile && !isLiteralGrep && !isSpecTasksPath && !isDocsPath && !isTaskTracked) {
-          const hasDiscoveryHit = discoveryHitByRequest.get(sessionId) ?? getDiscoveryCacheHit(directory)
-          const codegraphOk = isCodegraphAvailable(directory)
-          if (codegraphOk && !hasDiscoveryHit) {
-            // Allow if file is not indexable or trivial?
-            // Block with suggestion
-            throw new Error(`BLOCKED: Usá getDiscoverySnapshot primero — sugerencia: getDiscoverySnapshot("${targetPath || "query"}")`)
-          }
+        // Orden cheap -> caro: el path no hace I/O; codegraph y la cache en disco solo se evalúan
+        // si el path esta realmente sujeto al gate (`read`/`grep`/`glob` corren en cada turno).
+        const gated = isCodeReadGated({ isCodeFile, isLiteralGrep, isSpecTasksPath, isDocsPath, isTaskTracked })
+        const codegraphOk = gated ? isCodegraphAvailable(directory) : false
+        // Sin fallback a disco: la única evidencia válida es un codegraph_explore
+        // COMPLETADO en esta sesión (discoveryHitByRequest). El memo se limpia con
+        // session.deleted, así "esta sesión" es literal.
+        const hasDiscoveryHit = codegraphOk ? discoveryHitByRequest.get(sessionId) === true : false
+        if (shouldBlockCodeRead({
+          isCodeFile, isLiteralGrep, isSpecTasksPath, isDocsPath, isTaskTracked, codegraphOk, hasDiscoveryHit,
+        })) {
+          throw new Error(
+            `BLOCKED: sin discovery estructural en esta sesión — llamá codegraph_codegraph_explore("${targetPath || "query"}") antes de Read/Grep/Glob de código`
+          )
         }
       }
 
@@ -560,12 +770,32 @@ export default {
         }
       }
 
+      // ── 3.2) CodeGraph gate para shell: leer código sin discovery → BLOCKED ──
+      // El gate de código (arriba) sólo mira read/grep/glob; `cat src/x.ts` revela
+      // lo mismo y no costaba nada. Fail-open a propósito: `read` falla cerrado
+      // porque es inequívoco; `shell` es ambiguo y un falso positivo rompe tests o
+      // builds sin escape hatch para el usuario (change shell-code-read-gate).
+      if (tool === "shell") {
+        const cmdForRead: string = args?.command || args?.cmd || ""
+        if (typeof cmdForRead === "string" && cmdForRead) {
+          const shellTargets = shellReadTargets(cmdForRead)
+          if (shellTargets.length > 0) {
+            const gatedShell = shellTargets.filter((p) => !isShellPathExempt(p, directory, freshState))
+            const codegraphOkShell = gatedShell.length > 0 ? isCodegraphAvailable(directory) : false
+            const hasDiscoveryShell = codegraphOkShell ? discoveryHitByRequest.get(sessionId) === true : false
+            if (gatedShell.length > 0 && codegraphOkShell && !hasDiscoveryShell) {
+              throw new Error(
+                `BLOCKED: sin discovery estructural en esta sesión — llamá codegraph_codegraph_explore("${gatedShell[0]}") antes de leer código por shell`
+              )
+            }
+          }
+        }
+      }
+
       // ── 3.5) Shell file-mutation gate (harden-task-integrity: shell mutante requiere validate_edit) ──
       if (tool === "shell" && freshState && ["EXECUTING_INLINE", "EXECUTING_SUBAGENTS"].includes(freshState.state)) {
         const cmdForMutation: string = args?.command || args?.cmd || ""
-        // Fix falso positivo: `2>&1`, `1>&2`, `2>/dev/null` son redirects de stderr, no mutación.
-        const cmdSansStderr = cmdForMutation.replace(/2>&1/g, "").replace(/1>&2/g, "").replace(/2>\s*\/dev\/null/g, "")
-        const isMutating = /(^|[^0-9&])>{1,2}\s*(?!&)\S+|\bsed\b[^|;]*-i|\btruncate\b|\btee\b|\bcp\s+|\bmv\s+|python.*open.*w/.test(cmdSansStderr)
+        const isMutating = isShellMutation(cmdForMutation)
         if (isMutating) {
           const mPaths = extractPathsFromBash(cmdForMutation)
           for (const p of mPaths) {
@@ -722,24 +952,52 @@ export default {
       // Track discovery hit to allow subsequent Reads
       const tool: string = event.tool as string
       const sessionId: string = (event.sessionID ?? "default") as string
-      const resultText = event.status === "completed" && event.result ? JSON.stringify(event.result) : ""
-      if (tool.includes("getDiscoverySnapshot") || tool.includes("get_discovery_snapshot")) {
-        // if output indicates hit, mark it
+      // (fix-codegraph-gate) Evidencia REAL de discovery: un `codegraph_explore` completado en ESTA
+      // sesión abre el gate de lecturas de código. Se marca aunque el resultado venga vacío, a
+      // propósito: "CodeGraph no tiene este archivo en su índice" es justamente el caso donde el
+      // Read TIENE que poder pasar si hubo `codegraph_explore`.
+      if (marksDiscovery(tool)) {
         try {
-          const text = resultText
-          if (text && !text.includes("null") && text.length > 10) {
-            discoveryHitByRequest.set(sessionId, true)
-          }
-          // Engram hit via discovery snapshot (contiene engramHits)
-          if (text && text.includes("engramHits")) {
-            engramHitBySession.set(sessionId, true)
-          }
+          if (event.status === "completed") discoveryHitByRequest.set(sessionId, true)
         } catch {}
       }
       // Track Engram hit (mem_search / mem_context / dedup) para soft gate 1.6
-      if (tool.includes("engram_mem_search") || tool.includes("engram_mem_context") || tool.includes("mem_search") || tool.includes("mem_context") || tool.includes("getEngramDedup") || tool.includes("engram_mem_")) {
+      if (tool.includes("engram_mem_search") || tool.includes("engram_mem_context") || tool.includes("mem_search") || tool.includes("mem_context") || tool.includes("engram_mem_")) {
         engramHitBySession.set(sessionId, true)
       }
+      // test-verification-execution: evidencia para tasks `test:`.
+      // `status` miente con exit != 0 (ver shellEvidence): sólo se registra con exit numérico.
+      // D10 respectado: NO cada shell persiste (git/ls/builds no tienen valor de evidencia y
+      // cada persist cuesta lock + re-read + write + 3 renames de backup). Se persisten sólo
+      // las corridas cuyo comando matchea un `test:` declarado en taskVerifications — que son
+      // las ÚNICAS que complete_task / verifyIntegrity consultan via findTestEvidence.
+      // Tradeoff fail-closed: si taskVerifications aún no llegó al state cuando se corre el
+      // test, la evidencia no se registra → complete_task pide re-correr (razón explícita).
+      try {
+        const ev = shellEvidence(event as any)
+        // Un shell que escribe (exit 0) también invalida evidencia de test:
+        // si no, `sed -i` mutaría el código sin avanzar el timestamp.
+        const mutating =
+          (isMutatingTool(tool) && event.status === "completed") ||
+          (!!ev && ev.exit === 0 && isShellMutation(ev.cmd))
+        const isTestRun = !!ev && testVerifyCommands(readState(directory)).has(ev.cmd)
+        if (isTestRun || mutating) {
+          const s = readState(directory)
+          if (s) {
+            const owned: string[] = []
+            if (ev && isTestRun) {
+              const prev = Array.isArray((s as any).shellRuns) ? (s as any).shellRuns : []
+              ;(s as any).shellRuns = [...prev, ev].slice(-25)
+              owned.push("shellRuns")
+            }
+            if (mutating) {
+              ;(s as any).lastMutationTs = Date.now()
+              owned.push("lastMutationTs")
+            }
+            if (owned.length > 0) persistState(directory, s, owned)
+          }
+        }
+      } catch {}
       // Heartbeat: single-writer — plugin memo, no persist cada tool (D10)
       try {
         const s = readState(directory)
