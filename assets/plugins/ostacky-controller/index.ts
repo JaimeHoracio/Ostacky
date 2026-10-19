@@ -228,25 +228,6 @@ function isPathInsideProject(filePath: string, directory: string): boolean {
   } catch { return false }
 }
 
-function getDiscoveryCacheHit(directory: string): boolean {
-  try {
-    const cacheDir = join(directory, ".opencode", "cache", "codegraph")
-    if (!existsSync(cacheDir)) return false
-    const files = readdirSync(cacheDir).filter((f: string) => f.startsWith("discovery-"))
-    if (files.length === 0) return false
-    // check if any file is recent (<1h) and valid
-    const now = Date.now()
-    for (const f of files) {
-      try {
-        const raw = readFileSync(join(cacheDir, f), "utf-8")
-        const data = JSON.parse(raw)
-        if (typeof data.ts === "number" && now - data.ts < 60*60*1000) return true
-      } catch {}
-    }
-    return false
-  } catch { return false }
-}
-
 function isCodegraphAvailable(directory: string): boolean {
   // If codegraph binary exists, assume OK. Otherwise fallback allows Read.
   try {
@@ -391,9 +372,16 @@ export function shellReadTargets(command: string): string[] {
   // Split por pipes/separadores, NO por `>`: necesitamos ver la redirección.
   const segments = command.replace(/&&/g, ";").replace(/\|\|/g, ";").split(/[|;\n]+/)
   for (const seg of segments) {
-    const trimmed = seg.trim()
+    const trimmed = seg
+      // Redirects de stderr no son escritura: sin esto, `cat src/x.ts 2>&1`
+      // pasaba el check `>` de abajo y se colaba del gate (bypass casual).
+      // Mismo criterio que isShellMutation, el sibling de este módulo.
+      .replace(/2>&1/g, "")
+      .replace(/1>&2/g, "")
+      .replace(/2>\s*\/dev\/null/g, "")
+      .trim()
     if (!trimmed) continue
-    // Escritura (cat > f, tee, heredoc): no es lectura.
+    // Escritura real (cat > f, tee, heredoc): no es lectura.
     if (/>/.test(trimmed)) continue
     const tokens = (trimmed.match(/(?:[^\s"'`\\]+|"[^"]*"|'[^']*'|`[^`]*`)+/g) || [])
       .map((t) => t.replace(/["'`]/g, "").replace(/\\/g, ""))
@@ -413,6 +401,54 @@ export function shellReadTargets(command: string): string[] {
     }
   }
   return [...new Set(targets)]
+}
+
+/**
+ * Predicado puro del gate de shell: ¿leer este path por shell está EXENTO?
+ *
+ * Extraído del hook para poder testear el INVARIANTE (mismo criterio que
+ * shouldBlockCodeRead). Exenciones:
+ * 1. Paths FUERA del proyecto: no son código de este codebase (fixtures
+ *    temporales de tests, reportes generados); bloquearlos rompe pipelines sin
+ *    escape hatch — el falso positivo que el diseño prohibió.
+ * 2. Specs/docs (.md/.json, openspec, assets/docs).
+ * 3. Archivos ya trackeados en tasks/fileFingerprints/lastValidated (el refresh
+ *    honesto post-complete necesita re-leerlos).
+ */
+export function isShellPathExempt(p: string, directory: string, freshState: any): boolean {
+  if (!isPathInsideProject(p, directory)) return true
+  if (p.includes("openspec/changes") || p.includes("openspec/specs")) return true
+  if (p.includes("assets/docs") || p.includes("/docs/") || /\.md$/i.test(p) || /\.json$/i.test(p)) return true
+  try {
+    if (freshState) {
+      const fps = Object.keys(freshState.fileFingerprints || {})
+      const taskFiles = Object.values(freshState.tasks || {}).map((t: any) => t.filePath).filter(Boolean)
+      const lv: any = (freshState as any).lastValidated || null
+      const lvByFile = lv?.byFile && typeof lv.byFile === "object" ? lv.byFile : null
+      const lvPaths: string[] = [
+        ...(lvByFile ? Object.keys(lvByFile) : []),
+        ...(lv?.filePath ? [lv.filePath as string] : []),
+      ]
+      const matches = (f: string): boolean => p.endsWith(f) || f.endsWith(p) || p.includes(f) || f.includes(p)
+      if (fps.some(matches) || taskFiles.some(matches)) return true
+      if (lvPaths.some((lf) => p.endsWith(lf) || lf.endsWith(p))) return true
+    }
+  } catch {}
+  return false
+}
+
+/** Comandos `test:` declarados en taskVerifications, ya normalizados (sin prefijo). */
+export function testVerifyCommands(state: any): Set<string> {
+  const out = new Set<string>()
+  try {
+    for (const v of Object.values((state as any)?.taskVerifications || {})) {
+      if (typeof v === "string" && v.trim().startsWith("test:")) {
+        const cmd = v.trim().slice("test:".length).trim()
+        if (cmd) out.add(cmd)
+      }
+    }
+  } catch {}
+  return out
 }
 
 function jsonContent(value: unknown): { content: string } {
@@ -502,10 +538,12 @@ export default {
       // task-verification-integrity D4: registrar el texto ORIGINAL del usuario (antes de los
       // hints de abajo) para que `implementation_complete({force:true})` se apoye en evidencia
       // real y no en el audit, que lo redacta el agente. `ownedKeys` evita pisar el avance del MCP.
+      // Cada prompt lleva `ts`: el MCP sólo acepta confirmaciones POSTERIORES al último
+      // intento de force, así un "¿qué hace force:true?" viejo no abre el gate.
       if (text && state) {
         try {
           const prev = Array.isArray((state as any).lastUserPrompts) ? (state as any).lastUserPrompts : []
-          ;(state as any).lastUserPrompts = [...prev, text.slice(0, 500)].slice(-5)
+          ;(state as any).lastUserPrompts = [...prev, { text: text.slice(0, 500), ts: Date.now() }].slice(-5)
           persistState(directory, state, ["lastUserPrompts"])
         } catch {}
       }
@@ -689,9 +727,10 @@ export default {
         // si el path esta realmente sujeto al gate (`read`/`grep`/`glob` corren en cada turno).
         const gated = isCodeReadGated({ isCodeFile, isLiteralGrep, isSpecTasksPath, isDocsPath, isTaskTracked })
         const codegraphOk = gated ? isCodegraphAvailable(directory) : false
-        const hasDiscoveryHit = codegraphOk
-          ? (discoveryHitByRequest.get(sessionId) ?? getDiscoveryCacheHit(directory))
-          : false
+        // Sin fallback a disco: la única evidencia válida es un codegraph_explore
+        // COMPLETADO en esta sesión (discoveryHitByRequest). El memo se limpia con
+        // session.deleted, así "esta sesión" es literal.
+        const hasDiscoveryHit = codegraphOk ? discoveryHitByRequest.get(sessionId) === true : false
         if (shouldBlockCodeRead({
           isCodeFile, isLiteralGrep, isSpecTasksPath, isDocsPath, isTaskTracked, codegraphOk, hasDiscoveryHit,
         })) {
@@ -741,31 +780,9 @@ export default {
         if (typeof cmdForRead === "string" && cmdForRead) {
           const shellTargets = shellReadTargets(cmdForRead)
           if (shellTargets.length > 0) {
-            const isShellPathExempt = (p: string): boolean => {
-              if (p.includes("openspec/changes") || p.includes("openspec/specs")) return true
-              if (p.includes("assets/docs") || p.includes("/docs/") || /\.md$/i.test(p) || /\.json$/i.test(p)) return true
-              try {
-                if (freshState) {
-                  const fps = Object.keys(freshState.fileFingerprints || {})
-                  const taskFiles = Object.values(freshState.tasks || {}).map((t: any) => t.filePath).filter(Boolean)
-                  const lv: any = (freshState as any).lastValidated || null
-                  const lvByFile = lv?.byFile && typeof lv.byFile === "object" ? lv.byFile : null
-                  const lvPaths: string[] = [
-                    ...(lvByFile ? Object.keys(lvByFile) : []),
-                    ...(lv?.filePath ? [lv.filePath as string] : []),
-                  ]
-                  const matches = (f: string): boolean => p.endsWith(f) || f.endsWith(p) || p.includes(f) || f.includes(p)
-                  if (fps.some(matches) || taskFiles.some(matches)) return true
-                  if (lvPaths.some((lf) => p.endsWith(lf) || lf.endsWith(p))) return true
-                }
-              } catch {}
-              return false
-            }
-            const gatedShell = shellTargets.filter((p) => !isShellPathExempt(p))
+            const gatedShell = shellTargets.filter((p) => !isShellPathExempt(p, directory, freshState))
             const codegraphOkShell = gatedShell.length > 0 ? isCodegraphAvailable(directory) : false
-            const hasDiscoveryShell = codegraphOkShell
-              ? (discoveryHitByRequest.get(sessionId) ?? getDiscoveryCacheHit(directory))
-              : false
+            const hasDiscoveryShell = codegraphOkShell ? discoveryHitByRequest.get(sessionId) === true : false
             if (gatedShell.length > 0 && codegraphOkShell && !hasDiscoveryShell) {
               throw new Error(
                 `BLOCKED: sin discovery estructural en esta sesión — llamá codegraph_codegraph_explore("${gatedShell[0]}") antes de leer código por shell`
@@ -950,6 +967,12 @@ export default {
       }
       // test-verification-execution: evidencia para tasks `test:`.
       // `status` miente con exit != 0 (ver shellEvidence): sólo se registra con exit numérico.
+      // D10 respectado: NO cada shell persiste (git/ls/builds no tienen valor de evidencia y
+      // cada persist cuesta lock + re-read + write + 3 renames de backup). Se persisten sólo
+      // las corridas cuyo comando matchea un `test:` declarado en taskVerifications — que son
+      // las ÚNICAS que complete_task / verifyIntegrity consultan via findTestEvidence.
+      // Tradeoff fail-closed: si taskVerifications aún no llegó al state cuando se corre el
+      // test, la evidencia no se registra → complete_task pide re-correr (razón explícita).
       try {
         const ev = shellEvidence(event as any)
         // Un shell que escribe (exit 0) también invalida evidencia de test:
@@ -957,11 +980,12 @@ export default {
         const mutating =
           (isMutatingTool(tool) && event.status === "completed") ||
           (!!ev && ev.exit === 0 && isShellMutation(ev.cmd))
-        if (ev || mutating) {
+        const isTestRun = !!ev && testVerifyCommands(readState(directory)).has(ev.cmd)
+        if (isTestRun || mutating) {
           const s = readState(directory)
           if (s) {
             const owned: string[] = []
-            if (ev) {
+            if (ev && isTestRun) {
               const prev = Array.isArray((s as any).shellRuns) ? (s as any).shellRuns : []
               ;(s as any).shellRuns = [...prev, ev].slice(-25)
               owned.push("shellRuns")

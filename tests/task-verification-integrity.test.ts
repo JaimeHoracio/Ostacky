@@ -131,10 +131,61 @@ describe("task-verification-integrity", () => {
         // La frase en un prompt real del usuario (lo que registra el plugin) sí lo abre.
         const c2 = new OstackyController({
             statePath: statePath("s2.json"),
-            initialState: { ...base, audit: [], lastUserPrompts: ["dale, confirmo forzar el cierre"] } as any,
+            initialState: { ...base, audit: [], lastUserPrompts: [{ text: "dale, confirmo forzar el cierre", ts: Date.now() }] } as any,
         });
         const allowed: any = await c2.implementationComplete({ force: true });
         expect(allowed.state).toBe("SYNC");
+    });
+
+    it("force rechaza prompts ANTES del último force attempt; acepta posteriores", async () => {
+        const base = {
+            state: "EXECUTING_INLINE",
+            tasks: { T1: { status: "COMPLETED" } },
+            expectedTasks: ["T1", "T2"],
+            expectedTaskCount: 2,
+            auditSeq: 1,
+            audit: [],
+        };
+        // Un "¿qué hace force:true?" PREVIO al attempt no habilita: el plugin registró
+        // el intento (lastForceAttemptTs=5000) y la frase es de ts=1000.
+        const c1 = new OstackyController({
+            statePath: statePath("f1.json"),
+            initialState: { ...base, lastUserPrompts: [{ text: "qué hace force:true", ts: 1000 }], lastForceAttemptTs: 5000 } as any,
+        });
+        const blocked: any = await c1.implementationComplete({ force: true });
+        expect(blocked.error).toContain("force requires human confirmation");
+
+        // El mismo texto con ts posterior al attempt sí habilita (el usuario respondió después).
+        const c2 = new OstackyController({
+            statePath: statePath("f2.json"),
+            initialState: { ...base, lastUserPrompts: [{ text: "dale, confirmo forzar", ts: 9000 }], lastForceAttemptTs: 5000 } as any,
+        });
+        const allowed: any = await c2.implementationComplete({ force: true });
+        expect(allowed.state).toBe("SYNC");
+    });
+
+    it("legacy: prompt string sin ts pasa sólo si nunca hubo force attempt", async () => {
+        const base = {
+            state: "EXECUTING_INLINE",
+            tasks: { T1: { status: "COMPLETED" } },
+            expectedTasks: ["T1", "T2"],
+            expectedTaskCount: 2,
+            auditSeq: 1,
+            audit: [],
+        };
+        const c1 = new OstackyController({
+            statePath: statePath("l1.json"),
+            initialState: { ...base, lastUserPrompts: ["dale, confirmo forzar el cierre"] } as any,
+        });
+        const allowed: any = await c1.implementationComplete({ force: true });
+        expect(allowed.state).toBe("SYNC");
+
+        const c2 = new OstackyController({
+            statePath: statePath("l2.json"),
+            initialState: { ...base, lastUserPrompts: ["dale, confirmo forzar el cierre"], lastForceAttemptTs: 1 } as any,
+        });
+        const blocked: any = await c2.implementationComplete({ force: true });
+        expect(blocked.error).toContain("force requires human confirmation");
     });
 
     it("gate vacío deriva de tasks.md y bloquea", async () => {

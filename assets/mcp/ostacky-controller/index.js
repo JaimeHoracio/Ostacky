@@ -2091,9 +2091,23 @@ class OstackyController {
             // El audit lo redacta el agente: aceptar /forzar|confirmo|force/ ahí era self-attestation
             // (cualquier tool call con esa palabra abría el gate). El plugin registra lastUserPrompts
             // desde ctx.session.hook("prompt"), antes de inyectar hints.
+            // Durden: cada prompt lleva ts y cada rechazo setea lastForceAttemptTs — sólo
+            // cuenta una confirmación POSTERIOR al último intento ("¿qué hace force:true?"
+            // previo al attempt ya no habilita). Strings sin ts = estado legacy: válidos
+            // sólo si nunca hubo intento registrado.
             const userPrompts = Array.isArray(this.#state.lastUserPrompts) ? this.#state.lastUserPrompts : [];
-            const hasHuman = userPrompts.some((p) => typeof p === 'string' && /forzar|confirmo|force/i.test(p));
+            const lastAttempt = Number(this.#state.lastForceAttemptTs) || 0;
+            const isUserPhrase = (p) => {
+                const text = typeof p === 'string' ? p : typeof p?.text === 'string' ? p.text : null;
+                if (!text || !/forzar|confirmo|force/i.test(text)) return false;
+                const ts = typeof p?.ts === 'number' ? p.ts : null;
+                if (ts === null) return lastAttempt === 0;
+                return ts > lastAttempt;
+            };
+            const hasHuman = userPrompts.some(isUserPhrase);
             if (!hasHuman) {
+                this.#state.lastForceAttemptTs = Date.now();
+                await this.#persist();
                 const pendingMsg =
                     pending.length > 0 ? `Te faltan ${pending.length} task(s): ${pending.join(', ')}.` : '';
                 const staleMsg = staleFiles.length > 0 ? `Archivos stale: ${staleFiles.join(', ')}.` : '';
@@ -2107,7 +2121,7 @@ class OstackyController {
                     verificationFailed: verificationFailed.length ? verificationFailed : undefined,
                     current_state: this.#state.state,
                     attempted_transition: 'implementation_complete',
-                    suggestion: `${detail} Para forzar el cierre, el USUARIO debe escribir literal "confirmo forzar" en un mensaje suyo (el plugin lo registra; el audit que redacta el agente no cuenta) y luego reintentá con {force:true}. Si no querés forzar y es solo stale por refino, llamá refresh_fingerprint({filePath}) y reintentá sin force.`,
+                    suggestion: `${detail} Para forzar el cierre, el USUARIO debe escribir literal "confirmo forzar" en un mensaje NUEVO suyo (el plugin lo registra con timestamp; una frase previa a este aviso no cuenta, y el audit que redacta el agente tampoco) y luego reintentá con {force:true}. Si no querés forzar y es solo stale por refino, llamá refresh_fingerprint({filePath}) y reintentá sin force.`,
                 };
             }
             const all = [...pending, ...staleFiles, ...verificationFailed].join(',');

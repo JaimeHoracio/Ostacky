@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { shellReadTargets, isCodePath } from "../assets/plugins/ostacky-controller/index.ts";
+import { shellReadTargets, isCodePath, isShellPathExempt, testVerifyCommands } from "../assets/plugins/ostacky-controller/index.ts";
 
 describe("shell-code-read-gate: el gate distingue 'revela' de 'menciona'", () => {
     it("detecta lecturas de código por shell", () => {
@@ -75,5 +75,43 @@ describe("shell-code-read-gate: el gate distingue 'revela' de 'menciona'", () =>
         expect(isCodePath("README.md")).toBe(false);
         expect(isCodePath("package.json")).toBe(false);
         expect(isCodePath("assets/docs/ostacky-reference.md")).toBe(false);
+    });
+
+    // review fix-v2-checkpointer M1: los redirects de stderr NO son escritura.
+    // Antes el check per-segmento `>` los trataba como escritura y
+    // `cat src/x.ts 2>&1` (el bypass casual más probable) se colaba del gate.
+    it("redirects de stderr no colan la lectura del gate", () => {
+        for (const cmd of ["cat src/a.ts 2>&1", "head -5 src/cli.ts 2>&1 | grep -n import", "sed -n '1,20p' src/x.ts 2>&1"]) {
+            expect(shellReadTargets(cmd).length).toBeGreaterThan(0);
+        }
+    });
+
+    // review fix-v2-checkpointer M3: paths FUERA del proyecto quedan exentos.
+    // `cat /tmp/.../*.ts` (fixtures temporales de tests) no puede bloquear:
+    // no son código de este codebase y un BLOCK rompe pipelines sin escape hatch.
+    it("isShellPathExempt: fuera del proyecto sí, código del proyecto no", () => {
+        const root = "/home/dev/proj";
+        expect(isShellPathExempt("/tmp/opencode/out.ts", root, null)).toBe(true);
+        expect(isShellPathExempt("/var/log/report.ts", root, null)).toBe(true);
+        expect(isShellPathExempt("src/a.ts", root, null)).toBe(false);
+        expect(isShellPathExempt("/home/dev/proj/src/a.ts", root, null)).toBe(false);
+        // dentro del proyecto: specs/docs exentos, path trackeado exento vía freshState
+        expect(isShellPathExempt("openspec/changes/x/tasks.md", root, null)).toBe(true);
+        expect(isShellPathExempt("src/trackeado.ts", root, { fileFingerprints: { "src/trackeado.ts": "h" } })).toBe(true);
+    });
+
+    // review fix-v2-checkpointer M2: sólo comandos `test:` declarados son evidencia.
+    it("testVerifyCommands: extrae el comando exacto de cada verificación test:", () => {
+        const state = {
+            taskVerifications: {
+                T1: "test: bun test tests/a.test.ts",
+                T2: "file:src/a.ts contiene foo",
+                T3: "test: bun test tests/domains/settle.test.ts",
+            },
+        };
+        expect(testVerifyCommands(state)).toEqual(
+            new Set(["bun test tests/a.test.ts", "bun test tests/domains/settle.test.ts"])
+        );
+        expect(testVerifyCommands(null).size).toBe(0);
     });
 });

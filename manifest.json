@@ -33,7 +33,7 @@
       "file": "assets/mcp/ostacky-controller/",
       "description": "Máquina de estados persistida con @modelcontextprotocol/server SDK. v0.10.0: 22 tools (incluye set_handoff, get_handoff, clear_handoff, get_available_transitions funcional). Bugfixes: consecutiveFailures real, lastHandoff state, defaultChoice persistido. Robustez: degraded mode automático tras 3 fallos, persistence condicional para Nivel 0, prune de skills obsoletas.",
       "version": "0.10.0",
-      "sha256": "4736cba62f4d47f90f40ed60e5e9b91989566b0a08eda45adc1c229ea9a0f70c"
+      "sha256": "e7be9022abaf3b5b5bae30f8577ca9ed5231fef8e5d8c047bdc1cb1b7a2bb36e"
     },
     {
       "name": "openspec",

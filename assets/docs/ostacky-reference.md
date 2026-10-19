@@ -59,19 +59,29 @@ El plugin hace cumplir `PENDING` en `ctx.tool.hook("execute.before")`; `lastChec
 
 Cubre `read`/`grep`/`glob`/`read_mcp_resource` y **`shell`** cuando el comando revela contenido (`cat`, `head`, `tail`, `sed` sin `-i`, `grep`, `rg`, `awk`, `diff`…). Predicado puro: `shellReadTargets(command)` devuelve los paths de código **revelados**, no los mencionados — `bun test x.ts`, `tsc src/x.ts` y `git diff` pasan.
 
-**Fail-open:** redirección (`>`/`>>`), `sed -i` y verbo fuera de la allowlist → se permite. `read` falla cerrado porque es inequívoco; `shell` no, y un falso positivo rompe tests/builds sin escape hatch.
+**Fail-open:** redirección a archivo (`>`/`>>` a path), `sed -i` y verbo fuera de la allowlist → se permite. `read` falla cerrado porque es inequívoco; `shell` no, y un falso positivo rompe tests/builds sin escape hatch. Los redirects de stderr (`2>&1`, `1>&2`, `2>/dev/null`) NO cuentan como escritura (mismo criterio que `isShellMutation`): `cat src/x.ts 2>&1` sigue gateado.
 
-**No es un sandbox.** Bypass residual por diseño: `git show`, `python -c`, `node -e`, `find -exec`, `xargs`, `base64`. El objetivo es quitar el bypass casual (`cat src/x.ts`), no probar imposibilidad.
+**Exenciones `isShellPathExempt(p, directory, freshState)`:** paths FUERA del projectRoot (fixtures temporales, reportes generados — `cat /tmp/out.ts` nunca bloquea), specs/docs (openspec, `assets/docs`, `.md`, `.json`) y archivos ya trackeados en tasks/fileFingerprints/lastValidated.
+
+**No es un sandbox.** Bypass residual por diseño: `git show`, `python -c`, `node -e`, `find -exec`, `xargs`, `base64`. El objetivo es quitar el bypass casual (`cat src/x.ts`, incluida su variante `cat src/x.ts 2>&1`), no probar imposibilidad.
 
 `execute` (Code Mode) **no** se gatea: su catálogo no expone `read`/`grep`/`shell` ni filesystem. Si una versión futura lo expone, el gate debe extenderse.
 
+**Evidencia válida de discovery:** únicamente un `codegraph_codegraph_explore` COMPLETADO en esta sesión (`discoveryHitByRequest`, memo limpiado con `session.deleted`). No hay fallback a cache en disco (el legado `getDiscoveryCacheHit` se retiró con discovery-cache).
+
 ## Evidencia de ejecución (`test:`)
 
-`test:<cmd>` no se puede verificar sin ejecutar. El plugin observa cada `shell` y registra `{cmd, exit, ts}` (últimas 25) en el state compartido; `complete_task` exige comando exacto (trim), `exit 0` y `ts` posterior a `lastMutationTs` (que avanza en cada `edit`/`write`/`patch` completado y en cada `shell` que escribe con exit 0: `cp`, `mv`, `rm`, `sed -i`, `tee`, redirección). `verifyIntegrity` re-verifica en el cierre: una edición posterior vence la evidencia y bloquea.
+`test:<cmd>` no se puede verificar sin ejecutar. El plugin observa cada `shell` pero **sólo persiste** `{cmd, exit, ts}` cuando el comando matchea un `test:` declarado en `taskVerifications` (D10: `git`/`ls`/`builds` no son evidencia; cada persist cuesta lock + re-read + write + backups). `complete_task` exige comando exacto (trim), `exit 0` y `ts` posterior a `lastMutationTs` (que avanza en cada `edit`/`write`/`patch` completado y en cada `shell` que escribe con exit 0: `cp`, `mv`, `rm`, `sed -i`, `tee`, redirección). `verifyIntegrity` re-verifica en el cierre: una edición posterior vence la evidencia y bloquea.
+
+**Fail-closed en orden de operaciones:** si el test corre antes de `record_execution_analysis` (que carga `taskVerifications` en el state), el plugin no lo registra como evidencia → `complete_task` pide re-correr con razón explícita. El orden correcto es analysis → tests → complete.
 
 **No se usa `status`:** en OpenCode 2.0.32, `sh -c 'exit 3'` llega con `status: "completed"` y `result.metadata.status: "completed"`. El único campo veraz es `result.metadata.exit`.
 
 **Límites declarados:** un test débil pasa (semántica, no mecánica); sin el plugin no hay `shellRuns` y `test:` falla cerrado.
+
+## Force gate (human confirmation, D4)
+
+`implementation_complete({force:true})` exige una frase del USUARIO (`/forzar|confirmo|force/i`) en `lastUserPrompts` — no en el audit, que redacta el agente. El plugin registra cada prompt con `{text, ts}` antes de inyectar hints. Cada rechazo del gate setea `lastForceAttemptTs`: sólo cuenta una frase con `ts` POSTERIOR al último intento (un "¿qué hace force:true?" previo no habilita). Prompts legacy sin `ts` (formato viejo en disco) pasan sólo si nunca hubo intento registrado.
 
 ## Tiered Behaviour
 

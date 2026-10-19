@@ -412,9 +412,15 @@ async function runDoctorCommand() {
         const pluginPath = join(cwd, 'assets', 'plugins', 'ostacky-controller', 'index.ts');
         if (existsSync(pluginPath)) {
             const plugin = readFileSync(pluginPath, 'utf-8');
-            // actually check for spec iteration guard: read fresco + edit
-            const hasNoOverwrite = plugin.includes('No edites sin Read fresco') || plugin.includes('specSnapshot');
-            check('spec: no-overwrite guard', hasNoOverwrite, true);
+            // Guard vigente (reemplaza a specSnapshot, retirado con discovery-cache):
+            // los predicados puros del gate — shouldBlockCodeRead opera sobre isCodeReadGated
+            // (docs/openspec/tracked exentos) y isShellPathExempt sobre isPathInsideProject.
+            const hasNoOverwrite =
+                plugin.includes('shouldBlockCodeRead') &&
+                plugin.includes('isCodeReadGated') &&
+                plugin.includes('isTaskTracked') &&
+                plugin.includes('isShellPathExempt');
+            check('spec/tracked read-guard (shouldBlockCodeRead + exemptions)', hasNoOverwrite, true);
         }
         // sync proactive
         const hasSyncProactive = ostackyMd.includes('Noté que lo que acordamos');
