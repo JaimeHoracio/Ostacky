@@ -412,7 +412,6 @@ async function runDoctorCommand() {
         const pluginPath = join(cwd, 'assets', 'plugins', 'ostacky-controller', 'index.ts');
         if (existsSync(pluginPath)) {
             const plugin = readFileSync(pluginPath, 'utf-8');
-            const hasSpecGuard = plugin.includes('getDiscoverySnapshot') && plugin.includes('specSnapshot');
             // actually check for spec iteration guard: read fresco + edit
             const hasNoOverwrite = plugin.includes('No edites sin Read fresco') || plugin.includes('specSnapshot');
             check('spec: no-overwrite guard', hasNoOverwrite, true);

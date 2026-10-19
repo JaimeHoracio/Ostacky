@@ -98,7 +98,7 @@ describe('harden-task-integrity: tasks.md canonical in recordExecutionAnalysis',
             snapshot: {
                 recommendation: 'INLINE',
                 reasons: ['test'],
-                codegraphUsed: ['discovery-cache'],
+                codegraphUsed: ['codegraph_explore'],
                 taskCount: 2,
                 expectedTaskIds: ['1.1', '1.2'],
             } as any,

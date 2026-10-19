@@ -67,10 +67,27 @@ export function readOpenCodeConfig(configPath: string): Record<string, unknown> 
 /**
  * Writes config as pretty-printed JSON with trailing newline.
  */
-export function writeOpenCodeConfig(configPath: string, config: Record<string, unknown>): void {
+export function writeOpenCodeConfig(
+  configPath: string,
+  config: Record<string, unknown>,
+  options: { backup?: boolean } = {}
+): void {
+  const next = JSON.stringify(config, null, 2) + "\n";
+  // Backup de una ranura antes de reemplazar. El restore en memoria de install
+  // cubre fallos del propio proceso; este `.bak` cubre lo que ese restore no
+  // puede: que el proceso muera entre el rename y la verificación posterior.
+  // `backup: false` para el esqueleto inicial: no hay nada que respaldar.
+  try {
+    if (options.backup !== false && existsSync(configPath)) {
+      const prev = readFileSync(configPath, "utf-8");
+      if (prev !== next) writeFileSync(`${configPath}.bak`, prev, "utf-8");
+    }
+  } catch {
+    // best-effort: un backup fallido no debe impedir escribir la config
+  }
   const tmpPath = `${configPath}.tmp.${process.pid}.${Date.now()}`;
   try {
-    writeFileSync(tmpPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+    writeFileSync(tmpPath, next, "utf-8");
     renameSync(tmpPath, configPath);
   } finally {
     if (existsSync(tmpPath)) rmSync(tmpPath, { force: true });
@@ -81,15 +98,19 @@ export function writeOpenCodeConfig(configPath: string, config: Record<string, u
  * Creates a minimal opencode.json (or .jsonc) at the project root if none exists.
  * Returns the path to the config file (existing or newly created).
  */
-export function ensureOpenCodeConfig(projectRoot: string): string {
+export function ensureOpenCodeConfig(projectRoot: string): { path: string; created: boolean } {
   const existing = findOpenCodeConfig(projectRoot);
-  if (existing) return existing;
+  if (existing) return { path: existing, created: false };
   const configPath = join(projectRoot, "opencode.json");
-  writeOpenCodeConfig(configPath, {
-    $schema: "https://opencode.ai/config.json",
-    mcp: {},
-  });
-  return configPath;
+  writeOpenCodeConfig(
+    configPath,
+    {
+      $schema: "https://opencode.ai/config.json",
+      mcp: {},
+    },
+    { backup: false }
+  );
+  return { path: configPath, created: true };
 }
 
 /**
@@ -129,7 +150,7 @@ export function setMcpEntryAtProjectRoot(
   name: string,
   entry: Record<string, unknown>
 ): void {
-  const configPath = ensureOpenCodeConfig(projectRoot);
+  const { path: configPath, created } = ensureOpenCodeConfig(projectRoot);
   const config = readOpenCodeConfig(configPath);
   if (!config) throw new Error(`Error parseando ${configPath}`);
   if (!config.mcp || typeof config.mcp !== 'object') config.mcp = {};
@@ -138,7 +159,7 @@ export function setMcpEntryAtProjectRoot(
   (mcp.servers as Record<string, unknown>)[name] = entry;
   // Drop legacy same-name V1 entry so V2 doesn't warn on conflicting values.
   if (name in mcp && name !== 'servers') delete mcp[name];
-  writeOpenCodeConfig(configPath, config);
+  writeOpenCodeConfig(configPath, config, { backup: !created });
 }
 
 /**
@@ -156,7 +177,7 @@ export function ensureMcpEntryAtProjectRoot(
   name: string,
   entry: Record<string, unknown>
 ): void {
-  const configPath = ensureOpenCodeConfig(projectRoot);
+  const { path: configPath, created } = ensureOpenCodeConfig(projectRoot);
   const config = readOpenCodeConfig(configPath);
   if (!config) throw new Error(`Error parseando ${configPath}`);
   if (!config.mcp) config.mcp = {};
@@ -165,7 +186,7 @@ export function ensureMcpEntryAtProjectRoot(
   if (!(name in servers) && !(name in mcp)) {
     if (!mcp.servers || typeof mcp.servers !== 'object') mcp.servers = {};
     (mcp.servers as Record<string, unknown>)[name] = entry;
-    writeOpenCodeConfig(configPath, config);
+    writeOpenCodeConfig(configPath, config, { backup: !created });
   }
 }
 

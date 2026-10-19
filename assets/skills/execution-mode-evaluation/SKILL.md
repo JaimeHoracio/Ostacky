@@ -25,14 +25,13 @@ Determinar el modo de ejecución óptimo entre **inline** y **subagent-driven** 
 
 ## Procedimiento
 
-### Paso 0: Verificar discovery-cache primero (ÚNICO entrypoint)
+### Paso 0: Reusar el discovery ya obtenido en este request
 
-**SHALL** llamar `src/discovery-cache.ts` `getDiscoverySnapshot(query)` y `getEngramDedup(query, requestId)` antes de cualquier `codegraph_codegraph_explore` o `engram_mem_search`. Si hit válido (TTL+gitDiffHash) → **reusar** `codegraph+engramHits` para construir `sharedFiles/fileClusters`; solo `codegraph_impact` para símbolos no cubiertos. Si miss o área difiere >30% → fetch fresco y `putDiscoverySnapshot`. Segunda llamada misma query en mismo `requestId` SHALL ser dedup (no `redundantCallCount`).
+Si en este mismo request ya llamaste `codegraph_codegraph_explore` para el área, **reusá ese output** (sigue en tu contexto) para construir `sharedFiles/fileClusters`; solo `codegraph_impact` para símbolos no cubiertos. Si el área difiere materialmente (overlap <30%) o todavía no hiciste discovery → `codegraph_codegraph_explore` fresco. No hay cache de archivo: no repitas la misma query sin motivo.
 
-### Paso 0.1: Consultar Engram por decisiones previas (solo si no hay dedup hit)
+### Paso 0.1: Consultar Engram por decisiones previas
 
-Si `getEngramDedup` fue miss, `engram_mem_search` con keywords del cambio. Si existe decisión previa, usar como referencia no vinculante.
-
+`engram_mem_search` con keywords del cambio, salvo que ya lo hayas hecho para el mismo tema en este request. Si existe decisión previa, usarla como referencia no vinculante.
 ### Paso 0.5: Early exit para cambios pequeños
 
 Si el change tiene **≤2 tasks** Y **no comparten archivos entre sí** → devolver directamente:
@@ -48,10 +47,10 @@ Si el change tiene **≤2 tasks** Y **no comparten archivos entre sí** → devo
 }
 ```
 
-### Paso 1: Obtener datos de CodeGraph (solo si discovery-cache miss)
+### Paso 1: Obtener datos de CodeGraph (solo si no hiciste discovery en este request)
 
-Si Paso 0 fue hit → **SKIP este paso**, derivar `fileClusters/sharedFiles` del snapshot (`state.snapshots.codegraph` + `tasks.md`). Snapshot resultante SHALL usar `codegraphUsed:["discovery-cache"]` (válido, no genera `WARN:execution_without_codegraph` si `snapshots.codegraph` existe) y `reuseDiscovery:true`.
-Si miss:
+Si ya hay discovery en contexto → **SKIP este paso**; derivar `fileClusters/sharedFiles` del output (`state.snapshots.codegraph` + `tasks.md`) con `codegraphUsed:["codegraph_explore"]` y `reuseDiscovery:true`.
+Si no:
 ```
 codegraph_codegraph_explore con query: "<área del cambio>"
 ```

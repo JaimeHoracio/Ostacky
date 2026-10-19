@@ -27,12 +27,11 @@ BLOCKED: replan→INTERPRETATION_PENDING, abandon→DONE
 | controller_* | 5s | 1 | degraded |
 | engram_* | 5s | 1 | sin memoria |
 
-## Cache
+## Discovery
 
-- `src/cache-codegraph.ts`: `.opencode/cache/codegraph/<sha256(query)>.json` con `{ts, result, gitHead, gitDiffHash}`, TTL 1h, `OSTACKY_CACHE_DISABLE=1` bypass, LRU 50MB, invalidación `git diff --name-only` + `git status --porcelain --untracked-files=all` (hash combinado).
-- `src/discovery-cache.ts`: `.opencode/cache/codegraph/discovery-<sha256>.json` con `{codegraph, engramHits, gitDiffHash, gitHead, ts, query}`, mismo TTL/LRU. `getDiscoverySnapshot` → hit reusar sin llamar tools; miss → SHALL `putDiscoverySnapshot` antes de `record_discovery` (auditable `WARN:cache_miss_without_put`).
-- `record_cache_hit/miss` internos: `cache-codegraph.ts` hace write directo a `ostacky-state.json` incrementando `cacheHitCount/tokenSavingEstimate` sin tool LLM.
-
+- Sin cache de archivo: discovery = `codegraph_explore` + `mem_search`; el reuso es del output ya presente en el contexto del request. `src/discovery-cache.ts` y `src/cache-codegraph.ts` se retiraron (change `remove-discovery-cache-phantom`).
+- `OSTACKY_CACHE_DISABLE` ya no existe: no hay cache filesystem que desactivar.
+- Los contadores `cacheHitCount`/`tokenSavingEstimate` quedan en `get_metrics` por compatibilidad, en 0: nada los incrementa.
 ## Metrics (get_metrics)
 
 `revision, state, degraded, taskCounts{completed,pending,total,expected}, expectedTaskCount, auditSize, stateFileSize, diskFreeMB, uptimeMs, stateOversizedCount, codegraphBypassCount, degradedEditsCount, cacheHitCount, cacheMissCount, tokenSavingEstimate, sensitiveAccess, subagentFailedCount, discoveryCacheHitCount, redundantCallCount, cacheMissWithoutPutCount, stateCheckCount, toolCallCount`
@@ -55,6 +54,24 @@ Tras refino post-complete (archivo ya correcto, sin edición pendiente): `refres
 ## Enforcement (plugin)
 
 El plugin hace cumplir `PENDING` en `ctx.tool.hook("execute.before")`; `lastCheck={revision, result}` cachea ALLOW por revisión, revalida si cambia o >5 tools; `BLOCKED` nunca cacheado. Métricas `stateCheckCount` cuentan checks del plugin (no del LLM).
+
+## Gate de CodeGraph (alcance real)
+
+Cubre `read`/`grep`/`glob`/`read_mcp_resource` y **`shell`** cuando el comando revela contenido (`cat`, `head`, `tail`, `sed` sin `-i`, `grep`, `rg`, `awk`, `diff`…). Predicado puro: `shellReadTargets(command)` devuelve los paths de código **revelados**, no los mencionados — `bun test x.ts`, `tsc src/x.ts` y `git diff` pasan.
+
+**Fail-open:** redirección (`>`/`>>`), `sed -i` y verbo fuera de la allowlist → se permite. `read` falla cerrado porque es inequívoco; `shell` no, y un falso positivo rompe tests/builds sin escape hatch.
+
+**No es un sandbox.** Bypass residual por diseño: `git show`, `python -c`, `node -e`, `find -exec`, `xargs`, `base64`. El objetivo es quitar el bypass casual (`cat src/x.ts`), no probar imposibilidad.
+
+`execute` (Code Mode) **no** se gatea: su catálogo no expone `read`/`grep`/`shell` ni filesystem. Si una versión futura lo expone, el gate debe extenderse.
+
+## Evidencia de ejecución (`test:`)
+
+`test:<cmd>` no se puede verificar sin ejecutar. El plugin observa cada `shell` y registra `{cmd, exit, ts}` (últimas 25) en el state compartido; `complete_task` exige comando exacto (trim), `exit 0` y `ts` posterior a `lastMutationTs` (que avanza en cada `edit`/`write`/`patch` completado y en cada `shell` que escribe con exit 0: `cp`, `mv`, `rm`, `sed -i`, `tee`, redirección). `verifyIntegrity` re-verifica en el cierre: una edición posterior vence la evidencia y bloquea.
+
+**No se usa `status`:** en OpenCode 2.0.32, `sh -c 'exit 3'` llega con `status: "completed"` y `result.metadata.status: "completed"`. El único campo veraz es `result.metadata.exit`.
+
+**Límites declarados:** un test débil pasa (semántica, no mecánica); sin el plugin no hay `shellRuns` y `test:` falla cerrado.
 
 ## Tiered Behaviour
 
@@ -86,4 +103,4 @@ Principio: **eficacia > recorte** — si recorte rompiera caché y saliera más 
 
 ## Propose Flow (1+)
 
-`openspec-propose` SHALL Paso 0: `getDiscoverySnapshot(query)` + `getEngramDedup` → si miss `codegraph_codegraph_explore` + `engram_mem_search` + `putDiscoverySnapshot` **antes** de `openspec new`. Cita símbolos existentes en `proposal/design`; sin esto dispara `WARN:codegraphBypass` y `design.md` alucina API. Ver `assets/skills/openspec-propose/SKILL.md: Paso 0` y `brainstorming` (router por nivel: `brainstorming` decide 0/0+1/1+, `openspec-explore` es stance sin nivel).
+`openspec-propose` SHALL Paso 0: `codegraph_codegraph_explore` + `engram_mem_search` sobre el área (si no se hicieron ya en el request) **antes** de `openspec new`. Citá símbolos existentes en `proposal/design`; sin esto dispara `WARN:codegraphBypass` y `design.md` alucina API. Ver `assets/skills/openspec-propose/SKILL.md: Paso 0` y `brainstorming` (router por nivel: `brainstorming` decide 0/0+1/1+, `openspec-explore` es stance sin nivel).

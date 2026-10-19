@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
-import { isSensitive, BASH_SENSITIVE_RE, extractPathsFromBash, SENSITIVE_DEFAULT, sha256 } from '../src/security.js';
-import { getCachedCodegraph, putCachedCodegraph, getCacheDir, CACHE_TTL_MS } from '../src/cache-codegraph.js';
+import { isSensitive, BASH_SENSITIVE_RE, extractPathsFromBash, SENSITIVE_DEFAULT } from '../src/security.js';
 
 describe('hardening-v2: isSensitive unified', () => {
   it('true for .env', () => {
@@ -91,51 +90,6 @@ describe('hardening-v2: extractPathsFromBash', () => {
   });
 });
 
-describe('hardening-v2: cache-codegraph', () => {
-  const TEST_ROOT = join(import.meta.dir, '.test-cache-cg');
-  beforeEach(() => {
-    if (!existsSync(TEST_ROOT)) mkdirSync(TEST_ROOT, { recursive: true });
-    // also need .git for git commands? mock git to not fail
-    const cacheDir = getCacheDir(TEST_ROOT);
-    if (existsSync(cacheDir)) rmSync(cacheDir, { recursive: true, force: true });
-  });
-  afterEach(() => {
-    const cacheDir = getCacheDir(TEST_ROOT);
-    if (existsSync(cacheDir)) rmSync(cacheDir, { recursive: true, force: true });
-    if (existsSync(TEST_ROOT)) rmSync(TEST_ROOT, { recursive: true, force: true });
-    delete process.env.OSTACKY_CACHE_DISABLE;
-  });
-  it('stores and retrieves cache', () => {
-    const q = "test query auth";
-    const result = { symbols: ["auth"] };
-    putCachedCodegraph(q, result, TEST_ROOT);
-    const got = getCachedCodegraph(q, TEST_ROOT);
-    expect(got).toEqual(result);
-  });
-  it('returns null when disabled via env', () => {
-    process.env.OSTACKY_CACHE_DISABLE = "1";
-    const q = "query2";
-    putCachedCodegraph(q, { a: 1 }, TEST_ROOT);
-    expect(getCachedCodegraph(q, TEST_ROOT)).toBeNull();
-  });
-  it('returns null for different query', () => {
-    putCachedCodegraph("q1", { a: 1 }, TEST_ROOT);
-    expect(getCachedCodegraph("q2", TEST_ROOT)).toBeNull();
-  });
-  it('invalidates after TTL (simulate)', () => {
-    const q = "ttl test";
-    putCachedCodegraph(q, { a: 1 }, TEST_ROOT);
-    // Manually tamper timestamp to be old
-    const key = sha256(q);
-    const path = join(getCacheDir(TEST_ROOT), `${key}.json`);
-    if (existsSync(path)) {
-      const data = JSON.parse(readFileSync(path, 'utf-8'));
-      data.ts = Date.now() - CACHE_TTL_MS - 1000;
-      writeFileSync(path, JSON.stringify(data), 'utf-8');
-      expect(getCachedCodegraph(q, TEST_ROOT)).toBeNull();
-    }
-  });
-});
 
 describe('hardening-v2: brainstorming triggers', () => {
   const triggers = ["mejor forma", "qué conviene", "tradeoff", "comparar", "diseñar", "arquitectura", "alternativas", "evaluar opciones"];

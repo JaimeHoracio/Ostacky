@@ -3,7 +3,6 @@ import { basename, dirname, join, resolve } from "path";
 import { execFileSync } from "child_process";
 import {
   findProjectRoot,
-  findOpenCodeDir,
   isGitRepo,
   downloadAndExtractWithRetry,
   findBinaryInDir,
@@ -605,37 +604,3 @@ export function uninstallStackConfig(paths: OpenCodePaths): { success: boolean; 
   };
 }
 
-/**
- * Verifies that MCP server files exist and are valid.
- * Returns a list of verification results for each MCP server.
- */
-export function verifyMcpServers(projectRoot: string): {
-  ostackyController: { exists: boolean; path: string; error?: string };
-  openspec: { exists: boolean; path: string; error?: string };
-} {
-  const opencodeDir = findOpenCodeDir(projectRoot);
-  const mcpBase = opencodeDir ? join(opencodeDir, "mcp") : join(projectRoot, ".opencode", "mcp");
-
-  const controllerPath = join(mcpBase, "ostacky-controller", "index.js");
-  const openspecPath = join(mcpBase, "openspec", "index.js");
-
-  const result = {
-    ostackyController: {
-      exists: existsSync(controllerPath),
-      path: controllerPath,
-    } as { exists: boolean; path: string; error?: string },
-    openspec: {
-      exists: existsSync(openspecPath),
-      path: openspecPath,
-    } as { exists: boolean; path: string; error?: string },
-  };
-
-  if (!result.ostackyController.exists) {
-    result.ostackyController.error = "ostacky-controller MCP server not found";
-  }
-  if (!result.openspec.exists) {
-    result.openspec.error = "openspec MCP server not found";
-  }
-
-  return result;
-}

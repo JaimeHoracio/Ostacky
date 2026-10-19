@@ -28,7 +28,7 @@ Write the test first. Watch it fail. Write minimal code to pass.
 
 Thinking "skip TDD just this once"? Stop. That's rationalization.
 
-> **Ostacky ground (SHALL):** Antes de RED, verifica `getDiscoverySnapshot(query)` + `getEngramDedup`. Si hit → reusar símbolos/decisiones; si miss → `codegraph_codegraph_explore` + `engram_mem_search` + `putDiscoverySnapshot`. Evita testear API inexistente y respeta `discovery-cache (único)` de `ostacky.md §1`. Ver `execution-mode-evaluation` para cache TTL.
+> **Ostacky ground (SHALL):** Antes de RED, verificá el área con `codegraph_codegraph_explore` + `engram_mem_search` (si no los hiciste ya en este request). Citá símbolos existentes para no testear API inexistente. Ver `execution-mode-evaluation`.
 
 ## The Iron Law
 

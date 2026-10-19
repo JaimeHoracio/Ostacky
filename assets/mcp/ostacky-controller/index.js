@@ -215,7 +215,10 @@ export function parseTaskVerifications(changeId, statePath) {
             if (!m) continue;
             const id = m[1];
             if (!isValidTaskId(id)) continue;
-            const idx = line.indexOf('verificar:');
+            // lastIndexOf: la convención es que el marker va al FINAL de la línea. Con indexOf,
+            // una task que MENCIONA el formato en su descripción ("usá — verificar: file:...") se
+            // parseaba a sí misma mal: ganaba el ejemplo, no el marker real.
+            const idx = line.lastIndexOf('verificar:');
             if (idx !== -1) {
                 const v = line
                     .slice(idx + 'verificar:'.length)
@@ -228,6 +231,35 @@ export function parseTaskVerifications(changeId, statePath) {
     } catch {
         return {};
     }
+}
+
+/**
+ * test-verification-execution: evidencia real de una corrida de test.
+ *
+ * NO usa `status`: el shell tool de OpenCode reporta "completed" incluso con
+ * exit != 0 (medido: `sh -c 'exit 3'` -> status "completed", metadata.exit 3).
+ * El plugin registra {cmd, exit, ts} por cada shell; acá sólo se acepta el
+ * comando exacto, exit 0, y posterior a la última mutación.
+ */
+export function findTestEvidence({ runs, cmd, lastMutationTs, now = Date.now() } = {}) {
+    const expected = String(cmd || '').trim();
+    if (!expected) return { ok: false, reason: 'test: sin comando' };
+    if (!Array.isArray(runs) || runs.length === 0)
+        return { ok: false, reason: 'sin evidencia: el plugin no registró corridas de shell (¿está corriendo?)' };
+    const matches = runs.filter((r) => r && String(r.cmd || '').trim() === expected);
+    if (matches.length === 0) return { ok: false, reason: `nunca se ejecutó exactamente "${expected}"` };
+    const last = matches.reduce((a, b) => ((Number(b.ts) || 0) >= (Number(a.ts) || 0) ? b : a));
+    if (typeof last.ts !== 'number' || typeof lastMutationTs !== 'number')
+        return {
+            ok: false,
+            reason: `sin timestamps: no se puede probar que "${expected}" sea posterior a la última edición`,
+            run: last,
+        };
+    if (last.ts <= lastMutationTs)
+        return { ok: false, reason: `la última corrida de "${expected}" es anterior a la última edición`, run: last };
+    if (last.exit !== 0)
+        return { ok: false, reason: `la última corrida de "${expected}" salió con exit ${last.exit}`, run: last };
+    return { ok: true, reason: `exit 0 hace ${Math.max(0, Math.round((now - last.ts) / 1000))}s`, run: last };
 }
 
 function isValidTaskId(taskId) {
@@ -1724,6 +1756,14 @@ class OstackyController {
             expectedTasks = [...tasksMdIds];
             expectedTaskCount = tasksMdIds.length;
         }
+        // task-verification-integrity D1: las verificaciones viajan con el MISMO parse de
+        // tasks.md que ya usa expectedTasks. Antes sólo las cargaba set_expected_tasks, una
+        // tool que el prompt nunca menciona -> `— verificar:` quedaba muerto en la práctica.
+        let taskVerifs = null;
+        try {
+            const parsedVerifs = parseTaskVerifications(this.#state.changeId, this.#statePath);
+            taskVerifs = Object.keys(parsedVerifs).length ? parsedVerifs : null;
+        } catch {}
         // 8.1/8.2: lastProposal for execution — reasoning con plan
         let execShown = false;
         let execFiles = [];
@@ -1763,6 +1803,7 @@ class OstackyController {
             snapshots: { ...this.#state.snapshots, execution: snapshot ? structuredClone(snapshot) : null },
             expectedTasks: Array.isArray(expectedTasks) ? [...expectedTasks] : null,
             expectedTaskCount: typeof expectedTaskCount === 'number' ? expectedTaskCount : null,
+            taskVerifications: taskVerifs,
             lastProposal: execLastProposal,
         });
         await this.#audit('EXECUTION_DECISION_PENDING', 'record_execution_analysis');
@@ -1814,20 +1855,11 @@ class OstackyController {
         }
         // C2: warning if missing codegraphUsed+recommendation and not degraded — snapshot missing also counts
         // 1.7: early-exit with taskCount<=2 is valid without codegraphUsed, do not warn
-        // mejora-acciones-controller F3: discovery-cache counts as valid evidence if discovery snapshot exists
-        const isDiscoveryCacheEvidence =
-            snapshot &&
-            Array.isArray(snapshot.codegraphUsed) &&
-            snapshot.codegraphUsed.includes('discovery-cache') &&
-            this.#state.snapshots.codegraph != null &&
-            Array.isArray(snapshot.expectedTaskIds) &&
-            snapshot.expectedTaskIds.length > 0;
         const hasEvidence =
             (snapshot &&
                 Array.isArray(snapshot.codegraphUsed) &&
                 snapshot.codegraphUsed.length > 0 &&
-                snapshot.recommendation != null) ||
-            isDiscoveryCacheEvidence;
+                snapshot.recommendation != null);
         if (!hasEvidence && !this.#degraded && !isEarlyExitExec) {
             this.#state.codegraphBypassCount = (this.#state.codegraphBypassCount || 0) + 1;
             const auditId = `aud-${Date.now()}-${this.#state.auditSeq}`;
@@ -1931,6 +1963,25 @@ class OstackyController {
         return this.#makeError(`No decision to refresh from state ${s}`, 'refresh_decision');
     }
 
+    /**
+     * task-verification-integrity D3: si el estado no tiene expectedTasks ni expectedTaskCount,
+     * leer la fuente (tasks.md) en el momento del gate. El gate no puede quedar vacío sólo
+     * porque record_execution_analysis nunca corrió o el cache se perdió.
+     * Devuelve null cuando no hay tasks.md (trabajo no-spec: sin gate) o cuando manda el count.
+     */
+    #deriveExpectedTasks() {
+        if (Array.isArray(this.#state.expectedTasks) && this.#state.expectedTasks.length > 0) {
+            return this.#state.expectedTasks;
+        }
+        if (typeof this.#state.expectedTaskCount === 'number') return null;
+        try {
+            const ids = parseTasksMd(this.#state.changeId, this.#statePath);
+            return ids.length > 0 ? ids : null;
+        } catch {
+            return null;
+        }
+    }
+
     async implementationComplete({ force } = {}) {
         this.#load();
         const to = this.#isAllowedTransition(this.#state.state, 'implementation_complete');
@@ -1940,9 +1991,11 @@ class OstackyController {
                 'implementation_complete'
             );
         // C2 gate: check expectedTasks vs completed — do NOT transition if pending and not forced
+        // D3: un cache vacío no vacía el gate — se deriva de tasks.md.
+        const derivedExpected = this.#deriveExpectedTasks();
         let pending = [];
-        if (Array.isArray(this.#state.expectedTasks) && this.#state.expectedTasks.length > 0) {
-            pending = this.#state.expectedTasks.filter(
+        if (Array.isArray(derivedExpected) && derivedExpected.length > 0) {
+            pending = derivedExpected.filter(
                 (id) => !this.#state.tasks[id] || this.#state.tasks[id].status !== 'COMPLETED'
             );
         } else if (typeof this.#state.expectedTaskCount === 'number') {
@@ -1955,7 +2008,14 @@ class OstackyController {
         const seenFp2 = new Set();
         try {
             for (const [taskId, info] of Object.entries(this.#state.tasks || {})) {
-                if (info.status !== 'COMPLETED' || !info.filePath || !info.fileHash) continue;
+                if (info.status !== 'COMPLETED' || !info.filePath) continue;
+                // task-verification-integrity D2: COMPLETED con filePath y sin hash es un fantasma
+                // (complete_task lo aceptaba); antes se salteaba y quedaba invisible al cierre.
+                if (!info.fileHash) {
+                    staleFiles.push(`${taskId}:${info.filePath} (missing hash)`);
+                    seenFp2.add(info.filePath);
+                    continue;
+                }
                 const current = fingerprintFor(info.filePath, this.#statePath);
                 if (!current) staleFiles.push(`${taskId}:${info.filePath} (missing)`);
                 else if (current !== info.fileHash) staleFiles.push(`${taskId}:${info.filePath} (stale fingerprint)`);
@@ -2027,9 +2087,12 @@ class OstackyController {
             };
         }
         if (hasBlocking && force) {
-            // 4.3: force requiere confirmación humana en últimas 5 entradas de audit
-            const recentAudit = [...(this.#state.audit || []).slice(-5), ...this.#auditBuffer.slice(-5)];
-            const hasHuman = recentAudit.some((e) => e.reasoning && /forzar|confirmo|force/i.test(e.reasoning));
+            // task-verification-integrity D4: la evidencia es el TEXTO DEL USUARIO, no el audit.
+            // El audit lo redacta el agente: aceptar /forzar|confirmo|force/ ahí era self-attestation
+            // (cualquier tool call con esa palabra abría el gate). El plugin registra lastUserPrompts
+            // desde ctx.session.hook("prompt"), antes de inyectar hints.
+            const userPrompts = Array.isArray(this.#state.lastUserPrompts) ? this.#state.lastUserPrompts : [];
+            const hasHuman = userPrompts.some((p) => typeof p === 'string' && /forzar|confirmo|force/i.test(p));
             if (!hasHuman) {
                 const pendingMsg =
                     pending.length > 0 ? `Te faltan ${pending.length} task(s): ${pending.join(', ')}.` : '';
@@ -2044,7 +2107,7 @@ class OstackyController {
                     verificationFailed: verificationFailed.length ? verificationFailed : undefined,
                     current_state: this.#state.state,
                     attempted_transition: 'implementation_complete',
-                    suggestion: `${detail} Para forzar el cierre, escribí literal "confirmo forzar" en tu mensaje (quedará auditado) y reintentá con {force:true}. Si no querés forzar y es solo stale por refino, llamá refresh_fingerprint({filePath}) y reintentá sin force.`,
+                    suggestion: `${detail} Para forzar el cierre, el USUARIO debe escribir literal "confirmo forzar" en un mensaje suyo (el plugin lo registra; el audit que redacta el agente no cuenta) y luego reintentá con {force:true}. Si no querés forzar y es solo stale por refino, llamá refresh_fingerprint({filePath}) y reintentá sin force.`,
                 };
             }
             const all = [...pending, ...staleFiles, ...verificationFailed].join(',');
@@ -2212,9 +2275,11 @@ class OstackyController {
 
     async verifyIntegrity() {
         this.#load();
+        // D3: un cache vacío no vacía el gate — se deriva de tasks.md.
+        const derivedExpected = this.#deriveExpectedTasks();
         let pending = [];
-        if (Array.isArray(this.#state.expectedTasks) && this.#state.expectedTasks.length > 0) {
-            pending = this.#state.expectedTasks.filter(
+        if (Array.isArray(derivedExpected) && derivedExpected.length > 0) {
+            pending = derivedExpected.filter(
                 (id) => !this.#state.tasks[id] || this.#state.tasks[id].status !== 'COMPLETED'
             );
         } else if (typeof this.#state.expectedTaskCount === 'number') {
@@ -2227,7 +2292,13 @@ class OstackyController {
         const seenFp = new Set();
         try {
             for (const [taskId, info] of Object.entries(this.#state.tasks || {})) {
-                if (info.status !== 'COMPLETED' || !info.filePath || !info.fileHash) continue;
+                if (info.status !== 'COMPLETED' || !info.filePath) continue;
+                // task-verification-integrity D2: COMPLETED con filePath y sin hash es un fantasma
+                if (!info.fileHash) {
+                    staleFiles.push(`${taskId}:${info.filePath} (missing hash)`);
+                    seenFp.add(info.filePath);
+                    continue;
+                }
                 const current = fingerprintFor(info.filePath, this.#statePath);
                 if (!current) staleFiles.push(`${taskId}:${info.filePath} (missing)`);
                 else if (current !== info.fileHash) staleFiles.push(`${taskId}:${info.filePath} (stale fingerprint)`);
@@ -2255,7 +2326,14 @@ class OstackyController {
                     const parts = rest.split('contiene');
                     needle = (parts[1] || parts[0] || '').trim() || rest;
                 } else if (needle.startsWith('test:')) {
-                    // test: asumimos ok si ya está completa (test se corrió en agente)
+                    // test-verification-execution: cierre re-verifica evidencia; antes se salteaba.
+                    const cmd = needle.slice('test:'.length).trim();
+                    const ev = findTestEvidence({
+                        runs: this.#state.shellRuns,
+                        cmd,
+                        lastMutationTs: this.#state.lastMutationTs,
+                    });
+                    if (!ev.ok) verificationFailed.push(`${tid}: ${verif} — ${ev.reason}`);
                     continue;
                 }
                 if (!needle) continue;
@@ -2790,6 +2868,19 @@ class OstackyController {
         // Generico: test: tasks no requieren archivo nuevo (son verificaciones de comportamiento)
         const verifEarly = this.#state.taskVerifications?.[taskId];
         const isTestTaskEarly = verifEarly && verifEarly.trim().startsWith('test:');
+        // task-verification-integrity D2: un filePath que no existe no puede quedar COMPLETED.
+        // Antes se aceptaba con fileHash:null y verifyIntegrity lo salteaba -> fantasma invisible.
+        // Sin excepción por tipo de task: un path declarado debe existir; una task `test:` no
+        // necesita declarar filePath (y si lo declara, ese archivo ya se creó antes de completarla).
+        if (filePath) {
+            const absPath =
+                filePath.startsWith('/') || /^[A-Za-z]:/.test(filePath)
+                    ? resolve(filePath)
+                    : resolve(getProjectRoot(this.#statePath), filePath);
+            if (!existsSync(absPath)) {
+                return { error: `filePath does not exist: ${filePath}`, taskId, filePath };
+            }
+        }
         const isNewFile = !!(
             isTestTaskEarly ||
             (filePath &&
@@ -2827,7 +2918,7 @@ class OstackyController {
                     `task ${taskId} verification failed: ${verifForComplete}`
                 );
                 return {
-                    error: `verification failed for ${taskId}: ${verifForComplete} not found in ${vres.fileHint || filePath || 'unknown file'}`,
+                    error: `verification failed for ${taskId}: ${verifForComplete} — ${vres.reason || `not found in ${vres.fileHint || filePath || 'unknown file'}`}`,
                     taskId,
                     verification: verifForComplete,
                     verificationFailed: true,
@@ -2967,14 +3058,27 @@ class OstackyController {
                 else fileHint = fileHint || info?.filePath || null;
                 if (!needle) needle = rest;
             } else if (needle.startsWith('test:')) {
-                // test: no podemos ejecutar desde controller, consideramos ok si hay filePath (ya editado) o fileHash
-                needle = needle.slice('test:'.length).trim();
-                const hasFile = !!(fileHint || info?.filePath || info?.fileHash);
-                const ok = hasFile;
+                // test-verification-execution: evidencia real registrada por el plugin
+                // (exit + timestamp). Nunca "assumed ok"; el comando debe coincidir exacto.
+                const cmd = needle.slice('test:'.length).trim();
+                const ev = findTestEvidence({
+                    runs: this.#state.shellRuns,
+                    cmd,
+                    lastMutationTs: this.#state.lastMutationTs,
+                });
                 if (!this.#state.taskVerificationResults) this.#state.taskVerificationResults = {};
-                this.#state.taskVerificationResults[taskId] = { ok, verif, ts: Date.now() };
+                this.#state.taskVerificationResults[taskId] = {
+                    ok: ev.ok,
+                    verif,
+                    reason: ev.reason,
+                    // Copia plana, NO la referencia de shellRuns: el serializador seguro
+                    // marca referencias repetidas como "[Circular]" y corrompería la
+                    // evidencia persistida (bug detectado por el test de integración).
+                    run: ev.run ? { cmd: ev.run.cmd, exit: ev.run.exit, ts: ev.run.ts } : null,
+                    ts: Date.now(),
+                };
                 await this.#persist();
-                return { ok, taskId, verif, reason: hasFile ? 'test verification assumed ok (has file)' : 'no file' };
+                return { ok: ev.ok, taskId, verif, command: cmd, reason: ev.reason, run: ev.run };
             }
             // Generic: check file content contains needle
             let content = null;

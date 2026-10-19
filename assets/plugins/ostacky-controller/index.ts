@@ -6,7 +6,7 @@
  * MCP queda thin solo para observabilidad (get_*).
  *
  * Single source security: mirrors generados desde src/security.ts via scripts/sync-controller-core.ts
- * Cache único: getDiscoverySnapshot es único entrypoint.
+ * Discovery: `codegraph_explore` completado; no hay cache de archivo.
  * Tiered cache-friendly: isTrivial sin reemplazar system[0], suffix hint + SKIP.
  * CodeGraph preventivo: bloquea Read/Grep masivo sin Discovery hit.
  */
@@ -303,7 +303,7 @@ export function shouldBlockCodeRead(input: {
  * Tools cuyo completado constituye evidencia REAL de discovery estructural en la sesion.
  *
  * `codegraph_explore` es la senal fuerte: llamada real, resultado inspeccionable por el plugin.
- * `getDiscoverySnapshot` cuenta tambien cuando exista como tool (ver change `discovery-cache-tool`).
+ * No hay cache de discovery: `getDiscoverySnapshot` nunca existió y se retiró.
  *
  * Historia (fix-codegraph-gate): antes la UNICA senal era `getDiscoverySnapshot`, una tool que nunca
  * se registro ni en el plugin ni en el MCP. `hasDiscoveryHit` era siempre false y el gate bloqueaba
@@ -312,10 +312,107 @@ export function shouldBlockCodeRead(input: {
  */
 export function marksDiscovery(toolName: string): boolean {
   return (
-    toolName.includes("codegraph_explore") ||
-    toolName.includes("getDiscoverySnapshot") ||
-    toolName.includes("get_discovery_snapshot")
+    toolName.includes("codegraph_explore")
   )
+}
+
+/**
+ * Mismo criterio de "archivo de código" que el gate de read (index.ts:552),
+ * sin la cláusula de `pattern` que es específica de glob. Docs/JSON quedan fuera:
+ * un .md bajo assets/ es documentación, no código.
+ */
+export function isCodePath(p: string): boolean {
+  if (!p) return false
+  if (/\.(md|json)$/i.test(p)) return false
+  return /\.(ts|js|tsx|jsx|mts|cts)$/i.test(p) || p.includes("src/") || p.includes("assets/")
+}
+
+/**
+ * Evidencia de una corrida de shell para las tasks `test:` (change
+ * test-verification-execution). Devuelve null si el evento no permite afirmar
+ * nada: sin comando o sin `exit` numérico.
+ *
+ * NO consulta `status`: medido en OpenCode 2.0.32, `sh -c 'exit 3'` llega con
+ * `status: "completed"` y `result.metadata.status: "completed"`. El único dato
+ * veraz es `result.metadata.exit`.
+ */
+export function shellEvidence(event: any): { cmd: string; exit: number; ts: number } | null {
+  if (!event || event.tool !== "shell") return null
+  const cmd = event.input?.command
+  const exit = event.result?.metadata?.exit
+  if (typeof cmd !== "string" || !cmd.trim()) return null
+  if (typeof exit !== "number") return null
+  return { cmd: cmd.trim(), exit, ts: Date.now() }
+}
+
+/** Tools que mutan archivos: avanzan `lastMutationTs`. */
+export function isMutatingTool(tool: string): boolean {
+  return tool === "edit" || tool === "write" || tool === "patch"
+}
+
+/**
+ * Comando shell que escribe en disco. Predicado compartido por el gate de
+ * mutación y por `lastMutationTs`: si no se compartiera, un `sed -i` aprobado
+ * por el gate mutaría el código sin avanzar el timestamp, y una corrida de test
+ * previa seguiría contando como evidencia.
+ */
+export function isShellMutation(command: string): boolean {
+  if (!command) return false
+  // `2>&1`, `1>&2`, `2>/dev/null` son redirects de stderr, no mutación.
+  const cmdSansStderr = command.replace(/2>&1/g, "").replace(/1>&2/g, "").replace(/2>\s*\/dev\/null/g, "")
+  return /(^|[^0-9&])>{1,2}\s*(?!&)\S+|\bsed\b[^|;]*-i|\btruncate\b|\btee\b|\bcp\s+|\bmv\s+|\brm\s+|python.*open.*w/.test(cmdSansStderr)
+}
+
+/**
+ * Verbos cuyo output revela el CONTENIDO de un archivo. No incluye verbos que
+ * sólo mencionan paths (`bun test x.ts`, `tsc src/x.ts`, `git diff`): el gate
+ * distingue "revela" de "menciona" — ver change shell-code-read-gate.
+ */
+const SHELL_READ_VERBS = new Set([
+  "cat", "head", "tail", "sed", "awk", "grep", "rg", "ag", "ack", "less", "more",
+  "nl", "bat", "tac", "strings", "xxd", "od", "base64", "diff", "cut", "paste",
+  "sort", "uniq", "column", "expand", "fold",
+])
+
+const SHELL_WRAPPERS = new Set(["sudo", "env", "time", "command", "exec", "nohup"])
+
+/**
+ * Paths de código que `command` REVELA (no los que menciona).
+ *
+ * Fail-open por diseño: redirección => escritura, `sed -i` => escritura, verbo
+ * fuera de la allowlist => []. Un gate de shell nunca es hermético; el objetivo
+ * es quitar el bypass casual (`cat src/x.ts`), no demostrar imposibilidad.
+ * Bypass residual documentado en el spec: `git show`, `python -c`, `node -e`,
+ * `find -exec`, `xargs`.
+ */
+export function shellReadTargets(command: string): string[] {
+  if (!command) return []
+  const targets: string[] = []
+  // Split por pipes/separadores, NO por `>`: necesitamos ver la redirección.
+  const segments = command.replace(/&&/g, ";").replace(/\|\|/g, ";").split(/[|;\n]+/)
+  for (const seg of segments) {
+    const trimmed = seg.trim()
+    if (!trimmed) continue
+    // Escritura (cat > f, tee, heredoc): no es lectura.
+    if (/>/.test(trimmed)) continue
+    const tokens = (trimmed.match(/(?:[^\s"'`\\]+|"[^"]*"|'[^']*'|`[^`]*`)+/g) || [])
+      .map((t) => t.replace(/["'`]/g, "").replace(/\\/g, ""))
+      .filter(Boolean)
+    if (tokens.length === 0) continue
+    let i = 0
+    while (i < tokens.length && SHELL_WRAPPERS.has(tokens[i])) i++
+    const verb = tokens[i] || ""
+    const base = verb.split("/").pop() || verb
+    if (!SHELL_READ_VERBS.has(base)) continue
+    // sed -i es escritura in-place, no lectura.
+    if (base === "sed" && tokens.some((t) => t === "-i" || t.startsWith("-i") || t === "--in-place" || t.startsWith("--in-place"))) continue
+    // diff -q/--brief/--stat sólo compara metadatos: no revela contenido.
+    if (base === "diff" && tokens.some((t) => t === "-q" || t === "--quiet" || t === "--brief" || t === "--stat" || /^-[a-zA-Z]*q[a-zA-Z]*$/.test(t))) continue
+    for (const p of extractPathsFromBash(trimmed)) {
+      if (isCodePath(p)) targets.push(p)
+    }
+  }
+  return [...new Set(targets)]
 }
 
 function jsonContent(value: unknown): { content: string } {
@@ -402,6 +499,16 @@ export default {
       const sessionId: string = event.sessionID ?? "default"
       const text = (event.prompt.text ?? "").trim()
       const state = readState(directory)
+      // task-verification-integrity D4: registrar el texto ORIGINAL del usuario (antes de los
+      // hints de abajo) para que `implementation_complete({force:true})` se apoye en evidencia
+      // real y no en el audit, que lo redacta el agente. `ownedKeys` evita pisar el avance del MCP.
+      if (text && state) {
+        try {
+          const prev = Array.isArray((state as any).lastUserPrompts) ? (state as any).lastUserPrompts : []
+          ;(state as any).lastUserPrompts = [...prev, text.slice(0, 500)].slice(-5)
+          persistState(directory, state, ["lastUserPrompts"])
+        } catch {}
+      }
       const currentState = state?.state ?? "DONE"
       const trivial = isTrivial(text, currentState)
       trivialBySession.set(sessionId, trivial)
@@ -624,12 +731,54 @@ export default {
         }
       }
 
+      // ── 3.2) CodeGraph gate para shell: leer código sin discovery → BLOCKED ──
+      // El gate de código (arriba) sólo mira read/grep/glob; `cat src/x.ts` revela
+      // lo mismo y no costaba nada. Fail-open a propósito: `read` falla cerrado
+      // porque es inequívoco; `shell` es ambiguo y un falso positivo rompe tests o
+      // builds sin escape hatch para el usuario (change shell-code-read-gate).
+      if (tool === "shell") {
+        const cmdForRead: string = args?.command || args?.cmd || ""
+        if (typeof cmdForRead === "string" && cmdForRead) {
+          const shellTargets = shellReadTargets(cmdForRead)
+          if (shellTargets.length > 0) {
+            const isShellPathExempt = (p: string): boolean => {
+              if (p.includes("openspec/changes") || p.includes("openspec/specs")) return true
+              if (p.includes("assets/docs") || p.includes("/docs/") || /\.md$/i.test(p) || /\.json$/i.test(p)) return true
+              try {
+                if (freshState) {
+                  const fps = Object.keys(freshState.fileFingerprints || {})
+                  const taskFiles = Object.values(freshState.tasks || {}).map((t: any) => t.filePath).filter(Boolean)
+                  const lv: any = (freshState as any).lastValidated || null
+                  const lvByFile = lv?.byFile && typeof lv.byFile === "object" ? lv.byFile : null
+                  const lvPaths: string[] = [
+                    ...(lvByFile ? Object.keys(lvByFile) : []),
+                    ...(lv?.filePath ? [lv.filePath as string] : []),
+                  ]
+                  const matches = (f: string): boolean => p.endsWith(f) || f.endsWith(p) || p.includes(f) || f.includes(p)
+                  if (fps.some(matches) || taskFiles.some(matches)) return true
+                  if (lvPaths.some((lf) => p.endsWith(lf) || lf.endsWith(p))) return true
+                }
+              } catch {}
+              return false
+            }
+            const gatedShell = shellTargets.filter((p) => !isShellPathExempt(p))
+            const codegraphOkShell = gatedShell.length > 0 ? isCodegraphAvailable(directory) : false
+            const hasDiscoveryShell = codegraphOkShell
+              ? (discoveryHitByRequest.get(sessionId) ?? getDiscoveryCacheHit(directory))
+              : false
+            if (gatedShell.length > 0 && codegraphOkShell && !hasDiscoveryShell) {
+              throw new Error(
+                `BLOCKED: sin discovery estructural en esta sesión — llamá codegraph_codegraph_explore("${gatedShell[0]}") antes de leer código por shell`
+              )
+            }
+          }
+        }
+      }
+
       // ── 3.5) Shell file-mutation gate (harden-task-integrity: shell mutante requiere validate_edit) ──
       if (tool === "shell" && freshState && ["EXECUTING_INLINE", "EXECUTING_SUBAGENTS"].includes(freshState.state)) {
         const cmdForMutation: string = args?.command || args?.cmd || ""
-        // Fix falso positivo: `2>&1`, `1>&2`, `2>/dev/null` son redirects de stderr, no mutación.
-        const cmdSansStderr = cmdForMutation.replace(/2>&1/g, "").replace(/1>&2/g, "").replace(/2>\s*\/dev\/null/g, "")
-        const isMutating = /(^|[^0-9&])>{1,2}\s*(?!&)\S+|\bsed\b[^|;]*-i|\btruncate\b|\btee\b|\bcp\s+|\bmv\s+|python.*open.*w/.test(cmdSansStderr)
+        const isMutating = isShellMutation(cmdForMutation)
         if (isMutating) {
           const mPaths = extractPathsFromBash(cmdForMutation)
           for (const p of mPaths) {
@@ -789,16 +938,42 @@ export default {
       // (fix-codegraph-gate) Evidencia REAL de discovery: un `codegraph_explore` completado en ESTA
       // sesión abre el gate de lecturas de código. Se marca aunque el resultado venga vacío, a
       // propósito: "CodeGraph no tiene este archivo en su índice" es justamente el caso donde el
-      // Read TIENE que poder pasar. `getDiscoverySnapshot` queda aceptado para cuando sea una tool.
+      // Read TIENE que poder pasar si hubo `codegraph_explore`.
       if (marksDiscovery(tool)) {
         try {
           if (event.status === "completed") discoveryHitByRequest.set(sessionId, true)
         } catch {}
       }
       // Track Engram hit (mem_search / mem_context / dedup) para soft gate 1.6
-      if (tool.includes("engram_mem_search") || tool.includes("engram_mem_context") || tool.includes("mem_search") || tool.includes("mem_context") || tool.includes("getEngramDedup") || tool.includes("engram_mem_")) {
+      if (tool.includes("engram_mem_search") || tool.includes("engram_mem_context") || tool.includes("mem_search") || tool.includes("mem_context") || tool.includes("engram_mem_")) {
         engramHitBySession.set(sessionId, true)
       }
+      // test-verification-execution: evidencia para tasks `test:`.
+      // `status` miente con exit != 0 (ver shellEvidence): sólo se registra con exit numérico.
+      try {
+        const ev = shellEvidence(event as any)
+        // Un shell que escribe (exit 0) también invalida evidencia de test:
+        // si no, `sed -i` mutaría el código sin avanzar el timestamp.
+        const mutating =
+          (isMutatingTool(tool) && event.status === "completed") ||
+          (!!ev && ev.exit === 0 && isShellMutation(ev.cmd))
+        if (ev || mutating) {
+          const s = readState(directory)
+          if (s) {
+            const owned: string[] = []
+            if (ev) {
+              const prev = Array.isArray((s as any).shellRuns) ? (s as any).shellRuns : []
+              ;(s as any).shellRuns = [...prev, ev].slice(-25)
+              owned.push("shellRuns")
+            }
+            if (mutating) {
+              ;(s as any).lastMutationTs = Date.now()
+              owned.push("lastMutationTs")
+            }
+            if (owned.length > 0) persistState(directory, s, owned)
+          }
+        }
+      } catch {}
       // Heartbeat: single-writer — plugin memo, no persist cada tool (D10)
       try {
         const s = readState(directory)

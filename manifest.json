@@ -8,7 +8,7 @@
       "file": "assets/agents/ostacky.md",
       "description": "Orquestador con recuperación automática (nunca se congela), ruteo por nivel de impacto, controller MCP con SDK oficial, edición segura con fallback inline, y delegación en OpenSpec + Superpowers. v0.10.0: prune de skills obsoletas, lastHandoff, getAvailableTransitions, consecutiveFailures real, mem_session_summary automático al cierre.",
       "version": "0.10.0",
-      "sha256": "d092ac75eb83f56354e5accf479ae6f0309253077b7071b2cd93bcc959f9dc63"
+      "sha256": "ebae6fb4638d5cb0cfbc08f605ab2333d6d30d5708b9e1dd6106567e6edde5ef"
     }
   ],
   "commands": [
@@ -33,7 +33,7 @@
       "file": "assets/mcp/ostacky-controller/",
       "description": "Máquina de estados persistida con @modelcontextprotocol/server SDK. v0.10.0: 22 tools (incluye set_handoff, get_handoff, clear_handoff, get_available_transitions funcional). Bugfixes: consecutiveFailures real, lastHandoff state, defaultChoice persistido. Robustez: degraded mode automático tras 3 fallos, persistence condicional para Nivel 0, prune de skills obsoletas.",
       "version": "0.10.0",
-      "sha256": "9e6647f1540c21063d32bc3e163a7c0a379bbc1859416c3e7f55af39f2dd8e4e"
+      "sha256": "4736cba62f4d47f90f40ed60e5e9b91989566b0a08eda45adc1c229ea9a0f70c"
     },
     {
       "name": "openspec",
@@ -49,21 +49,21 @@
       "file": "assets/skills/brainstorming/SKILL.md",
       "description": "Skill unificado de pensamiento con dos modos: creative-design (producción de diseño → transición a implementación directa o openspec-propose) y open-exploration (exploración libre)",
       "version": "0.10.0",
-      "sha256": "f1013a86a8f27914d85a716e23c7fd32db1786d93615e8b0834b13d184308549"
+      "sha256": "ba76eff6fb5bea08d3b26622089ea4739b7b542b3677a46071b2576f3f2001c7"
     },
     {
       "name": "execution-mode-evaluation",
       "file": "assets/skills/execution-mode-evaluation/SKILL.md",
       "description": "Skill de análisis de modo de ejecución — output reconciliado con controller snapshot contract (recommendation field)",
       "version": "0.10.0",
-      "sha256": "2158a6864c0912e868a9d720db7fd79441e6cc298e3320833d2527c9727c852e"
+      "sha256": "9090132ccfe31dcf34b6d5f399c1135dcb1044c504d4beb026e0c7d9e09e7c0d"
     },
     {
       "name": "tdd",
       "file": "assets/skills/tdd/SKILL.md",
       "description": "Skill de test-driven development (Superpowers)",
       "version": "0.10.0",
-      "sha256": "f0ebfbbc43a8868d31a3fd2df37ae7f60fe8add09c6475862395a68269e5ff7f"
+      "sha256": "cce54e81cce46ba973066f9b43e74994a7dbf21aa756146c27689241cf62704d"
     },
     {
       "name": "subagent-driven-development",
@@ -98,7 +98,7 @@
       "file": "assets/skills/openspec-propose/SKILL.md",
       "description": "Skill de generación de proposal (OpenSpec)",
       "version": "0.10.0",
-      "sha256": "6a517f750f24c008208156a2d653e97ed30b1e53878aeac5ce394e573db0678f"
+      "sha256": "9049b944cea88a5428fd5d77b411a0ed32d169ad68acda911b68365fac08f38f"
     },
     {
       "name": "openspec-apply-change",

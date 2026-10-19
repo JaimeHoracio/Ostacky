@@ -57,10 +57,6 @@ describe("codegraph-gate — la señal de discovery es una tool que EXISTE", () 
     expect(marksDiscovery("codegraph_explore")).toBe(true);
   });
 
-  it("getDiscoverySnapshot queda aceptado para cuando sea una tool real (change discovery-cache-tool)", () => {
-    expect(marksDiscovery("getDiscoverySnapshot")).toBe(true);
-  });
-
   it("tools ajenas NO marcan discovery", () => {
     for (const tool of ["read", "grep", "glob", "shell", "edit", "codegraph_codegraph_status"]) {
       expect(marksDiscovery(tool)).toBe(false);
