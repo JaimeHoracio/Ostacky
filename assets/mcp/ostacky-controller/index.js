@@ -1169,6 +1169,28 @@ class OstackyController {
         };
     }
 
+    /**
+     * multisession-ownership-guard: la request activa es de UNA sesión.
+     * Si el caller es conocido y difiere del dueño, la mutación se rechaza
+     * (consumir/cancelar/refrescar la decisión de otro invalidaba su resumen
+     * y forzaba a re-presentarlo). Sin identidad (clientes legacy sin `_meta`)
+     * o sin dueño, no aplica: comportamiento previo intacto.
+     */
+    async #foreignOwnerError(via) {
+        const owner = this.#state?.ownerSessionId ?? null;
+        const caller = this.#callerSessionId ?? null;
+        if (!owner || !caller || owner === caller) return null;
+        await this.#audit(
+            'WARN',
+            'cross_session_denied',
+            `${via}: caller=${caller} owner=${owner} state=${this.#state?.state}`
+        );
+        return this.#makeError(
+            `BLOCKED: la request activa pertenece a otra sesión (owner=${owner}). No consumas, refresques ni canceles su decisión; usá start_request({force:true}) para takeover explícito o esperá a que termine.`,
+            via
+        );
+    }
+
     #suggestRecovery(state, transition) {
         const suggestions = {
             INTERPRETATION_PENDING: 'Call start_request or proceed_to_discovery first.',
@@ -1558,6 +1580,8 @@ class OstackyController {
 
     async abandon({ reason } = {}) {
         this.#load();
+        const denied = await this.#foreignOwnerError('abandon');
+        if (denied) return denied;
         const to = this.#isAllowedTransition(this.#state.state, 'abandon');
         if (!to) return this.#makeError(`Cannot abandon from state ${this.#state.state}`, 'abandon');
         await this.#transition(to, { error: reason || 'Abandoned' });
@@ -1567,6 +1591,8 @@ class OstackyController {
 
     async consumeRouteDecision({ decisionId, choice } = {}) {
         this.#load();
+        const denied = await this.#foreignOwnerError('consume_route_decision');
+        if (denied) return denied;
         if (choice && !['SPEC', 'DIRECT'].includes(choice)) {
             return { error: `invalid choice: ${choice}`, available: ['SPEC', 'DIRECT'] };
         }
@@ -1906,6 +1932,8 @@ class OstackyController {
 
     async consumeExecutionDecision({ decisionId, mode } = {}) {
         this.#load();
+        const denied = await this.#foreignOwnerError('consume_execution_decision');
+        if (denied) return denied;
         if (mode && !['INLINE', 'SUBAGENT_DRIVEN'].includes(mode)) {
             return { error: `invalid mode: ${mode}`, available: ['INLINE', 'SUBAGENT_DRIVEN'] };
         }
@@ -1944,6 +1972,8 @@ class OstackyController {
      */
     async refreshDecision() {
         this.#load();
+        const denied = await this.#foreignOwnerError('refresh_decision');
+        if (denied) return denied;
         const s = this.#state.state;
         const prevFails = this.#state.consumeFailedCount || 0;
         if (s === 'ROUTE_DECISION_PENDING') {
@@ -2150,6 +2180,8 @@ class OstackyController {
 
     async block({ reason } = {}) {
         this.#load();
+        const denied = await this.#foreignOwnerError('block');
+        if (denied) return denied;
         const from = this.#state.state;
         const to = this.#isAllowedTransition(this.#state.state, 'block');
         if (!to) return this.#makeError(`Cannot block from state ${this.#state.state}`, 'block');
@@ -2855,6 +2887,8 @@ class OstackyController {
      */
     async completeTask({ taskId, filePath, fileHash } = {}) {
         this.#load();
+        const denied = await this.#foreignOwnerError('complete_task');
+        if (denied) return denied;
         if (this.#state.state !== 'EXECUTING_INLINE' && this.#state.state !== 'EXECUTING_SUBAGENTS') {
             return this.#makeError(`Cannot complete task from state ${this.#state.state}`, 'complete_task');
         }
@@ -3332,7 +3366,7 @@ function safeHandler(fn, options = {}) {
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.10.1',
+    version: '0.10.2',
 });
 
 server.registerTool(
@@ -3934,7 +3968,7 @@ function setupGracefulShutdown(ctrl) {
 }
 
 async function main() {
-    log('Starting ostacky-controller MCP v0.10.1...');
+    log('Starting ostacky-controller MCP v0.10.2...');
     log('State path:', { path: statePath });
     // Clean up stale tmp/lock files from previous runs
     cleanupTmpFiles(statePath);

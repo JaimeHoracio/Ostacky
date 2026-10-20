@@ -153,6 +153,34 @@ export function mergePluginOwnedState(fresh: any, state: any, ownedKeys: string[
 }
 
 /**
+ * multisession-ownership-guard: hay UN state file por proyecto, así que el PENDING
+ * puede ser de otra sesión. El gate no debe congelar sesiones ajenas a esa request
+ * (antes, cualquier sesión quedaba bloqueada por la confirmación pendiente de otra).
+ *
+ * No aplica cuando no hay dueño (estado legacy), cuando el caller es el dueño, ni
+ * cuando el caller es desconocido (`event.sessionID` ausente → "default"): sin
+ * identidad no se puede probar ajeneidad.
+ */
+export function isForeignPendingOwner(state: any, sessionId: string | null | undefined): boolean {
+  const owner = state?.ownerSessionId
+  if (!owner || !sessionId || sessionId === "default") return false
+  return owner !== sessionId
+}
+
+/**
+ * Cache del gate PENDING. El cache es por `revision`, NO por dueño: si el paso de
+ * una sesión ajena dejara un ALLOW, la dueña lo reutilizaría y se saltearía su
+ * propia confirmación. Por eso un PENDING ajeno no cachea nada.
+ */
+export function nextPendingGateCache(
+  revision: number,
+  foreignPendingOwner: boolean
+): { revision: number; result: string } | null {
+  if (foreignPendingOwner) return null
+  return { revision, result: "ALLOW" }
+}
+
+/**
  * Persiste estado SIN poder pisar al MCP.
  *
  * El MCP es la autoridad de la máquina de estados; el plugin solo escribe un
@@ -295,6 +323,20 @@ export function marksDiscovery(toolName: string): boolean {
   return (
     toolName.includes("codegraph_explore")
   )
+}
+
+/**
+ * Predicado puro del horizonte del gate de discovery: ¿este prompt invalida el
+ * hit estructural de la sesión?
+ *
+ * El contrato de reuso es POR REQUEST ("reuso del output ya obtenido en el request",
+ * remove-discovery-cache-phantom archivado 2026-10-19), no por sesión: la instrucción
+ * §1 del agente y record_discovery son por request; el gate era el único desalineado.
+ * Los prompts TRIVIALES no invalidan: el plugin les inyecta "No hagas Discovery"
+ * (hint :555) — limpiar el hit ahí crearía instrucción y gate contradictorias.
+ */
+export function shouldInvalidateDiscoveryHit(trivial: boolean): boolean {
+  return !trivial
 }
 
 /**
@@ -550,6 +592,10 @@ export default {
       const currentState = state?.state ?? "DONE"
       const trivial = isTrivial(text, currentState)
       trivialBySession.set(sessionId, trivial)
+      // Horizonte por request: prompts NO-triviales invalidan el discovery hit —
+      // la siguiente lectura de código exige un explore fresco (contrato
+      // remove-discovery-cache-phantom + instrucción §1 del agente).
+      if (shouldInvalidateDiscoveryHit(trivial)) discoveryHitByRequest.delete(sessionId)
       if (trivial) {
         // Preserve system FULL cacheable, add suffix hint to user prompt text
         const hint = "\n\n[PLUGIN HINT: Saludo trivial — responde breve sin tools. No hagas Discovery.]"
@@ -606,7 +652,9 @@ export default {
       checkCount++
       const freshState = readState(directory)
       const pendingStates = ["ROUTE_DECISION_PENDING", "EXECUTION_DECISION_PENDING", "CLARIFICATION_PENDING"]
-      if (freshState && pendingStates.includes(freshState.state)) {
+      // multisession-ownership-guard: el PENDING de OTRA sesión no congela esta sesión.
+      const foreignPendingOwner = !!freshState && isForeignPendingOwner(freshState, sessionId)
+      if (freshState && pendingStates.includes(freshState.state) && !foreignPendingOwner) {
         // cache ALLOW per revision, BLOCKED never cached
         if (lastCheck && freshState.revision === lastCheck.revision && checkCount % 5 !== 0 && lastCheck.result === "ALLOW") {
           // reuse cached ALLOW
@@ -628,7 +676,7 @@ export default {
           }
         }
       } else if (freshState) {
-        lastCheck = { revision: freshState.revision, result: "ALLOW" }
+        lastCheck = nextPendingGateCache(freshState.revision, foreignPendingOwner)
       }
 
       // ── 1.6) Engram soft gate (auditable, no BLOCK) — refuerza SHALL 1 de ostacky.md ──
@@ -728,12 +776,22 @@ export default {
         const gated = isCodeReadGated({ isCodeFile, isLiteralGrep, isSpecTasksPath, isDocsPath, isTaskTracked })
         const codegraphOk = gated ? isCodegraphAvailable(directory) : false
         // Sin fallback a disco: la única evidencia válida es un codegraph_explore
-        // COMPLETADO en esta sesión (discoveryHitByRequest). El memo se limpia con
-        // session.deleted, así "esta sesión" es literal.
+        // COMPLETADO en este request (discoveryHitByRequest; el hook "prompt"
+        // invalida el hit en cada prompt no-trivial). session.deleted también lo limpia.
         const hasDiscoveryHit = codegraphOk ? discoveryHitByRequest.get(sessionId) === true : false
         if (shouldBlockCodeRead({
           isCodeFile, isLiteralGrep, isSpecTasksPath, isDocsPath, isTaskTracked, codegraphOk, hasDiscoveryHit,
         })) {
+          // Métrica de evasión real (misma convención que engramBypassCount:648):
+          // cuántas lecturas de código saltaron el gate sin explore completado.
+          try {
+            const st = readState(directory)
+            if (st) {
+              st.codeReadBlockedCount = (st.codeReadBlockedCount || 0) + 1
+              persistState(directory, st, ["codeReadBlockedCount"])
+            }
+          } catch {}
+          try { console.warn(`[ostacky] code_read_blocked: sin codegraph_explore completado en sesión (${targetPath || "query"})`) } catch {}
           throw new Error(
             `BLOCKED: sin discovery estructural en esta sesión — llamá codegraph_codegraph_explore("${targetPath || "query"}") antes de Read/Grep/Glob de código`
           )
@@ -952,9 +1010,10 @@ export default {
       // Track discovery hit to allow subsequent Reads
       const tool: string = event.tool as string
       const sessionId: string = (event.sessionID ?? "default") as string
-      // (fix-codegraph-gate) Evidencia REAL de discovery: un `codegraph_explore` completado en ESTA
-      // sesión abre el gate de lecturas de código. Se marca aunque el resultado venga vacío, a
-      // propósito: "CodeGraph no tiene este archivo en su índice" es justamente el caso donde el
+      // (fix-codegraph-gate) Evidencia REAL de discovery: un `codegraph_explore` completado en ESTE
+      // request abre el gate de lecturas de código (el hook "prompt" invalida el hit en cada
+      // prompt no-trivial). Se marca aunque el resultado venga vacío, a propósito:
+      // "CodeGraph no tiene este archivo en su índice" es justamente el caso donde el
       // Read TIENE que poder pasar si hubo `codegraph_explore`.
       if (marksDiscovery(tool)) {
         try {

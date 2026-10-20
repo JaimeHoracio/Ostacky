@@ -114,3 +114,11 @@ Principio: **eficacia > recorte** — si recorte rompiera caché y saliera más 
 ## Propose Flow (1+)
 
 `openspec-propose` SHALL Paso 0: `codegraph_codegraph_explore` + `engram_mem_search` sobre el área (si no se hicieron ya en el request) **antes** de `openspec new`. Citá símbolos existentes en `proposal/design`; sin esto dispara `WARN:codegraphBypass` y `design.md` alucina API. Ver `assets/skills/openspec-propose/SKILL.md: Paso 0` y `brainstorming` (router por nivel: `brainstorming` decide 0/0+1/1+, `openspec-explore` es stance sin nivel).
+
+## CI — openspec validate (remediación)
+
+El job `test` de `.github/workflows/ci.yml` corre `bunx openspec validate --all --strict` (dep pinneada en `package.json`). Si falla en `main`: un delta/spec inválido entró — NO archivearlo roto ni hacer workaround. Protocolo:
+1. El output lista el item roto (`✗ change/<id>` / `✗ spec/<name>`) + `Details: openspec validate <id> --type change|spec` — ese comando da la causa exacta y los next steps (el CLI es autoexplicativo: headers `## ADDED/MODIFIED/REMOVED/RENAMED Requirements`, cada requirement con al menos un `#### Scenario:`).
+2. Debug de deltas parseados: `openspec show <id> --json --deltas-only`.
+3. Change WIP incompleto en `main` → completarlo o removerlo del repo; specs de `openspec/specs/` rotos → fixear el formato in-place.
+4. Si tocás `assets/` regenerá hashes (`bun run scripts/update-manifest-hashes.ts`) y usá `bun run test:safe` (nunca `bun test` full: se cuelga).

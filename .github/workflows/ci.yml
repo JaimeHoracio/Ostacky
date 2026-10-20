@@ -39,3 +39,6 @@ jobs:
 
       - name: Check manifest hashes
         run: bun run hash:check
+
+      - name: Validate OpenSpec specs
+        run: bunx openspec validate --all --strict

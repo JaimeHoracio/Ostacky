@@ -289,17 +289,32 @@ export async function installCodeGraph(toolsDir?: string): Promise<{ success: bo
  */
 export const OPENSPEC_NPM_PACKAGE = "@fission-ai/openspec";
 
-export function setupOpenSpec(projectRoot: string = findProjectRoot()): { success: boolean; message: string } {
-  const useBun = isCommandAvailable("bun");
+/**
+ * Puntos de inyección para tests. En producción se usan las implementaciones
+ * reales; los tests pasan stubs en vez de mockear módulos con `mock.module`,
+ * que en Bun filtra el mock a otros archivos del mismo proceso y puede colgar
+ * el runner al 100% de CPU o corromper tests ajenos.
+ */
+export interface SetupOpenSpecDeps {
+  execFileSync?: (command: string, args: string[], options?: Record<string, unknown>) => unknown;
+  isCommandAvailable?: (cmd: string) => boolean;
+  getCommandInvocation?: typeof getCommandInvocation;
+}
+
+export function setupOpenSpec(projectRoot: string = findProjectRoot(), deps: SetupOpenSpecDeps = {}): { success: boolean; message: string } {
+  const execFile = deps.execFileSync ?? execFileSync;
+  const isAvailable = deps.isCommandAvailable ?? isCommandAvailable;
+  const invocationFor = deps.getCommandInvocation ?? getCommandInvocation;
+  const useBun = isAvailable("bun");
   const fail = (msg: string): { success: false; message: string } => ({ success: false, message: msg });
 
   // Intento 1: bunx/npx con nombre scoped (caso normal, sin side effects).
   const tryDirect = (): boolean => {
     try {
-      const invocation = getCommandInvocation(useBun ? "bunx" : "npx", useBun
+      const invocation = invocationFor(useBun ? "bunx" : "npx", useBun
         ? [OPENSPEC_NPM_PACKAGE, "init", "--tools", "opencode", "--force"]
         : ["--yes", OPENSPEC_NPM_PACKAGE, "init", "--tools", "opencode", "--force"]);
-      execFileSync(invocation.command, invocation.args, {
+      execFile(invocation.command, invocation.args, {
         stdio: "pipe",
         timeout: 120_000,
         cwd: projectRoot,
@@ -313,7 +328,7 @@ export function setupOpenSpec(projectRoot: string = findProjectRoot()): { succes
   // Intento 2: instalar OpenSpec globalmente y ejecutar el binario directo.
   // Side effect: mutación del sistema (install -g). Solo se ejecuta si el intento 1 falló.
   const tryInstallGlobal = (): { ok: boolean; error?: string } => {
-    if (!useBun && !isCommandAvailable("npm")) {
+    if (!useBun && !isAvailable("npm")) {
       return { ok: false, error: "Ni bun ni npm están disponibles para instalar OpenSpec globalmente" };
     }
     const pkgManager = useBun ? "bun" : "npm";
@@ -321,14 +336,14 @@ export function setupOpenSpec(projectRoot: string = findProjectRoot()): { succes
       ? ["add", "-g", OPENSPEC_NPM_PACKAGE]
       : ["install", "-g", OPENSPEC_NPM_PACKAGE];
     try {
-      const invocation = getCommandInvocation(pkgManager, installArgs);
-      execFileSync(invocation.command, invocation.args, { stdio: "pipe", timeout: 120_000 });
+      const invocation = invocationFor(pkgManager, installArgs);
+      execFile(invocation.command, invocation.args, { stdio: "pipe", timeout: 120_000 });
     } catch (installErr) {
       return { ok: false, error: `Instalación global falló: ${(installErr as Error).message}` };
     }
     try {
-      const retryInvocation = getCommandInvocation("openspec", ["init", "--tools", "opencode", "--force"]);
-      execFileSync(retryInvocation.command, retryInvocation.args, {
+      const retryInvocation = invocationFor("openspec", ["init", "--tools", "opencode", "--force"]);
+      execFile(retryInvocation.command, retryInvocation.args, {
         stdio: "pipe",
         timeout: 120_000,
         cwd: projectRoot,
