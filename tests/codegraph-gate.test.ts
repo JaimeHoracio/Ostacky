@@ -5,6 +5,7 @@ import {
   isCodeReadGated,
   marksDiscovery,
   shouldBlockCodeRead,
+  shouldInvalidateDiscoveryHit,
 } from "../assets/plugins/ostacky-controller/index.ts";
 
 const pluginPath = join(import.meta.dir, "..", "assets", "plugins", "ostacky-controller", "index.ts");
@@ -61,6 +62,23 @@ describe("codegraph-gate — la señal de discovery es una tool que EXISTE", () 
     for (const tool of ["read", "grep", "glob", "shell", "edit", "codegraph_codegraph_status"]) {
       expect(marksDiscovery(tool)).toBe(false);
     }
+  });
+});
+
+describe("codegraph-gate — horizonte por request (invalidación en prompt)", () => {
+  it("invariante: prompt trivial NO invalida el hit; prompt de trabajo SÍ", () => {
+    // Un saludo no invalida: el plugin le inyecta "No hagas Discovery" — limpiar ahí
+    // crearía instrucción y gate contradictorias.
+    expect(shouldInvalidateDiscoveryHit(true)).toBe(false);
+    // Un prompt de trabajo invalida: contrato remove-discovery-cache-phantom
+    // ("reuso del output ya obtenido en el request") + instrucción §1 del agente.
+    expect(shouldInvalidateDiscoveryHit(false)).toBe(true);
+  });
+
+  it("cableado: el hook prompt llama al predicado y elimina el hit del memo", () => {
+    const src = readFileSync(pluginPath, "utf-8");
+    expect(src).toContain("shouldInvalidateDiscoveryHit(trivial)");
+    expect(src).toContain("discoveryHitByRequest.delete(sessionId)");
   });
 });
 

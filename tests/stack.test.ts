@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
-import { buildEngramDownloadUrl, buildLocalMcpCommand, OPENSPEC_NPM_PACKAGE } from '../src/stack.js';
+import { beforeEach, describe, expect, it } from 'bun:test';
+import { buildEngramDownloadUrl, buildLocalMcpCommand, OPENSPEC_NPM_PACKAGE, setupOpenSpec } from '../src/stack.js';
 
 describe('buildEngramDownloadUrl', () => {
     it("uses Engram's Windows release platform identifier", () => {
@@ -49,40 +49,34 @@ describe('setupOpenSpec fallback chain', () => {
     let available: { bun: boolean; npm: boolean } = { bun: true, npm: false };
     let script: ScriptedExec = () => false;
 
+    // Sin `mock.module`: en Bun el mock de un módulo se filtra a los demás
+    // archivos del mismo proceso (stack + scope-spaces colgaban el runner al
+    // 100% de CPU) y `mock.restore()` no lo des-registra. `setupOpenSpec`
+    // acepta estas dependencias como segundo parámetro.
+    const deps = () => ({
+        isCommandAvailable: (cmd: string) => {
+            if (cmd === 'bun') return available.bun;
+            if (cmd === 'npm') return available.npm;
+            return true;
+        },
+        execFileSync: (command: string, args: string[]) => {
+            const call: ExecCall = { command, args: [...args] };
+            execCalls.push(call);
+            if (script(call, execCalls.length - 1)) {
+                throw new Error(`simulated failure: ${command} ${args.join(' ')}`);
+            }
+            return Buffer.alloc(0);
+        },
+    });
+
     beforeEach(() => {
         execCalls = [];
         available = { bun: true, npm: false };
         script = () => false;
-        mock.module('../src/fs.js', () => {
-            const actual = require('../src/fs.js');
-            return {
-                ...actual,
-                isCommandAvailable: (cmd: string) => {
-                    if (cmd === 'bun') return available.bun;
-                    if (cmd === 'npm') return available.npm;
-                    return actual.isCommandAvailable(cmd);
-                },
-            };
-        });
-        mock.module('child_process', () => ({
-            execFileSync: (command: string, args: string[]) => {
-                const call: ExecCall = { command, args: [...args] };
-                execCalls.push(call);
-                if (script(call, execCalls.length - 1)) {
-                    throw new Error(`simulated failure: ${command} ${args.join(' ')}`);
-                }
-                return Buffer.alloc(0);
-            },
-        }));
-    });
-
-    afterEach(() => {
-        mock.restore();
     });
 
     it('succeeds via tryDirect when bunx works on first try', async () => {
-        const { setupOpenSpec } = await import('../src/stack.js');
-        const result = setupOpenSpec('/tmp/fake-root');
+        const result = setupOpenSpec('/tmp/fake-root', deps());
         expect(result.success).toBe(true);
         expect(result.message).toBe('OpenSpec configurado para OpenCode');
         // Only one exec call expected: bunx with the scoped package name.
@@ -100,8 +94,7 @@ describe('setupOpenSpec fallback chain', () => {
     it('falls back to global install when bunx fails (covers edge-case resolver)', async () => {
         // First call (bunx) throws. Subsequent calls succeed.
         script = (_call, i) => i === 0;
-        const { setupOpenSpec } = await import('../src/stack.js');
-        const result = setupOpenSpec('/tmp/fake-root');
+        const result = setupOpenSpec('/tmp/fake-root', deps());
         expect(result.success).toBe(true);
         expect(result.message).toMatch(/instalado globalmente con bun/);
         // Expect 3 calls: bunx (fail), bun add -g, openspec init (success).
@@ -116,8 +109,7 @@ describe('setupOpenSpec fallback chain', () => {
     it('returns actionable error when both bunx and global install fail', async () => {
         // All exec calls fail.
         script = () => true;
-        const { setupOpenSpec } = await import('../src/stack.js');
-        const result = setupOpenSpec('/tmp/fake-root');
+        const result = setupOpenSpec('/tmp/fake-root', deps());
         expect(result.success).toBe(false);
         expect(result.message).toMatch(/Soluci\u00f3n manual: ejecuta `bun add -g @fission-ai\/openspec`/);
         expect(result.message).toMatch(/install-stack de nuevo/);
@@ -128,8 +120,7 @@ describe('setupOpenSpec fallback chain', () => {
         available = { bun: false, npm: true };
         // First call (npx) throws. Subsequent calls succeed.
         script = (_call, i) => i === 0;
-        const { setupOpenSpec } = await import('../src/stack.js');
-        const result = setupOpenSpec('/tmp/fake-root');
+        const result = setupOpenSpec('/tmp/fake-root', deps());
         expect(result.success).toBe(true);
         expect(result.message).toMatch(/instalado globalmente con npm/);
         expect(execCalls[0].command).toBe('npx');
@@ -141,8 +132,7 @@ describe('setupOpenSpec fallback chain', () => {
     it('skips global install when neither bun nor npm is available', async () => {
         available = { bun: false, npm: false };
         script = () => true; // bunx fails
-        const { setupOpenSpec } = await import('../src/stack.js');
-        const result = setupOpenSpec('/tmp/fake-root');
+        const result = setupOpenSpec('/tmp/fake-root', deps());
         expect(result.success).toBe(false);
         expect(result.message).toMatch(/Soluci\u00f3n manual: ejecuta `npm install -g/);
         // Only the initial npx attempt should have happened.

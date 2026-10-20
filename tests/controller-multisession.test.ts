@@ -196,6 +196,95 @@ describe('controller multi-sesión (integración)', () => {
         }
     }, 60_000);
 
+    it('B no puede consumir, refrescar, bloquear ni abandonar la decisión de ejecución de A', async () => {
+        const { root, statePath } = newProject();
+        const a = new McpClient(statePath, root);
+        const b = new McpClient(statePath, root);
+        try {
+            await a.init();
+            await b.init();
+
+            await a.call('start_request', { requestId: 'req-A' }, 'sess-A');
+            const disc = await a.call(
+                'record_discovery',
+                { level: '0+1', snapshot: { symbols: [{ name: 'x' }], files: ['a.ts'], estLines: 5 } },
+                'sess-A'
+            );
+            await a.call('consume_route_decision', { decisionId: disc.routeDecisionId, choice: 'DIRECT' }, 'sess-A');
+            const exec = await a.call(
+                'record_execution_analysis',
+                {
+                    snapshot: {
+                        codegraphUsed: ['a'],
+                        recommendation: 'INLINE',
+                        reasons: ['single file'],
+                        reasoning: { files: ['a.ts'], estLines: 5 },
+                        taskCount: 1,
+                        expectedTaskIds: ['T1'],
+                    },
+                },
+                'sess-A'
+            );
+            expect(exec.state).toBe('EXECUTION_DECISION_PENDING');
+
+            // B no puede tocar la decisión pendiente de A
+            expect(
+                (await b.call('consume_execution_decision', { decisionId: exec.executionDecisionId, mode: 'INLINE' }, 'sess-B'))
+                    .error
+            ).toContain('otra sesión');
+            expect((await b.call('refresh_decision', {}, 'sess-B')).error).toContain('otra sesión');
+            expect((await b.call('block', { reason: 'nope' }, 'sess-B')).error).toContain('otra sesión');
+            expect((await b.call('abandon', { reason: 'nope' }, 'sess-B')).error).toContain('otra sesión');
+            expect((await b.call('complete_task', { taskId: 'T1' }, 'sess-B')).error).toContain('otra sesión');
+
+            // la decisión de A sigue viva: A la consume sin problemas
+            const aConsume = await a.call(
+                'consume_execution_decision',
+                { decisionId: exec.executionDecisionId, mode: 'INLINE' },
+                'sess-A'
+            );
+            expect(aConsume.state).toBe('EXECUTING_INLINE');
+        } finally {
+            await b.stop();
+            await a.stop();
+        }
+    }, 60_000);
+
+    it('B no puede consumir la decisión de ruta de A y A conserva la suya', async () => {
+        const { root, statePath } = newProject();
+        const a = new McpClient(statePath, root);
+        const b = new McpClient(statePath, root);
+        try {
+            await a.init();
+            await b.init();
+
+            await a.call('start_request', { requestId: 'req-A' }, 'sess-A');
+            const disc = await a.call(
+                'record_discovery',
+                { level: '0+1', snapshot: { symbols: [{ name: 'x' }], files: ['a.ts'], estLines: 5 } },
+                'sess-A'
+            );
+            expect(disc.state).toBe('ROUTE_DECISION_PENDING');
+
+            const bRoute = await b.call(
+                'consume_route_decision',
+                { decisionId: disc.routeDecisionId, choice: 'DIRECT' },
+                'sess-B'
+            );
+            expect(bRoute.error).toContain('otra sesión');
+
+            const aRoute = await a.call(
+                'consume_route_decision',
+                { decisionId: disc.routeDecisionId, choice: 'DIRECT' },
+                'sess-A'
+            );
+            expect(aRoute.state).toBe('EXECUTION_ANALYSIS');
+        } finally {
+            await b.stop();
+            await a.stop();
+        }
+    }, 60_000);
+
     it('al cerrar las sesiones no queda basura: sin .tmp/.lock y backups acotados', async () => {
         const { root, statePath } = newProject();
         const dir = join(root, '.opencode');
