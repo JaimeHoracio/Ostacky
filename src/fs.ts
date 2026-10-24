@@ -84,25 +84,27 @@ export function initGitRepo(dir: string): void {
 
 /**
  * Resuelve el config dir GLOBAL de OpenCode (scope global).
- * Linux/macOS: `~/.config/opencode` respetando `XDG_CONFIG_HOME`
- * (`$XDG_CONFIG_HOME/opencode` cuando está seteado). Windows: config dir
- * global de OpenCode según SO (`%APPDATA%/opencode` con fallback a
- * `~/.config/opencode`). WSL se trata como Linux (platform linux).
+ * Espeja `Global.Path.config` de OpenCode v2 en las TRES plataformas:
+ * 1. `OPENCODE_CONFIG_DIR` si esta seteado (override total, se usa tal cual,
+ *    sin sufijo `opencode`).
+ * 2. `$XDG_CONFIG_HOME/opencode`.
+ * 3. `~/.config/opencode`.
+ *
+ * En Windows OpenCode NO usa `%APPDATA%` para config (verificado contra el
+ * bundle de v2.0.32 y `opencode debug paths`: `config = (XDG_CONFIG_HOME ||
+ * ~/.config) + "/opencode"`, sin branch por plataforma). Escribir en
+ * `%APPDATA%/opencode` deja artefactos que OpenCode nunca lee.
  */
 export function getGlobalOpenCodeDir(opts?: {
-  platform?: string;
   env?: NodeJS.ProcessEnv;
   home?: string;
 }): string {
-  const platform = opts?.platform ?? process.platform;
   const env = opts?.env ?? process.env;
   const home = opts?.home ?? homedir();
+  const explicit = env.OPENCODE_CONFIG_DIR?.trim();
+  if (explicit) return explicit;
   const xdg = env.XDG_CONFIG_HOME?.trim();
   if (xdg) return join(xdg, "opencode");
-  if (platform === "win32") {
-    const appdata = env.APPDATA?.trim();
-    if (appdata) return join(appdata, "opencode");
-  }
   return join(home, ".config", "opencode");
 }
 

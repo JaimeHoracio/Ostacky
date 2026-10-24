@@ -3,11 +3,13 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { computeTreeHash } from "../src/fs.js";
 import { sha256 } from "../src/security.js";
-import { syncVersion } from "./sync-version.ts";
+import { syncVersion } from "./sync-version.js";
 
 interface ManifestItem {
+  name?: string;
   file: string;
   sha256: string | null;
+  sourceSha256?: string | null;
 }
 
 interface Manifest {
@@ -47,6 +49,25 @@ function calculateHash(projectRoot: string, item: ManifestItem, category?: strin
   return sha256(readFileSync(assetPath, "utf-8"));
 }
 
+/**
+ * Hash de un MCP server: `sha256` = hash del artefacto que el installer copia
+ * (el bundle de `dist/mcp/<name>/index.js` si existe, si no el tree hash del
+ * source) y `sourceSha256` = tree hash del source en `assets/mcp/<name>/`.
+ *
+ * El installer valida el artefacto contra `sha256` y, en el fallback dev,
+ * contra `sourceSha256`. Sin bundle los dos coinciden.
+ */
+function calculateMcpHashes(
+  projectRoot: string,
+  item: ManifestItem
+): { artifactHash: string; sourceHash: string } {
+  const sourceHash = calculateHash(projectRoot, item, "mcpServers");
+  if (!item.name) throw new Error(`mcpServers sin name en el manifest: ${item.file}`);
+  const bundlePath = join(projectRoot, "dist", "mcp", item.name, "index.js");
+  const artifactHash = existsSync(bundlePath) ? sha256(readFileSync(bundlePath, "utf-8")) : sourceHash;
+  return { artifactHash, sourceHash };
+}
+
 /** Updates all manifest checksums or throws when --check finds drift. */
 export function updateManifestHashes(projectRoot: string, checkOnly = false): boolean {
   const manifestPath = join(projectRoot, "manifest.json");
@@ -62,6 +83,21 @@ export function updateManifestHashes(projectRoot: string, checkOnly = false): bo
 
   for (const [key, category] of categories) {
     for (const item of manifest[key] ?? []) {
+      if (category === "mcpServers") {
+        const { artifactHash, sourceHash } = calculateMcpHashes(projectRoot, item);
+        if (item.sha256 !== artifactHash) {
+          if (checkOnly) throw new Error(`Hash desactualizado para ${item.file} (sha256 del artefacto)`);
+          item.sha256 = artifactHash;
+          changed = true;
+        }
+        if (item.sourceSha256 !== sourceHash) {
+          if (checkOnly) throw new Error(`Hash desactualizado para ${item.file} (sourceSha256)`);
+          item.sourceSha256 = sourceHash;
+          changed = true;
+        }
+        continue;
+      }
+
       const hash = calculateHash(projectRoot, item as ManifestItem, category);
       if (item.sha256 !== hash) {
         if (checkOnly) throw new Error(`Hash desactualizado para ${item.file}`);

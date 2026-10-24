@@ -1,7 +1,64 @@
 import { existsSync, readFileSync, readdirSync } from "fs";
 import { join, delimiter, isAbsolute } from "path";
 import { findOpenCodeConfig, readOpenCodeConfig } from "./config.js";
-import { findOpenCodeDir } from "./fs.js";
+import { findOpenCodeDir, getGlobalOpenCodeDir } from "./fs.js";
+
+/**
+ * Artefactos de Ostacky en el config dir GLOBAL. OpenCode V2 dedupea plugins
+ * por `id` y conserva la PRIMERA ocurrencia en orden de arranque (el config
+ * global se descubre antes que el del proyecto): con el mismo id la copia
+ * global gana y la local queda `failed: "Duplicate plugin ID"`, o sea los gates
+ * dejan de aplicarse sin avisar. La copia global nueva declara
+ * `ostacky-controller-global` y se retira sola si hay instalación local; solo
+ * las copias legacy (id compartido) colisionan. Solo detecta: nunca borra.
+ */
+export function globalOstackyArtifacts(globalDir: string = getGlobalOpenCodeDir()): string[] {
+  const found: string[] = [];
+  const candidates = [
+    join(globalDir, "agent", "ostacky.md"),
+    join(globalDir, "plugins", "ostacky-controller", "index.ts"),
+    join(globalDir, "plugin", "ostacky-controller", "index.ts"),
+    join(globalDir, "command", "ostacky.md"),
+  ];
+  for (const p of candidates) {
+    try {
+      if (existsSync(p)) found.push(p);
+    } catch {}
+  }
+  for (const cfgName of ["opencode.json", "opencode.jsonc"]) {
+    const cfg = join(globalDir, cfgName);
+    try {
+      if (!existsSync(cfg)) continue;
+      const raw = readFileSync(cfg, "utf-8");
+      const json = JSON.parse(raw.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, ""));
+      const servers = (json as any)?.mcp?.servers ?? (json as any)?.mcp ?? {};
+      if (servers && servers["ostacky-controller"]) found.push(cfg);
+    } catch {}
+  }
+  return found;
+}
+
+/**
+ * ¿La copia global del plugin conoce el scope? `true` = declara el id
+ * `ostacky-controller-global` (convive con la local y le cede precedencia).
+ * `false` = copia legacy con id compartido (colisiona: gana el global).
+ * `null` = no hay plugin Ostacky en el scope global.
+ */
+export function globalPluginScopeAware(globalDir: string = getGlobalOpenCodeDir()): boolean | null {
+  const candidates = [
+    join(globalDir, "plugins", "ostacky-controller", "index.ts"),
+    join(globalDir, "plugin", "ostacky-controller", "index.ts"),
+    join(globalDir, "plugins", "ostacky-controller", "index.js"),
+    join(globalDir, "plugin", "ostacky-controller", "index.js"),
+  ];
+  for (const p of candidates) {
+    try {
+      if (!existsSync(p)) continue;
+      return readFileSync(p, "utf-8").includes("ostacky-controller-global");
+    } catch {}
+  }
+  return null;
+}
 
 /**
  * Checks V2 de `doctor`: validez API V2 del plugin, forma `mcp.servers`,
@@ -11,6 +68,21 @@ import { findOpenCodeDir } from "./fs.js";
  */
 export function checkDoctorV2(projectRoot: string): string[] {
   const lines: string[] = [];
+  // Convivencia global/local: solo avisa, nunca borra. Va antes de los checks
+  // con early-return para que el aviso no dependa del estado del proyecto.
+  const globalArtifacts = globalOstackyArtifacts();
+  if (globalArtifacts.length > 0) {
+    if (globalPluginScopeAware() === false) {
+      lines.push(
+        `⚠️ plugin global legacy (id compartido): OpenCode V2 conserva la copia global y deshabilita la local ("Duplicate plugin ID: ostacky-controller") — los gates los aplica el plugin global, no el local. Actualizá el global (npx ostacky install --scope global) o limpiá con: npx ostacky uninstall --scope global`
+      );
+    } else {
+      lines.push(
+        `⚠️ Instalación global convive con la local: ${globalArtifacts.join(", ")}. El plugin global cede la precedencia al local (ids distintos, sin colisión); el resto de los artefactos globales queda como residuo si no los usás. Limpiá con: npx ostacky uninstall --scope global`
+      );
+    }
+  }
+
   const cwd = projectRoot;
   const opencodeDir = findOpenCodeDir(cwd) || join(cwd, ".opencode");
 

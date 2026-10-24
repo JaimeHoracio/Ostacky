@@ -62,11 +62,15 @@ describe('scope — local default + global opt-in con espacios', () => {
     expect(parseScopeArg(['node', 'cli', '--scope', 'invalid'])).toBe(null);
   });
 
-  it('getGlobalOpenCodeDir resuelve por SO (XDG/APPDATA/home)', () => {
-    expect(getGlobalOpenCodeDir({ platform: 'linux', env: { XDG_CONFIG_HOME: '/custom/cfg' }, home: '/home/u' })).toBe('/custom/cfg/opencode');
-    expect(getGlobalOpenCodeDir({ platform: 'darwin', env: {}, home: '/Users/u' })).toBe('/Users/u/.config/opencode');
-    expect(getGlobalOpenCodeDir({ platform: 'win32', env: { APPDATA: 'C:\\Users\\A\\AppData\\Roaming' }, home: 'C:\\Users\\A' })).toBe('C:\\Users\\A\\AppData\\Roaming/opencode');
-    expect(getGlobalOpenCodeDir({ platform: 'win32', env: {}, home: '/home/u' })).toBe('/home/u/.config/opencode');
+  it('getGlobalOpenCodeDir espeja OpenCode v2 (OPENCODE_CONFIG_DIR/XDG/home, sin APPDATA)', () => {
+    expect(getGlobalOpenCodeDir({ env: { OPENCODE_CONFIG_DIR: '/custom/explicit' }, home: '/home/u' })).toBe('/custom/explicit');
+    expect(
+      getGlobalOpenCodeDir({ env: { OPENCODE_CONFIG_DIR: '/custom/explicit', XDG_CONFIG_HOME: '/custom/cfg' }, home: '/home/u' })
+    ).toBe('/custom/explicit');
+    expect(getGlobalOpenCodeDir({ env: { XDG_CONFIG_HOME: '/custom/cfg' }, home: '/home/u' })).toBe('/custom/cfg/opencode');
+    expect(getGlobalOpenCodeDir({ env: {}, home: '/Users/u' })).toBe('/Users/u/.config/opencode');
+    // Windows NO usa APPDATA para config: OpenCode lee ~/.config/opencode.
+    expect(getGlobalOpenCodeDir({ env: { APPDATA: 'C:\\Users\\A\\AppData\\Roaming' }, home: '/Users/A' })).toBe('/Users/A/.config/opencode');
   });
 
   it('getOpenCodeDirForScope global retorna dir global sin requerir proyecto', () => {

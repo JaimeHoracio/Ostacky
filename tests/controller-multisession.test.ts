@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -279,6 +279,64 @@ describe('controller multi-sesión (integración)', () => {
                 'sess-A'
             );
             expect(aRoute.state).toBe('EXECUTION_ANALYSIS');
+        } finally {
+            await b.stop();
+            await a.stop();
+        }
+    }, 60_000);
+
+    it('un dueño con heartbeat stale no bloquea: takeover automático auditado', async () => {
+        const { root, statePath } = newProject();
+        const a = new McpClient(statePath, root);
+        const b = new McpClient(statePath, root);
+        try {
+            await a.init();
+            await b.init();
+
+            await a.call('start_request', { requestId: 'req-A' }, 'sess-A');
+            // Estado resumible (no terminal para resume) antes de matar la sesión.
+            await a.call('record_discovery', { level: '0+1', snapshot: { files: ['x.ts'], estLines: 3, codegraph: { symbols: ['x'] } } }, 'sess-A');
+            // Simula la sesión A muerta: la request sigue viva pero el latido es viejo.
+            const st = JSON.parse(readFileSync(statePath, 'utf-8'));
+            st.ownerHeartbeat = Date.now() - 16 * 60 * 1000;
+            writeFileSync(statePath, JSON.stringify(st), 'utf-8');
+
+            const bStart = await b.call('start_request', { requestId: 'req-B' }, 'sess-B');
+            expect(bStart.conflict).toBeUndefined();
+            expect(bStart.continued).toBe(true);
+            expect(bStart.ownerSessionId).toBe('sess-B');
+            // La request no se pierde: se retoma la de A.
+            expect(bStart.requestId).toBe('req-A');
+
+            const disk = JSON.parse(readFileSync(statePath, 'utf-8'));
+            expect(disk.ownerSessionId).toBe('sess-B');
+
+            const audit = readFileSync(join(root, '.opencode', 'ostacky-audit.jsonl'), 'utf-8');
+            expect(audit).toContain('session_takeover_stale');
+        } finally {
+            await b.stop();
+            await a.stop();
+        }
+    }, 60_000);
+
+    it('sin heartbeat (null/0) se trata como dueño muerto', async () => {
+        const { root, statePath } = newProject();
+        const a = new McpClient(statePath, root);
+        const b = new McpClient(statePath, root);
+        try {
+            await a.init();
+            await b.init();
+
+            await a.call('start_request', { requestId: 'req-A' }, 'sess-A');
+            await a.call('record_discovery', { level: '0+1', snapshot: { files: ['x.ts'], estLines: 3, codegraph: { symbols: ['x'] } } }, 'sess-A');
+            const st = JSON.parse(readFileSync(statePath, 'utf-8'));
+            st.ownerHeartbeat = 0;
+            writeFileSync(statePath, JSON.stringify(st), 'utf-8');
+
+            const bStart = await b.call('start_request', { requestId: 'req-B' }, 'sess-B');
+            expect(bStart.conflict).toBeUndefined();
+            expect(bStart.continued).toBe(true);
+            expect(bStart.ownerSessionId).toBe('sess-B');
         } finally {
             await b.stop();
             await a.stop();

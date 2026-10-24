@@ -105,6 +105,14 @@ Principio: **eficacia > recorte** — si recorte rompiera caché y saliera más 
 
 `src/controller-core.ts` CANÓNICO para `STATES/TRANSITIONS/DEFAULT_STATE`; mirrors generados en `assets/plugins/ostacky-controller/controller-core.ts` (TS) y `assets/mcp/ostacky-controller/controller-core.js` (JS strippado) vía `bun run scripts/sync-controller-core.ts` (prebuild). No editar mirrors. `index.ts` importa de `./controller-core.ts` self-contained. Import siempre `./security.ts` (el server V2 no resuelve `.js→.ts`).
 
+## Release — MCP bundles (`dist/mcp`)
+
+`bun run build:mcp` compila cada `mcpServers[]` del manifest a `dist/mcp/<name>/index.js` autocontenido (sin `node_modules` al lado). `installMcpServer` prefiere ese artefacto; si no existe cae al fallback dev (copiar `assets/mcp/<name>/` + `bun install`/`npm install` en la máquina del usuario).
+
+- `manifest.json`: `mcpServers[].sha256` = hash del **artefacto** que se copia (bundle si existe, si no el tree hash del source); `sourceSha256` = tree hash de `assets/mcp/<name>/` siempre. `assertBundledTreeHash(category, name, hash, field)` valida el campo que corresponde al camino elegido.
+- `bun run hash:update` (build:mcp + hashes) es el camino para actualizar el manifest; `hash:check` corre en CI después del build.
+- CI pinnea `bun-version` (1.4.2): el hash del bundle depende del output de bun.
+
 ## Prompt-efficiency
 
 - `ostacky.md` 109→72 líneas (diet estable cacheable). Tiered vía suffix, no reemplazo `system[0]`.
@@ -121,4 +129,4 @@ El job `test` de `.github/workflows/ci.yml` corre `bunx openspec validate --all 
 1. El output lista el item roto (`✗ change/<id>` / `✗ spec/<name>`) + `Details: openspec validate <id> --type change|spec` — ese comando da la causa exacta y los next steps (el CLI es autoexplicativo: headers `## ADDED/MODIFIED/REMOVED/RENAMED Requirements`, cada requirement con al menos un `#### Scenario:`).
 2. Debug de deltas parseados: `openspec show <id> --json --deltas-only`.
 3. Change WIP incompleto en `main` → completarlo o removerlo del repo; specs de `openspec/specs/` rotos → fixear el formato in-place.
-4. Si tocás `assets/` regenerá hashes (`bun run scripts/update-manifest-hashes.ts`) y usá `bun run test:safe` (nunca `bun test` full: se cuelga).
+4. Si tocás `assets/` regenerá hashes (`bun run hash:update`) y usá `bun run test:safe` (nunca `bun test` full: se cuelga).

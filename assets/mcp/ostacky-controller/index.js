@@ -49,6 +49,11 @@ import {
 // y al umbral habilita recovery (refresh_decision) sin ejecutar nada por sí mismo.
 const CONSUME_FAIL_THRESHOLD = 3;
 
+// Ownership con heartbeat: un dueño sin latido por más de esto se considera
+// muerto (TUI cerrada, proceso kill) y la sesión nueva puede reclamar la
+// request sin pedirle takeover al usuario. 15 min cubre tools largas.
+const OWNER_STALE_MS = 15 * 60 * 1000;
+
 // --- Audit JSONL (D5) — single source: src/audit-jsonl.ts ---
 function getAuditPath(projectRoot) {
     return join(projectRoot, '.opencode', 'ostacky-audit.jsonl');
@@ -119,6 +124,39 @@ function readAuditJsonl(projectRoot, opts = {}) {
 
 // T1: non-blocking wait — replaces busy-wait spins that froze the event loop
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function isPidAlive(pid) {
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/** Pid dueño del lock, o null si el archivo no existe / está corrupto. */
+function readLockPid(pidPath) {
+    try {
+        const pid = parseInt(readFileSync(pidPath, 'utf8').trim(), 10);
+        return Number.isNaN(pid) ? null : pid;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Antigüedad del archivo de pid. Un lock sin timestamp recién escrito es una
+ * adquisición en curso (el dueño escribe el timestamp inmediatamente después);
+ * si ya pasó el grace, es basura de un crash.
+ */
+function lockPidAgeMs(pidPath) {
+    try {
+        return Date.now() - statSync(pidPath).mtimeMs;
+    } catch {
+        return Number.POSITIVE_INFINITY;
+    }
+}
 
 function getProjectRoot(statePath) {
     if (!statePath) return resolve(process.cwd());
@@ -410,6 +448,12 @@ function cleanupTmpFiles(statePath) {
                     try {
                         lockTs = parseInt(readFileSync(tsPath, 'utf8').trim(), 10);
                     } catch {}
+                    if (lockPid && String(lockPid) !== String(process.pid) && isPidAlive(parseInt(lockPid, 10))) {
+                        // Dueño vivo = lock activo, haya o no timestamp. Antes un
+                        // lock sin timestamp se borraba igual y se robaba el lock
+                        // de un proceso que estaba escribiendo.
+                        continue;
+                    }
                     if (lockPid && lockTs && !Number.isNaN(lockTs)) {
                         const age = Date.now() - lockTs;
                         if (age < staleWindow && String(lockPid) !== String(process.pid)) {
@@ -617,33 +661,48 @@ class OstackyController {
         const maxAttempts = this.#lockMaxAttempts;
         const lockTimeout = 1000;
         const staleWindow = 15000;
+        const orphanGraceMs = 1000;
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
             try {
-                // Check existing lock BEFORE overwriting — corrects mutual-exclusion bug
+                // Check existing lock BEFORE overwriting — corrects mutual-exclusion bug.
+                // Sin heartbeat legible el lock es huérfano (proceso muerto entre el
+                // write del pid y el del timestamp) o una adquisición en curso. Antes
+                // se seguía derecho al `wx`, que fallaba con EEXIST para siempre: el
+                // controlador no podía persistir NINGUNA decisión y el consume se
+                // perdía (el agente volvía a preguntar ruta/ejecución en loop).
+                let lockAge = NaN;
                 try {
-                    const lockContent = readFileSync(this.#lockHeartbeatPath, 'utf8');
-                    const lockAge = Date.now() - parseInt(lockContent, 10);
-                    if (!Number.isNaN(lockAge) && lockAge < staleWindow) {
-                        const base = Math.min(lockTimeout, 100 * Math.pow(2, attempt));
-                        const jitter = Math.floor(Math.random() * 200) - 100;
-                        const waitMs = Math.max(0, base + jitter);
-                        if (waitMs > 0) await sleep(waitMs);
-                        continue;
-                    }
-                    if (!Number.isNaN(lockAge) && lockAge >= staleWindow) {
-                        try {
-                            const lockPid = readFileSync(this.#lockPidPath, 'utf8').trim();
-                            try {
-                                process.kill(parseInt(lockPid, 10), 0);
-                                // PID alive but stale beyond window — force release
-                            } catch {
-                                // PID dead — force release
-                            }
-                        } catch {}
-                        this.#releaseLock();
-                    }
+                    lockAge = Date.now() - parseInt(readFileSync(this.#lockHeartbeatPath, 'utf8'), 10);
                 } catch {
-                    // No heartbeat file — try to acquire
+                    // sin timestamp
+                }
+                if (!Number.isNaN(lockAge) && lockAge < staleWindow) {
+                    const base = Math.min(lockTimeout, 100 * Math.pow(2, attempt));
+                    const jitter = Math.floor(Math.random() * 200) - 100;
+                    const waitMs = Math.max(0, base + jitter);
+                    if (waitMs > 0) await sleep(waitMs);
+                    continue;
+                }
+                if (!Number.isNaN(lockAge) && lockAge >= staleWindow) {
+                    // Stale: liberar SOLO si el dueño ya no existe. Un dueño vivo
+                    // con heartbeat viejo puede estar en una operación larga:
+                    // robarle el lock haría que su write se pierda. (`#releaseLock`
+                    // no sirve acá: verifica ownership y no toca el lock ajeno, así
+                    // que este camino era un no-op y el lock quedaba pegado.)
+                    const ownerPid = readLockPid(this.#lockPidPath);
+                    if (ownerPid === null || !isPidAlive(ownerPid)) this.#forceReleaseLock();
+                } else if (Number.isNaN(lockAge)) {
+                    const ownerPid = readLockPid(this.#lockPidPath);
+                    // pid ausente, dueño muerto, o pid viejo sin timestamp (crash
+                    // entre los dos writes) → basura: liberar. Un pid recién
+                    // escrito es una adquisición en curso: esperar.
+                    if (
+                        ownerPid === null ||
+                        !isPidAlive(ownerPid) ||
+                        lockPidAgeMs(this.#lockPidPath) > orphanGraceMs
+                    ) {
+                        this.#forceReleaseLock();
+                    }
                 }
                 // Atomic acquire with wx — fails if another process won the race
                 try {
@@ -703,6 +762,25 @@ class OstackyController {
             /* best-effort */
         }
         this.#lockOwner = false;
+    }
+
+    /**
+     * Libera un lock que NO es nuestro (huérfano o stale). `#releaseLock` se
+     * niega por diseño a tocar el lock de otro proceso, así que el "force
+     * release" viejo era un no-op y un lock de un proceso muerto quedaba
+     * pegado para siempre (todas las escrituras fallaban con lock timeout).
+     */
+    #forceReleaseLock() {
+        try {
+            unlinkSync(this.#lockPidPath);
+        } catch {
+            /* best-effort */
+        }
+        try {
+            unlinkSync(this.#lockHeartbeatPath);
+        } catch {
+            /* best-effort */
+        }
     }
 
     #heartbeatLock() {
@@ -1262,6 +1340,8 @@ class OstackyController {
 
         const caller = this.#callerSessionId;
         const owner = this.#state.ownerSessionId;
+        const ownerHeartbeat = this.#state.ownerHeartbeat ?? 0;
+        const ownerStale = !ownerHeartbeat || Date.now() - ownerHeartbeat > OWNER_STALE_MS;
         // OJO: `INTERPRETATION_PENDING` está en TERMINAL_STATES — es "terminal" para
         // decidir si se RESUME, pero NO significa que no haya trabajo. Por eso separamos:
         //  - resumeEligible: semántica ORIGINAL de start_request (no la tocamos).
@@ -1272,7 +1352,8 @@ class OstackyController {
             this.#state.state !== STATES.DONE &&
             !!owner &&
             !!caller &&
-            owner !== caller;
+            owner !== caller &&
+            !ownerStale;
 
         // ── Guard de ownership (multi-sesión) ──
         // Si hay una request viva de OTRA sesión y no se fuerza, NO pisamos nada:
@@ -1295,6 +1376,23 @@ class OstackyController {
                 message:
                     'Otra sesión posee la request activa. Reintentá con force:true para hacer takeover (queda auditado).',
             };
+        }
+
+        // Takeover automático de un dueño muerto (sin `force`): la request no se
+        // pierde, solo cambia de manos. Queda auditado para poder rastrearlo.
+        const staleTakeover =
+            !!owner &&
+            !!caller &&
+            owner !== caller &&
+            ownerStale &&
+            this.#state.state !== STATES.DONE &&
+            !!this.#state.requestId;
+        if (staleTakeover) {
+            await this.#audit(
+                this.#state.state,
+                'session_takeover_stale',
+                `from=${owner} to=${caller} heartbeatAgeMs=${Date.now() - ownerHeartbeat} requestId=${this.#state.requestId}`
+            );
         }
 
         // If not forcing and current state is active (not terminal), resume instead of reset
@@ -2066,15 +2164,19 @@ class OstackyController {
                 const task = this.#state.tasks[tid];
                 if (!task || task.status !== 'COMPLETED') continue;
                 let needle = String(verif).trim();
+                let declaredPath = null;
                 if (needle.startsWith('codegraph:')) needle = needle.slice('codegraph:'.length).trim();
                 else if (needle.startsWith('file:')) {
                     const rest = needle.slice('file:'.length).trim();
                     const parts = rest.split('contiene');
+                    declaredPath = (parts[0] || '').trim() || null;
                     needle = (parts[1] || parts[0] || '').trim() || rest;
                 } else if (needle.startsWith('test:')) continue;
                 if (!needle) continue;
                 let content = null;
-                const fp = task.filePath;
+                // El path de la verificación es la fuente: `task.filePath` puede no
+                // existir (tasks completadas sin archivo declarado).
+                const fp = task.filePath || declaredPath;
                 if (fp) {
                     try {
                         const abs =
@@ -2366,10 +2468,12 @@ class OstackyController {
                 if (!task || task.status !== 'COMPLETED') continue;
                 // Re-verificar via file content
                 let needle = String(verif).trim();
+                let declaredPath = null;
                 if (needle.startsWith('codegraph:')) needle = needle.slice('codegraph:'.length).trim();
                 else if (needle.startsWith('file:')) {
                     const rest = needle.slice('file:'.length).trim();
                     const parts = rest.split('contiene');
+                    declaredPath = (parts[0] || '').trim() || null;
                     needle = (parts[1] || parts[0] || '').trim() || rest;
                 } else if (needle.startsWith('test:')) {
                     // test-verification-execution: cierre re-verifica evidencia; antes se salteaba.
@@ -2384,7 +2488,9 @@ class OstackyController {
                 }
                 if (!needle) continue;
                 let content = null;
-                const fp = task.filePath;
+                // El path de la verificación es la fuente: `task.filePath` puede no
+                // existir (tasks completadas sin archivo declarado).
+                const fp = task.filePath || declaredPath;
                 if (fp) {
                     try {
                         const abs =
@@ -2679,11 +2785,34 @@ class OstackyController {
     }
 
     // --- fix-new-file-gate: ligadura validate → complete por filePath (mapa + fallback legacy) ---
+    /**
+     * Clave canónica de `lastValidated`. El plugin escribe paths absolutos y el
+     * agente manda el path relativo (o al revés); comparar por string exacto
+     * hacía que un validate reciente se viera ausente ("validate required").
+     */
+    _validatedKey(filePath) {
+        if (!filePath) return null;
+        try {
+            const abs =
+                filePath.startsWith('/') || /^[A-Za-z]:/.test(filePath)
+                    ? resolve(filePath)
+                    : resolve(getProjectRoot(this.#statePath), filePath);
+            return process.platform === 'win32' ? abs.toLowerCase() : abs;
+        } catch {
+            return filePath;
+        }
+    }
     _getValidatedFor(filePath) {
         const lv = this.#state.lastValidated;
         if (!lv || !filePath) return null;
-        if (lv.byFile && typeof lv.byFile === 'object' && lv.byFile[filePath]) return lv.byFile[filePath];
-        if (lv.filePath === filePath) return lv; // fallback slot legacy (single)
+        const key = this._validatedKey(filePath);
+        if (lv.byFile && typeof lv.byFile === 'object') {
+            if (lv.byFile[filePath]) return lv.byFile[filePath];
+            for (const [k, v] of Object.entries(lv.byFile)) {
+                if (this._validatedKey(k) === key) return v;
+            }
+        }
+        if (lv.filePath && this._validatedKey(lv.filePath) === key) return lv; // fallback slot legacy (single)
         return null;
     }
     async _setValidatedFor(filePath, hash, mode) {
@@ -2711,7 +2840,12 @@ class OstackyController {
     async _clearValidatedFor(filePath) {
         const lv = this.#state.lastValidated;
         if (lv && lv.byFile && typeof lv.byFile === 'object') {
-            if (filePath && lv.byFile[filePath]) delete lv.byFile[filePath];
+            if (filePath) {
+                const key = this._validatedKey(filePath);
+                for (const k of Object.keys(lv.byFile)) {
+                    if (k === filePath || this._validatedKey(k) === key) delete lv.byFile[k];
+                }
+            }
             if (Object.keys(lv.byFile).length === 0) this.#state.lastValidated = null;
             else this.#state.lastValidated = { byFile: lv.byFile, filePath: null, hash: null, ts: Date.now() };
         } else {
@@ -3270,19 +3404,39 @@ function extractCallerSessionId(ctx) {
     return null;
 }
 
+// ── Cola in-process (fix-consume-race-lock) ──────────────────────────────────
+// Code Mode emite varias tools en paralelo DENTRO del mismo proceso MCP y
+// `#state` es un único objeto compartido. Un `reloadFresh()` concurrente (p.ej.
+// un `get_state` en el mismo batch) reemplazaba `#state` mientras otro handler
+// tenía una transición en vuelo: el `#persist` serializaba el snapshot viejo y
+// el `consume_*` se perdía. El disco quedaba en `*_PENDING` y el agente volvía
+// a preguntar DIRECT/SPEC e INLINE/SUBAGENT. Serializar restaura el invariante
+// "un read-modify-write a la vez" también in-process.
+let opQueue = Promise.resolve();
+
+export function serializeOp(run) {
+    const next = opQueue.then(run, run);
+    opQueue = next.then(
+        () => {},
+        () => {}
+    );
+    return next;
+}
+
 function safeHandler(fn, options = {}) {
     const { maxRetries = 0, baseTimeout = 5000 } = options;
 
-    return async (params, ctx) => {
+    return (params, ctx) => serializeOp(async () => {
         // ── multi-sesión: identidad + estado fresco + lock por operación ──
-        // 1) sessionId del caller (de `_meta`), 2) re-lectura fresca desde disco
-        // (mata el snapshot congelado del cache `#loaded` cuando hay 2+ procesos),
-        // 3) lock reentrante durante TODO el read-modify-write → sin lost updates.
+        // 1) sessionId del caller (de `_meta`), 2) lock durante TODO el
+        // read-modify-write, 3) re-lectura fresca DENTRO del lock: leer antes de
+        // tomarlo dejaba una ventana donde otro proceso escribía y el persist
+        // posterior revertía esa escritura (lost update).
         let heldLock = false;
         try {
             controller.setCallerSession(extractCallerSessionId(ctx));
-            controller.reloadFresh();
             heldLock = await controller.beginWrite();
+            controller.reloadFresh();
         } catch {}
         const endOp = () => {
             if (!heldLock) return;
@@ -3361,12 +3515,12 @@ function safeHandler(fn, options = {}) {
                 };
             }
         }
-    };
+        });
 }
 
 const server = new McpServer({
     name: 'ostacky-controller',
-    version: '0.10.2',
+    version: '0.10.3',
 });
 
 server.registerTool(
@@ -3968,7 +4122,7 @@ function setupGracefulShutdown(ctrl) {
 }
 
 async function main() {
-    log('Starting ostacky-controller MCP v0.10.2...');
+    log('Starting ostacky-controller MCP v0.10.3...');
     log('State path:', { path: statePath });
     // Clean up stale tmp/lock files from previous runs
     cleanupTmpFiles(statePath);
