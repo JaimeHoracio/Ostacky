@@ -8,8 +8,14 @@ const packageJson = JSON.parse(
 
 describe("package build configuration", () => {
   it("bundles the CLI for published installations", () => {
-    expect(packageJson.scripts.build).toContain("src/cli.ts");
-    expect(packageJson.scripts.build).toContain("dist/cli.js");
+    expect(packageJson.scripts.build).toContain("build:cli");
+    expect(packageJson.scripts["build:cli"]).toContain("src/cli.ts");
+    expect(packageJson.scripts["build:cli"]).toContain("dist/cli.js");
+  });
+
+  it("bundles MCP servers for published installations", () => {
+    expect(packageJson.scripts.build).toContain("build:mcp");
+    expect(packageJson.scripts["build:mcp"]).toContain("build-mcp-bundles");
   });
 
   it("declares the dependencies required for build", () => {

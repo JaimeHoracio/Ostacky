@@ -11,6 +11,12 @@ export interface ManifestItem {
     description: string;
     version: string;
     sha256: string | null;
+    /**
+     * Tree hash de `assets/` — el source del que se construyó el artefacto.
+     * Para MCPs con bundle, `sha256` es el hash del bundle (lo que se instala) y
+     * `sourceSha256` el del árbol (lo que se compiló).
+     */
+    sourceSha256?: string | null;
 }
 
 export interface Manifest {
@@ -64,12 +70,20 @@ export function getBundledMcpPath(name: string): string {
  *
  * Nunca uses el manifest remoto de GitHub para verificar integridad: el tag y
  * el tarball npm pueden divergir (prepublishOnly regenera archivos sin
- * commitear). Ver tests/manifest-integrity.test.ts (incidente v0.10.2).
+ * commitear). Ver tests/manifest-integrity.test.ts (incidente v0.10.3).
  * Retorna null cuando el nombre no existe en el bundle.
  */
-export function getBundledExpectedHash(category: ManifestCategory, name: string): string | null {
-    const items = localManifest[category] ?? [];
-    return items.find((item) => item.name === name)?.sha256 ?? null;
+export type ManifestHashField = 'sha256' | 'sourceSha256';
+
+export function getBundledExpectedHash(
+    category: ManifestCategory,
+    name: string,
+    field: ManifestHashField = 'sha256'
+): string | null {
+    const items = (localManifest[category] ?? []) as Array<Record<string, unknown>>;
+    const found = items.find((item) => item.name === name);
+    const value = found?.[field];
+    return typeof value === 'string' ? value : null;
 }
 
 export function getRawUrl(repo: string, tag: string, path: string): string {

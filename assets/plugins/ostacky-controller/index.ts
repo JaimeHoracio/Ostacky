@@ -17,7 +17,9 @@
 // (solo tipos, borrado al transpilar) cargan sin dependencias externas.
 import type { Plugin } from "@opencode/plugin"
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, statSync, readdirSync, unlinkSync } from "node:fs"
-import { join, dirname, basename, resolve, relative, delimiter } from "node:path"
+import { join, dirname, basename, resolve, relative, delimiter, sep } from "node:path"
+import { homedir } from "node:os"
+import { fileURLToPath } from "node:url"
 import { SENSITIVE_DEFAULT, BASH_SENSITIVE_RE, isSensitive, extractPathsFromBash } from "./security.ts"
 import { isTrivial } from "./tiered.ts"
 import { STATES, TRANSITIONS, DEFAULT_STATE } from "./controller-core.ts"
@@ -29,6 +31,92 @@ const PING_INTERVAL_MS = 60_000
 const IDLE_THRESHOLD_MS = 45_000
 
 // DEFAULT_STATE imported from controller-core.ts
+
+// ─── Scope (global vs local) ─────────────────────────────────────────────────
+//
+// OpenCode V2 dedupea plugins por `id` y conserva la PRIMERA ocurrencia en
+// orden de arranque (el config global se descubre antes que el del proyecto).
+// Con el mismo id en las dos copias, la global gana y la local queda
+// `failed: "Duplicate plugin ID"` — el controller deja de aplicar sus gates sin
+// avisar. Para que la precedencia sea local-primero (igual que el resto de la
+// config de OpenCode), la copia global declara OTRO id y se retira sola cuando
+// el proyecto tiene instalación local.
+
+/**
+ * Config dir GLOBAL de OpenCode. Espeja `Global.Path.config` de OpenCode v2 en
+ * las tres plataformas: `OPENCODE_CONFIG_DIR` (override total, sin sufijo) →
+ * `$XDG_CONFIG_HOME/opencode` → `~/.config/opencode`. En Windows NO se usa
+ * `%APPDATA%` (OpenCode tampoco lo usa para config).
+ */
+export function resolveGlobalConfigDir(opts?: {
+  env?: NodeJS.ProcessEnv
+  home?: string
+}): string {
+  const env = opts?.env ?? process.env
+  const home = opts?.home ?? homedir()
+  const explicit = env.OPENCODE_CONFIG_DIR?.trim()
+  if (explicit) return explicit
+  const xdg = env.XDG_CONFIG_HOME?.trim()
+  if (xdg) return join(xdg, "opencode")
+  return join(home, ".config", "opencode")
+}
+
+/**
+ * id por copia: la global usa uno propio para no colisionar con la local.
+ * En win32 la comparación es case-insensitive porque los paths de Windows lo
+ * son: si el path real y el config dir difieren en mayúsculas, sin esto la
+ * copia global se clasificaría como local y volvería la colisión de ids.
+ */
+export function pluginIdFor(
+  pluginDir: string,
+  globalDir: string,
+  platform: string = process.platform
+): string {
+  if (!pluginDir) return "ostacky-controller"
+  try {
+    const norm = (p: string) => {
+      const abs = resolve(p)
+      return platform === "win32" ? abs.toLowerCase() : abs
+    }
+    const d = norm(pluginDir)
+    const g = norm(globalDir)
+    if (d === g || d.startsWith(g + sep)) return "ostacky-controller-global"
+  } catch {}
+  return "ostacky-controller"
+}
+
+/**
+ * ¿El proyecto tiene el plugin instalado en scope local? Mira solo el location
+ * dir (lo que descubre OpenCode), no ancestros: si el local vive en un ancestro
+ * que el server no carga, ceder la precedencia dejaría el proyecto sin gates.
+ */
+export function hasLocalPluginInstall(directory: string): boolean {
+  let dir: string
+  try {
+    dir = resolve(directory)
+  } catch {
+    return false
+  }
+  for (const kind of ["plugins", "plugin"]) {
+    for (const entry of ["index.ts", "index.js"]) {
+      try {
+        if (existsSync(join(dir, ".opencode", kind, "ostacky-controller", entry))) return true
+      } catch {}
+    }
+  }
+  return false
+}
+
+const PLUGIN_DIR = (() => {
+  try {
+    return dirname(fileURLToPath(import.meta.url))
+  } catch {
+    return ""
+  }
+})()
+
+const IS_GLOBAL_COPY = PLUGIN_DIR !== "" && pluginIdFor(PLUGIN_DIR, resolveGlobalConfigDir()) === "ostacky-controller-global"
+const PLUGIN_ID = IS_GLOBAL_COPY ? "ostacky-controller-global" : "ostacky-controller"
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -48,9 +136,18 @@ function lookupOnPath(name: string): string | null {
   return null
 }
 
-function getStatePath(directory: string): string {
+export function getStatePath(directory: string): string {
   if (process.env.OSTACKY_STATE_PATH) return process.env.OSTACKY_STATE_PATH
   const candidates = [join(directory, "opencode.json"), join(directory, "opencode.jsonc")]
+  // El MCP puede estar configurado en el opencode.json GLOBAL: si el plugin solo
+  // mira el del proyecto, lee/escribe OTRO state file y todos los gates (PENDING,
+  // ownership, lastValidated) quedan ciegos. Mismo orden que assets/plugins/engram.ts.
+  try {
+    const globalDir = resolveGlobalConfigDir()
+    if (globalDir) {
+      candidates.push(join(globalDir, "opencode.json"), join(globalDir, "opencode.jsonc"))
+    }
+  } catch {}
   for (const cand of candidates) {
     try {
       const raw = readFileSync(cand, "utf-8")
@@ -70,6 +167,59 @@ function readState(directory: string): any | null {
     return JSON.parse(raw)
   } catch {
     return null
+  }
+}
+
+/**
+ * Pendientes para recovery post-compaction. Fuente única del hook `compaction`
+ * y del hint de `chat.message`: lastHandoff → fallback <24h → expectedTasks.
+ * El checkpoint count-based del MCP solo escribe lastHandoff cada 3er
+ * complete_task, así que sin la tercera fuente el hint quedaba mudo en T1/T2.
+ */
+export function recoveryPending(state: any, directory?: string): { pending: string[]; nextSteps: string[] } {
+  const isPending = (id: string) => !state?.tasks?.[id] || state.tasks[id].status !== "COMPLETED"
+  const fromExpected = () => (Array.isArray(state?.expectedTasks) ? state.expectedTasks.filter(isPending) : [])
+  let pending: string[] = Array.isArray(state?.lastHandoff?.pendingTasks)
+    ? state.lastHandoff.pendingTasks.filter(isPending)
+    : []
+  let nextSteps: string[] = Array.isArray(state?.lastHandoff?.nextSteps) ? state.lastHandoff.nextSteps : []
+  if (pending.length === 0 && directory) {
+    try {
+      const fallbackPath = join(dirname(getStatePath(directory)), ".ostacky-handoff-compaction.json")
+      if (existsSync(fallbackPath)) {
+        const data = JSON.parse(readFileSync(fallbackPath, "utf-8"))
+        if (data && Array.isArray(data.pendingTasks) && typeof data.ts === "number" && Date.now() - data.ts < 24 * 60 * 60 * 1000) {
+          pending = data.pendingTasks.filter(isPending)
+          if (Array.isArray(data.nextSteps) && data.nextSteps.length > 0) nextSteps = data.nextSteps
+        }
+      }
+    } catch {}
+  }
+  if (pending.length === 0) pending = fromExpected()
+  if (pending.length === 0) nextSteps = []
+  else if (nextSteps.length === 0) nextSteps = [`Continuar con ${pending.join(", ")}`]
+  return { pending, nextSteps }
+}
+
+/** Texto del hint de recovery (null si no hay pendientes). Puro: testeable sin hooks. */
+export function recoveryHint(state: any, directory?: string): string | null {
+  if (!state || ["DONE", "INTERPRETATION_PENDING"].includes(state.state)) return null
+  const { pending } = recoveryPending(state, directory)
+  if (pending.length === 0) return null
+  return `\n\n[RECOVERY: te quedan ${pending.slice(0, 3).join(",")}${pending.length > 3 ? `, +${pending.length - 3} más` : ""} - usa get_handoff / mem_context para retomar]`
+}
+
+/** Payload del fallback de compaction, con los pendientes reales del state. */
+export function compactionPayload(state: any, directory: string, sessionID?: string, contextSnippet = "") {
+  const { pending, nextSteps } = recoveryPending(state, directory)
+  return {
+    summary: state?.requestId
+      ? `Compaction fallback for request ${state.requestId} — ${pending.length} pendientes`
+      : `Compaction fallback for session ${sessionID ?? "unknown"} — plugin`,
+    nextSteps,
+    pendingTasks: pending,
+    ts: Date.now(),
+    contextSnippet,
   }
 }
 
@@ -97,10 +247,11 @@ function isPidAlive(pid: number): boolean {
 
 /**
  * Toma EL MISMO lock que el MCP (`<state>.lock.pid` con `wx`) para serializar
- * plugin ↔ MCP cross-proceso. Devuelve una función de release; si no se pudo
- * tomar, devuelve un no-op (la escritura sigue siendo segura por el merge).
+ * plugin ↔ MCP cross-proceso. Devuelve la función de release, o `null` si no se
+ * pudo tomar: el caller NO debe escribir sin lock — un `read` viejo + `rename`
+ * posterior puede revertir la transición que el MCP todavía no escribió.
  */
-function acquireStateLock(statePath: string): () => void {
+function acquireStateLock(statePath: string): (() => void) | null {
   const pidPath = statePath + ".lock.pid"
   const tsPath = statePath + ".lock.timestamp"
   const staleWindow = 15_000
@@ -119,13 +270,21 @@ function acquireStateLock(statePath: string): () => void {
     } catch {}
     try {
       writeFileSync(pidPath, String(process.pid), { encoding: "utf-8", flag: "wx" })
-      try { writeFileSync(tsPath, String(Date.now()), "utf-8") } catch {}
-      acquired = true
+      try {
+        writeFileSync(tsPath, String(Date.now()), "utf-8")
+        acquired = true
+      } catch {
+        // Sin timestamp el lock es indistinguible de un huérfano y el MCP no
+        // puede liberarlo: queda pegado y ninguna escritura vuelve a entrar.
+        // Mejor soltarlo y reintentar.
+        try { unlinkSync(pidPath) } catch {}
+        sleepSync(5 + attempt * 10)
+      }
     } catch {
       sleepSync(5 + attempt * 10)
     }
   }
-  if (!acquired) return () => {}
+  if (!acquired) return null
   return () => {
     try {
       if (readFileSync(pidPath, "utf-8").trim() !== String(process.pid)) return
@@ -138,6 +297,25 @@ function acquireStateLock(statePath: string): () => void {
 }
 
 let persistSeq = 0
+
+/**
+ * Patch que no se pudo escribir por falta de lock. Se aplica en la próxima
+ * escritura que sí lo consiga: perder un `lastValidated` rompería el gate de
+ * `complete_task`, pero escribir sin lock puede revertir un avance del MCP.
+ */
+let pendingPatch: { patch: Record<string, unknown>; ts: number } | null = null
+const PENDING_PATCH_TTL_MS = 60_000
+
+function queuePatch(state: any, ownedKeys?: string[]): void {
+  if (!ownedKeys || ownedKeys.length === 0) return
+  const patch: Record<string, unknown> = {}
+  for (const k of ownedKeys) {
+    if (Object.prototype.hasOwnProperty.call(state, k)) patch[k] = state[k]
+  }
+  if (Object.keys(patch).length > 0) {
+    pendingPatch = { patch: { ...(pendingPatch?.patch ?? {}), ...patch }, ts: Date.now() }
+  }
+}
 
 /**
  * Merge puro: parte del estado FRESCO de disco y le aplica SOLO las claves que
@@ -199,6 +377,10 @@ export function persistState(directory: string, state: any, ownedKeys?: string[]
   try { mkdirSync(dir, { recursive: true }) } catch {}
 
   const release = acquireStateLock(p)
+  if (!release) {
+    queuePatch(state, ownedKeys)
+    return
+  }
   try {
     let payload: any = state
     if (ownedKeys && ownedKeys.length > 0) {
@@ -206,6 +388,16 @@ export function persistState(directory: string, state: any, ownedKeys?: string[]
       try { fresh = JSON.parse(readFileSync(p, "utf-8")) } catch {}
       if (fresh && typeof fresh === "object" && !Array.isArray(fresh)) {
         payload = mergePluginOwnedState(fresh, state, ownedKeys)
+      }
+      if (pendingPatch) {
+        // TTL: un patch viejo (p.ej. de otra request) no debe satisfacer gates
+        // actuales, como un `lastValidated` que ya no corresponde.
+        if (Date.now() - pendingPatch.ts > PENDING_PATCH_TTL_MS) {
+          pendingPatch = null
+        } else {
+          payload = { ...payload, ...pendingPatch.patch }
+          pendingPatch = null
+        }
       }
     }
     let serialized = JSON.stringify(payload, null, 2)
@@ -231,6 +423,27 @@ export function persistState(directory: string, state: any, ownedKeys?: string[]
     } catch {}
   } finally {
     release()
+  }
+}
+
+/**
+ * Proyección del state que expone `ostacky_get_state`. Incluye los decision IDs:
+ * sin ellos el agente no puede consumir la decisión pendiente sin volver a
+ * llamar a get_state por MCP (fuente del doble pregunta).
+ */
+export function projectStateForTool(state: any): Record<string, unknown> {
+  if (!state) return { error: "no state", state: "UNKNOWN", revision: 0 }
+  return {
+    state: state.state,
+    revision: state.revision,
+    requestId: state.requestId,
+    changeId: state.changeId ?? null,
+    degraded: !!state.degraded,
+    level: state.level ?? null,
+    routeChoice: state.routeChoice ?? null,
+    routeDecisionId: state.routeDecisionId ?? null,
+    executionDecisionId: state.executionDecisionId ?? null,
+    executionMode: state.executionMode ?? null,
   }
 }
 
@@ -525,9 +738,14 @@ function extractPathsFromPatch(patchText: string): string[] {
 // Objeto literal directo (ver nota en imports): el server V2 acepta
 // `{ id, setup }` sin pasar por `Plugin.define()`.
 export default {
-  id: "ostacky-controller",
+  id: PLUGIN_ID,
   async setup(ctx) {
     const directory = ctx.location.directory
+
+    // Precedencia local: si el proyecto tiene su propia instalación, esta copia
+    // global no registra hooks ni tools (OpenCode ya la cargó porque el config
+    // global se descubre primero; ver nota de scope arriba).
+    if (IS_GLOBAL_COPY && hasLocalPluginInstall(directory)) return
 
     // Track trivial flag per session to gate tools
     const trivialBySession = new Map<string, boolean>()
@@ -604,26 +822,8 @@ export default {
       // harden-compaction-resume: auto-inject recovery hint when pending (determinístico, no depende del modelo)
       if (!trivial && state && !["DONE", "INTERPRETATION_PENDING"].includes(state.state)) {
         try {
-          let pending: string[] = Array.isArray(state.lastHandoff?.pendingTasks)
-            ? state.lastHandoff.pendingTasks.filter((id: string) => !state.tasks?.[id] || state.tasks[id].status !== "COMPLETED")
-            : []
-          if (pending.length === 0) {
-            try {
-              const fallbackPath = join(dirname(getStatePath(directory)), ".ostacky-handoff-compaction.json")
-              if (existsSync(fallbackPath)) {
-                const raw = readFileSync(fallbackPath, "utf-8")
-                const data = JSON.parse(raw)
-                if (data && Array.isArray(data.pendingTasks) && typeof data.ts === "number" && Date.now() - data.ts < 24 * 60 * 60 * 1000) {
-                  const fbPending = data.pendingTasks.filter((id: string) => !state.tasks?.[id] || state.tasks[id].status !== "COMPLETED")
-                  if (fbPending.length > 0) pending = fbPending
-                }
-              }
-            } catch {}
-          }
-          if (pending.length > 0) {
-            const hint = `\n\n[RECOVERY: te quedan ${pending.slice(0, 3).join(",")}${pending.length > 3 ? `, +${pending.length - 3} más` : ""} - usa get_handoff / mem_context para retomar]`
-            event.prompt.text = (event.prompt.text ?? "") + hint
-          }
+          const hint = recoveryHint(state, directory)
+          if (hint) event.prompt.text = (event.prompt.text ?? "") + hint
         } catch {}
       }
     })
@@ -1085,11 +1285,7 @@ export default {
         name: "ostacky_get_state",
         description: "Get Ostacky controller state (plugin, no MCP needed)",
         input: emptySchema,
-        execute: async () => {
-          const state = readState(directory)
-          if (!state) return jsonContent({ error: "no state", state: "UNKNOWN", revision: 0 })
-          return jsonContent({ state: state.state, revision: state.revision, requestId: state.requestId, degraded: !!state.degraded, level: state.level, routeChoice: state.routeChoice })
-        },
+        execute: async () => jsonContent(projectStateForTool(readState(directory))),
       })
       editor.add({
         name: "ostacky_get_audit",
@@ -1190,13 +1386,10 @@ export default {
             return JSON.stringify(event.messages.slice(0, 2)).slice(0, 800)
           } catch { return "" }
         })()
-        const payload = {
-          summary: `Compaction fallback for session ${event.sessionID ?? "unknown"} — plugin`,
-          nextSteps: [] as string[],
-          pendingTasks: [] as string[],
-          ts: Date.now(),
-          contextSnippet,
-        }
+        // Los pendientes salen del state real, no de una lista vacía: sin esto
+        // el hint de recovery nunca disparaba mid-run (checkpoint cada 3 tasks).
+        const current = readState(directory)
+        const payload = compactionPayload(current, directory, event.sessionID as string | undefined, contextSnippet)
         const tmp = `${fallbackPath}.tmp.${process.pid}`
         writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf-8")
         renameSync(tmp, fallbackPath)

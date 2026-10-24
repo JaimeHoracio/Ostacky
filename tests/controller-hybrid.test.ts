@@ -15,7 +15,10 @@ describe("controller-hybrid", () => {
     // Objeto literal directo: el server no resuelve @opencode/plugin runtime
     expect(pluginSrc).toContain('import type { Plugin } from "@opencode/plugin"');
     expect(pluginSrc).toContain("export default {");
-    expect(pluginSrc).toContain('id: "ostacky-controller"');
+    // id derivado del scope: la copia global usa uno propio para no colisionar
+    // con la local (OpenCode V2 dedupea por id, gana la primera del boot order).
+    expect(pluginSrc).toContain("id: PLUGIN_ID,");
+    expect(pluginSrc).toContain('"ostacky-controller-global" : "ostacky-controller"');
     expect(pluginSrc.includes("Plugin.define({")).toBe(false);
     expect(pluginSrc.includes("@opencode-ai/plugin")).toBe(false);
     expect(pluginSrc.includes("export const OstackyController: Plugin")).toBe(false);

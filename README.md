@@ -61,6 +61,8 @@ Escribe el núcleo en el config dir global de OpenCode, sin tocar ningún proyec
 
 La config global acepta `opencode.json` o `opencode.jsonc`. Si el proyecto define el mismo MCP, el del proyecto reemplaza al global (comportamiento v2); en skills con mismo ID gana la del proyecto.
 
+El plugin del controller sigue la misma regla, pero necesita ayuda explícita: OpenCode V2 dedupea plugins por `id` y conserva la **primera** ocurrencia en orden de arranque, y el config global se descubre antes que el del proyecto. Con el mismo id, el global gana y el local queda `failed: "Duplicate plugin ID"`. Por eso la copia global declara `ostacky-controller-global` y su `setup` no registra nada si el proyecto tiene `.opencode/plugins/ostacky-controller/` — precedencia local, sin dobles hooks. El chequeo corre en `setup` (una vez por carga): si instalás el local con el global ya activo en la sesión, reiniciá OpenCode para que la copia global ceda.
+
 > **Migración v1 → v2:** `npx ostacky` sin subcomando busca la última versión publicada y, si detecta v1 instalada, ofrece migrar (siempre con confirmación).
 
 ### Por qué el stack es local
@@ -129,9 +131,9 @@ Local (`<proyecto>/.opencode`) o global (mismo árbol bajo el dir global, sin st
 
 ```json
 {
-    "version": "0.10.2",
-    "tag": "v0.10.2",
-    "agents": { "ostacky": { "version": "0.10.2", "sha256": "…" } },
+    "version": "0.10.3",
+    "tag": "v0.10.3",
+    "agents": { "ostacky": { "version": "0.10.3", "sha256": "…" } },
     "commands": { "install-stack": { … }, "opsx-sync": { … } },
     "skills": { "brainstorming": { … }, "…" : {} },
     "mcpServers": { "ostacky-controller": { … }, "openspec": { … } }

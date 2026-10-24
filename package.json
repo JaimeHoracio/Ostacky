@@ -1,6 +1,6 @@
 {
     "name": "ostacky",
-    "version": "0.10.2",
+    "version": "0.10.3",
     "description": "Instalador interactivo de agentes y comandos para OpenCode",
     "type": "module",
     "bin": {
@@ -9,15 +9,17 @@
     "scripts": {
         "prebuild": "bun run scripts/sync-version.ts && bun run scripts/sync-controller-core.ts",
         "dev": "bun run src/cli.ts",
-        "build": "bun build src/cli.ts --target=node --format=esm --outfile dist/cli.js && bun scripts/add-shebang.ts",
+        "build": "bun run build:cli && bun run build:mcp",
+        "build:cli": "bun build src/cli.ts --target=node --format=esm --outfile dist/cli.js && bun scripts/add-shebang.ts",
+        "build:mcp": "bun run scripts/build-mcp-bundles.ts",
         "start": "node dist/cli.js",
         "test": "bun test --isolate",
         "test:safe": "bun run scripts/run-tests-isolated.ts",
         "check:skills": "bun run scripts/check-skill-sync.ts",
         "hash:check": "bun run scripts/update-manifest-hashes.ts --check",
-        "hash:update": "bun run scripts/update-manifest-hashes.ts",
-        "prepublishOnly": "bun run build",
-        "update": "bun run scripts/check-skill-sync.ts && bun run scripts/sync-controller-core.ts && bun run scripts/update-manifest-hashes.ts"
+        "hash:update": "bun run build:mcp && bun run scripts/update-manifest-hashes.ts",
+        "prepublishOnly": "bun run build && bun run hash:update",
+        "update": "bun run scripts/check-skill-sync.ts && bun run scripts/sync-controller-core.ts && bun run hash:update"
     },
     "files": [
         "dist/",

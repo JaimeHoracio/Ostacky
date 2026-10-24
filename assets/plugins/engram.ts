@@ -575,17 +575,21 @@ export default {
         // 2) try local opencode.json / jsonc in project
         if (!statePath) {
           const candidates = [join(directory, "opencode.json"), join(directory, "opencode.jsonc")]
-          // also try global config (XDG / APPDATA)
+          // also try global config (OPENCODE_CONFIG_DIR / XDG / ~/.config)
           try {
+            const explicit = process.env.OPENCODE_CONFIG_DIR?.trim()
             const home = process.env.HOME ?? process.env.USERPROFILE ?? ""
-            if (home) {
-              const xdg = process.env.XDG_CONFIG_HOME ?? join(home, ".config")
-              candidates.push(join(xdg, "opencode", "opencode.json"))
-              candidates.push(join(xdg, "opencode", "opencode.jsonc"))
-              if (process.platform === "win32" && process.env.APPDATA) {
-                candidates.push(join(process.env.APPDATA, "opencode", "opencode.json"))
-                candidates.push(join(process.env.APPDATA, "opencode", "opencode.jsonc"))
-              }
+            const xdg = process.env.XDG_CONFIG_HOME?.trim()
+            const globalDir = explicit
+              ? explicit
+              : xdg
+                ? join(xdg, "opencode")
+                : home
+                  ? join(home, ".config", "opencode")
+                  : ""
+            if (globalDir) {
+              candidates.push(join(globalDir, "opencode.json"))
+              candidates.push(join(globalDir, "opencode.jsonc"))
             }
           } catch {}
           for (const cand of candidates) {

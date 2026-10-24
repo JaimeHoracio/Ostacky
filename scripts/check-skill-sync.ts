@@ -28,7 +28,7 @@ const installedSkills = existsSync(skillsDir)
     )
   : [];
 
-const manifestSkills = (manifest.skills || []).map((s) => s.name);
+const manifestSkills = (manifest.skills || []).map((s: { name: string }) => s.name);
 
 const fixMode = process.argv.includes("--fix");
 

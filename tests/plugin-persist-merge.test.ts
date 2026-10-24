@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mergePluginOwnedState, persistState } from '../assets/plugins/ostacky-controller/index.ts';
@@ -99,7 +99,7 @@ describe('plugin persistState — merge selectivo (no puede pisar al MCP)', () =
         expect(readDisk().lastHeartbeat).toBe(123);
     });
 
-    it('con un lock VIVO de otro proceso no lo roba, y aun así no pisa los campos del MCP', () => {
+    it('con un lock VIVO de otro proceso NO escribe sin lock: encola el patch y lo aplica al liberarse', () => {
         writeDisk({ revision: 7, state: 'DISCOVERY', tasks: { T9: { status: 'COMPLETED' } }, lastValidated: null });
         const lockPid = statePath + '.lock.pid';
         const lockTs = statePath + '.lock.timestamp';
@@ -113,7 +113,17 @@ describe('plugin persistState — merge selectivo (no puede pisar al MCP)', () =
 
         // no robamos el lock ajeno
         expect(existsSync(lockPid)).toBe(true);
-        // el merge igual protege los campos del MCP
+        // y NO escribimos sin lock: el dueño puede tener una transición en vuelo
+        // (read viejo + rename posterior = lost consume). Antes pisaba el archivo.
+        expect(readDisk().lastValidated).toBe(null);
+
+        // al liberarse, la próxima escritura drena el patch encolado
+        unlinkSync(lockPid);
+        unlinkSync(lockTs);
+        persistState(root, { revision: 7, state: 'DISCOVERY', tasks: { T9: { status: 'COMPLETED' } }, lastValidated: null }, [
+            'lastValidated',
+        ]);
+
         const disk = readDisk();
         expect(disk.revision).toBe(7);
         expect(disk.state).toBe('DISCOVERY');

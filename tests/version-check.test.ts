@@ -5,7 +5,7 @@ describe('version-check', () => {
   it('parseMajor extrae major (con o sin v)', () => {
     expect(parseMajor('1.4.2')).toBe(1);
     expect(parseMajor('v2.0.0')).toBe(2);
-    expect(parseMajor('0.10.2')).toBe(0);
+    expect(parseMajor('0.10.3')).toBe(0);
     expect(parseMajor(null)).toBe(null);
     expect(parseMajor('foo')).toBe(null);
   });
@@ -20,13 +20,13 @@ describe('version-check', () => {
   });
 
   it('decideOffer: misma o más nueva → none; latest null → none', () => {
-    expect(decideOffer('0.10.2', '0.10.2').kind).toBe('none');
-    expect(decideOffer('0.10.2', '0.9.5').kind).toBe('none');
-    expect(decideOffer('0.10.2', null).kind).toBe('none');
+    expect(decideOffer('0.10.3', '0.10.3').kind).toBe('none');
+    expect(decideOffer('0.10.3', '0.9.5').kind).toBe('none');
+    expect(decideOffer('0.10.3', null).kind).toBe('none');
   });
 
   it('decideOffer: update disponible (no v1) → update-available', () => {
-    expect(decideOffer('0.10.2', '0.11.0').kind).toBe('update-available');
+    expect(decideOffer('0.10.3', '0.11.0').kind).toBe('update-available');
   });
 
   it('canPrompt: no-interactivo o --yes → false (default seguro No)', () => {

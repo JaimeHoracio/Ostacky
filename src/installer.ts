@@ -20,7 +20,7 @@ import {
     getBundledExpectedHash,
     PACKAGE_ROOT,
 } from './github.js';
-import type { ManifestCategory } from './github.js';
+import type { ManifestCategory, ManifestHashField } from './github.js';
 import {
     readLockfile,
     writeLockfile,
@@ -238,7 +238,7 @@ export async function probeMcpServer(
                 params: {
                     protocolVersion: '2025-03-26',
                     capabilities: {},
-                    clientInfo: { name: 'ostacky-installer', version: '0.10.2' },
+                    clientInfo: { name: 'ostacky-installer', version: '0.10.3' },
                 },
             });
         });
@@ -347,8 +347,13 @@ function upsertLockfile(
  * No lanza cuando el nombre no está en el bundleado (el call site ya valida
  * que el asset existe antes de hashear).
  */
-export function assertBundledTreeHash(category: ManifestCategory, name: string, actualHash: string): void {
-    const expected = getBundledExpectedHash(category, name);
+export function assertBundledTreeHash(
+    category: ManifestCategory,
+    name: string,
+    actualHash: string,
+    field: ManifestHashField = 'sha256'
+): void {
+    const expected = getBundledExpectedHash(category, name, field);
     if (expected && actualHash !== expected) {
         const labels: Record<string, string> = {
             skills: 'skill',
@@ -357,7 +362,7 @@ export function assertBundledTreeHash(category: ManifestCategory, name: string, 
             commands: 'command',
         };
         throw new Error(
-            `Tree hash inválido para ${labels[category] ?? category} "${name}"\n` +
+            `Hash inválido para ${labels[category] ?? category} "${name}" (${field})\n` +
                 `  esperado: ${expected}\n` +
                 `  recibido: ${actualHash}`
         );
@@ -372,6 +377,27 @@ function readBundledAsset(relativePath: string): string | null {
     const fullPath = join(PACKAGE_ROOT, relativePath);
     if (!existsSync(fullPath)) return null;
     return readFileSync(fullPath, 'utf-8');
+}
+
+/**
+ * Hash del artefacto MCP que el installer copia, con la clave del manifest que
+ * le corresponde: bundle (`dist/mcp/<name>/index.js`) → `sha256`; fallback dev
+ * (árbol de `assets/mcp/<name>/`) → `sourceSha256`.
+ *
+ * Fuente única para `installMcpServer` (validación) y `doctor` (diagnóstico):
+ * mezclar las claves — `sha256` del bundle contra el tree hash del source — da
+ * un ❌ permanente que `hash:check` no ve, porque cada hash es correcto en su
+ * propio dominio.
+ */
+export function mcpArtifactHash(
+    name: string,
+    packageRoot: string = PACKAGE_ROOT
+): { field: ManifestHashField; actual: string } {
+    const bundlePath = join(packageRoot, 'dist', 'mcp', name, 'index.js');
+    if (existsSync(bundlePath)) {
+        return { field: 'sha256', actual: sha256(readFileSync(bundlePath, 'utf-8')) };
+    }
+    return { field: 'sourceSha256', actual: computeTreeHash(join(packageRoot, 'assets', 'mcp', name)) };
 }
 
 export async function installAgent(item: ManifestItem, manifest: Manifest, paths: OpenCodePaths): Promise<void> {
@@ -486,11 +512,13 @@ export async function installMcpServer(item: ManifestItem, manifest: Manifest, p
         );
     }
 
-    // Hash siempre se computa del source (assets/mcp/<name>/) para tracking.
-    // La validación usa el manifest bundleado, no el remoto (ver assertBundledTreeHash).
-    const treeHash = computeTreeHash(src);
+    // El hash SHALL validar el artefacto que se copia, no otro árbol.
+    // Bundle (dist/mcp/) → sha256 del artefacto; fallback dev → sourceSha256 del árbol.
+    const bundlePath = join(PACKAGE_ROOT, 'dist', 'mcp', item.name, 'index.js');
+    const hasBundle = existsSync(bundlePath);
+    const { field, actual: artifactHash } = mcpArtifactHash(item.name);
 
-    assertBundledTreeHash('mcpServers', item.name, treeHash);
+    assertBundledTreeHash('mcpServers', item.name, artifactHash, field);
 
     const nodeExecutable = getVerifiedNodeExecutable();
     // Global: la config vive DENTRO del dir global (<globalDir>/opencode.json);
@@ -505,9 +533,9 @@ export async function installMcpServer(item: ManifestItem, manifest: Manifest, p
         mkdirSync(staging, { recursive: true });
 
         // Preferir versión bundleada (dist/mcp/) — self-contained, sin install.
-        const bundledPath = join(PACKAGE_ROOT, 'dist', 'mcp', item.name, 'index.js');
-        if (existsSync(bundledPath)) {
-            copyFileSync(bundledPath, join(staging, 'index.js'));
+        // (el path del bundle ya está resuelto arriba: bundlePath)
+        if (hasBundle) {
+            copyFileSync(bundlePath, join(staging, 'index.js'));
             writeFileSync(join(staging, 'package.json'), JSON.stringify({ type: 'module' }) + '\n', 'utf-8');
         } else {
             // Dev fallback: copiar source sin node_modules e instalar dependencias antes de promoverlo.
@@ -564,7 +592,7 @@ export async function installMcpServer(item: ManifestItem, manifest: Manifest, p
                 item.name,
                 createMcpConfigEntry(item.name, nodeExecutable, join(dest, 'index.js'), statePath)
             );
-            upsertLockfile(paths, 'mcpServers', item, manifest, treeHash);
+            upsertLockfile(paths, 'mcpServers', item, manifest, artifactHash);
             promotion.commit();
         } catch (error) {
             try {
@@ -714,7 +742,7 @@ export function uninstallAll(paths: OpenCodePaths): void {
             } catch {}
         }
     }
-    // Package dir (formato V2 desde v0.10.2): requiere rm recursivo, no unlink
+    // Package dir (formato V2 desde v0.10.3): requiere rm recursivo, no unlink
     const packageDir = join(paths.plugins, 'ostacky-controller');
     if (existsSync(packageDir)) {
         try {

@@ -21,7 +21,9 @@ import { existsSync, statSync, readFileSync, readdirSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import * as p from '@clack/prompts';
-import { computeTreeHash, findOpenCodeDir, getCommandInvocation } from './fs.js';
+import { findOpenCodeDir, getCommandInvocation } from './fs.js';
+import { mcpArtifactHash } from './installer.js';
+import { getBundledExpectedHash } from './github.js';
 import { ensureOpencodeInstalled } from './opencode.js';
 import { fetchLatestNpmVersion, decideOffer, canPrompt } from './version-check.js';
 
@@ -165,7 +167,7 @@ async function runDoctorCommand() {
         join(cwd, 'assets', 'plugins', 'ostacky-plugin.ts'),
         join(opencodeDir, 'plugins', 'ostacky-plugin.ts'),
         join(cwd, '.opencode', 'plugins', 'ostacky-plugin.ts'),
-        // legacy fallback (pre-0.10.2)
+        // legacy fallback (pre-0.10.3)
         join(cwd, 'assets', 'plugins', 'ostacky-controller.ts'),
         join(opencodeDir, 'plugins', 'ostacky-controller.ts'),
         join(cwd, '.opencode', 'plugins', 'ostacky-controller.ts'),
@@ -294,17 +296,21 @@ async function runDoctorCommand() {
         );
     }
 
-    // manifest hashes
+    // manifest hashes — el hash valida el artefacto que el installer copia, no
+    // otro árbol: bundle (dist/mcp/<name>/index.js) → sha256; fallback dev
+    // (assets/mcp/<name>/) → sourceSha256. Ver mcpArtifactHash.
     try {
-        const manifest = JSON.parse(readFileSync(join(cwd, 'manifest.json'), 'utf-8'));
-        const expected = manifest.mcpServers?.find((x: any) => x.name === 'ostacky-controller')?.sha256;
+        const name = 'ostacky-controller';
+        const { field, actual } = mcpArtifactHash(name);
+        const expected = getBundledExpectedHash('mcpServers', name, field);
         if (expected) {
-            const actual = computeTreeHash(join(cwd, 'assets', 'mcp', 'ostacky-controller'));
-            check(`manifest hash: ${expected.slice(0, 8)} vs actual ${actual.slice(0, 8)}`, expected === actual);
+            check(`manifest ${field}: ${expected.slice(0, 8)} vs actual ${actual.slice(0, 8)}`, expected === actual);
             if (expected !== actual) console.log('  Run: bun run hash:update');
+        } else {
+            check(`manifest ${field}: sin entrada para ${name}`, false, true);
         }
     } catch {
-        check('manifest: not found', false, true);
+        check('manifest: no se pudo verificar', false, true);
     }
 
     // V2 checks (ostacky-opencode-v2-compat): plugin API, mcp.servers, legacy warn-only, commands
@@ -547,9 +553,18 @@ async function main() {
         await ensureOpencodeInstalled();
     }
     switch (cmd) {
-        case 'install':
+        case 'install': {
+            const { globalOstackyArtifacts } = await import('./doctor-v2.js');
+            const globalArtifacts = globalOstackyArtifacts();
+            if (scope !== 'global' && globalArtifacts.length > 0) {
+                console.error(
+                    `Aviso: hay artefactos de Ostacky en la instalación global (${globalArtifacts.join(', ')}). ` +
+                    `Podés limpiarlos con: npx ostacky uninstall --scope global`
+                );
+            }
             await runInstallCommand(scope, { noStack });
             break;
+        }
 
         case 'install-stack':
             if (scope === 'global') {
