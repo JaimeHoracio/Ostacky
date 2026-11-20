@@ -147,6 +147,21 @@ export function nextSlotId(slots: SlotInfo[], overflow: boolean): string {
 }
 
 /** Revisión monotónica al reciclar: continúa desde la del slot, nunca retrocede. */
+/**
+ * Extrae el título de una sesión de la salida JSON de `opencode session list --format json`.
+ * Devuelve null si no existe, si el título está vacío o si OpenCode lo dejó como "Untitled session".
+ */
+export function parseSessionListTitle(json: string, sessionId: string): string | null {
+  let rows: unknown;
+  try { rows = JSON.parse(json); } catch { return null; }
+  if (!Array.isArray(rows)) return null;
+  const row = rows.find((r: any) => r && r.id === sessionId) as { title?: unknown } | undefined;
+  if (!row || typeof row.title !== "string") return null;
+  const title = row.title.trim();
+  if (!title || title === "Untitled session") return null;
+  return title.slice(0, 120);
+}
+
 export function nextRevision(previousRevision: number): number {
   return Math.max(0, Math.floor(previousRevision)) + 1;
 }

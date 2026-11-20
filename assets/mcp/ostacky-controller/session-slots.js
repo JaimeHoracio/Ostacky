@@ -88,6 +88,23 @@ export function nextSlotId(slots, overflow) {
   }
   throw new Error("no hay ids de slot disponibles");
 }
+export function parseSessionListTitle(json, sessionId) {
+  let rows;
+  try {
+    rows = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(rows))
+    return null;
+  const row = rows.find((r) => r && r.id === sessionId);
+  if (!row || typeof row.title !== "string")
+    return null;
+  const title = row.title.trim();
+  if (!title || title === "Untitled session")
+    return null;
+  return title.slice(0, 120);
+}
 export function nextRevision(previousRevision) {
   return Math.max(0, Math.floor(previousRevision)) + 1;
 }

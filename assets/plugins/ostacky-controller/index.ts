@@ -22,7 +22,7 @@ import { homedir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { SENSITIVE_DEFAULT, BASH_SENSITIVE_RE, isSensitive, extractPathsFromBash } from "./security.ts"
 import { isTrivial } from "./tiered.ts"
-import { checkBinding, slotPath as slotFilePath } from "./session-store.ts"
+import { checkBinding, readIndex, slotPath as slotFilePath } from "./session-store.ts"
 import { STATES, TRANSITIONS, DEFAULT_STATE, normalizeTestCommand, isMaskedExitCommand } from "./controller-core.ts"
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -174,6 +174,16 @@ export function resolveStatePath(directory: string, sessionId?: string | null): 
   const opencodeDir = dirname(legacy)
   const bound = checkBinding(opencodeDir, sessionId)
   return bound.ok ? slotFilePath(opencodeDir, bound.slot) : null
+}
+
+/**
+ * Session id del contexto de ejecución de un tool del plugin. "default" y ausencia cuentan como
+ * sin identidad. Con slots activos, sin identidad no hay state que leer (no se cae al legado).
+ */
+export function toolSessionId(toolCtx: unknown): string | null {
+  const c = toolCtx as any
+  const v = c?.sessionID ?? c?.sessionId
+  return typeof v === "string" && v && v !== "default" ? v : null
 }
 
 export function readState(directory: string, sessionId?: string | null): any | null {
@@ -826,7 +836,6 @@ export default {
     // Track Engram hit per session to audit bypass (soft, no BLOCK)
     const engramHitBySession = new Map<string, boolean>()
     // ─── Heartbeat ping — evita sensación de trancado en tareas largas ──
-    let lastPingTs = 0
     let pingInterval: ReturnType<typeof setInterval> | null = null
 
     const patterns = (() => {
@@ -838,26 +847,42 @@ export default {
     let lastCheck: { revision: number; result: string } | null = null
     let checkCount = 0
 
-    // Heartbeat ping — evita sensación de trancado en tareas largas
-    // (V2: sin canal TUI en ctx; se loguea al server log y se persiste lastPingTs)
+    // Heartbeat ping por sesión — evita sensación de trancado en tareas largas.
+    // Con slots se evalúa cada sesión con slot asignado; sin slots (legacy) el state único (sid null).
+    // (V2: sin canal TUI en ctx; se loguea al server log y se persiste lastPingTs por sesión)
+    const lastPingBySession = new Map<string, number>()
+    const pingCandidateSessions = (): Array<string | null> => {
+      if (process.env.OSTACKY_SESSION_SLOTS === "off") return [null]
+      try {
+        return Object.values(readIndex(dirname(getStatePath(directory))).slots)
+          .map((r: any) => r?.sessionId)
+          .filter((x: unknown): x is string => typeof x === "string" && !!x)
+      } catch {
+        return []
+      }
+    }
     if (!pingInterval) {
       pingInterval = setInterval(() => {
-        try {
-          const s = readState(directory)
-          if (!s || !["EXECUTING_INLINE", "EXECUTING_SUBAGENTS", "SYNC"].includes(s.state)) return
-          const now = Date.now()
-          const lastHeartbeat = s.lastHeartbeat || s.ts || now
-          const idle = now - lastHeartbeat
-          if (idle < IDLE_THRESHOLD_MS) return
-          if (now - lastPingTs < PING_INTERVAL_MS) return
-          lastPingTs = now
-          const completed = Object.values(s.tasks || {}).filter((t: any) => t.status === "COMPLETED").length
-          const total = s.expectedTaskCount ?? s.expectedTasks?.length ?? "?"
-          const pending = Array.isArray(s.expectedTasks) ? s.expectedTasks.filter((id: string) => !s.tasks?.[id] || s.tasks[id].status !== "COMPLETED").length : "?"
-          const msg = `[ostacky] Sigo trabajando — ${s.state} • ${completed}/${total} (${pending} pendientes) • hace ${Math.round(idle/1000)}s sin output`
-          try { console.log(msg) } catch {}
-          try { const st = readState(directory); if (st) { (st as any).lastPingTs = now; persistState(directory, st, ["lastPingTs"]) } } catch {}
-        } catch {}
+        const now = Date.now()
+        for (const sid of pingCandidateSessions()) {
+          try {
+            const s = readState(directory, sid)
+            if (!s || !["EXECUTING_INLINE", "EXECUTING_SUBAGENTS", "SYNC"].includes(s.state)) continue
+            const lastHeartbeat = s.lastHeartbeat || s.ts || now
+            const idle = now - lastHeartbeat
+            if (idle < IDLE_THRESHOLD_MS) continue
+            const key = sid ?? "__legacy__"
+            if (now - (lastPingBySession.get(key) ?? 0) < PING_INTERVAL_MS) continue
+            lastPingBySession.set(key, now)
+            const completed = Object.values(s.tasks || {}).filter((t: any) => t.status === "COMPLETED").length
+            const total = s.expectedTaskCount ?? s.expectedTasks?.length ?? "?"
+            const pending = Array.isArray(s.expectedTasks) ? s.expectedTasks.filter((id: string) => !s.tasks?.[id] || s.tasks[id].status !== "COMPLETED").length : "?"
+            const msg = `[ostacky] Sigo trabajando — ${s.state} • ${completed}/${total} (${pending} pendientes) • hace ${Math.round(idle / 1000)}s sin output`
+            try { console.log(msg) } catch {}
+            const st = readState(directory, sid)
+            if (st) { st.lastPingTs = now; persistState(directory, st, ["lastPingTs"], sid) }
+          } catch {}
+        }
       }, 30_000)
       if (pingInterval && typeof (pingInterval as any).unref === 'function') (pingInterval as any).unref()
     }
@@ -1404,29 +1429,38 @@ export default {
     } as const
 
     // ── Observable tools (MCP thin replacement) ──
+    // Cada tool lee el state de SU sesión (sessionID del contexto de ejecución). Sin identidad con
+    // slots activos devuelve error explícito en vez de leer el state de otra sesión.
+    const withSessionState = (fn: (state: any) => unknown) =>
+      async (_args: unknown, toolCtx?: unknown) => {
+        const sid = toolSessionId(toolCtx)
+        if (!sid && process.env.OSTACKY_SESSION_SLOTS !== "off") {
+          return jsonContent({
+            error: "identity_unavailable",
+            hint: "El tool no recibió sessionID; usa el MCP ostacky-controller (identidad por _meta).",
+          })
+        }
+        return fn(readState(directory, sid))
+      }
     await ctx.tool.transform((editor) => {
       editor.add({
         name: "ostacky_get_state",
         description: "Get Ostacky controller state (plugin, no MCP needed)",
         input: emptySchema,
-        execute: async () => jsonContent(projectStateForTool(readState(directory))),
+        execute: withSessionState((state) => jsonContent(projectStateForTool(state))),
       })
       editor.add({
         name: "ostacky_get_audit",
         description: "Get audit trail (plugin)",
         input: emptySchema,
-        execute: async () => {
-          const state = readState(directory)
-          return jsonContent({ audit: state?.audit ?? [], revision: state?.revision ?? 0 })
-        },
+        execute: withSessionState((state) => jsonContent({ audit: state?.audit ?? [], revision: state?.revision ?? 0 })),
       })
       editor.add({
         name: "ostacky_get_metrics",
         description: "Get controller metrics (plugin)",
         input: emptySchema,
-        execute: async () => {
-          const state = readState(directory)
-          return jsonContent({
+        execute: withSessionState((state) =>
+          jsonContent({
             cacheHitCount: state?.cacheHitCount ?? 0,
             discoveryCacheHitCount: state?.discoveryCacheHitCount ?? 0,
             tokenSavingEstimate: state?.tokenSavingEstimate ?? 0,
@@ -1435,36 +1469,33 @@ export default {
             engramBypassCount: state?.engramBypassCount ?? 0,
             revision: state?.revision ?? 0,
           })
-        },
+        ),
       })
       editor.add({
         name: "ostacky_get_handoff",
         description: "Get last handoff (plugin)",
         input: emptySchema,
-        execute: async () => {
-          const state = readState(directory)
-          // also check compaction fallback
+        execute: withSessionState((state) => {
+          // Fallback de compaction: archivo compartido por proyecto (mismo ancla que el writer).
           try {
             const fallback = join(dirname(getStatePath(directory)), ".ostacky-handoff-compaction.json")
             if (existsSync(fallback)) {
-              const raw = readFileSync(fallback, "utf-8")
-              const data = JSON.parse(raw)
+              const data = JSON.parse(readFileSync(fallback, "utf-8"))
               if (data && !state?.lastHandoff) return jsonContent(data)
             }
           } catch {}
           return jsonContent(state?.lastHandoff ?? null)
-        },
+        }),
       })
       editor.add({
         name: "ostacky_get_available_transitions",
         description: "Get available transitions from current state",
         input: emptySchema,
-        execute: async () => {
-          const state = readState(directory)
+        execute: withSessionState((state) => {
           const cur = state?.state ?? "INTERPRETATION_PENDING"
           const trans = TRANSITIONS[cur] ?? []
           return jsonContent({ currentState: cur, transitions: trans })
-        },
+        }),
       })
       // Compatibility for old MCP calls that expect deprecated response
       editor.add({
@@ -1512,7 +1543,7 @@ export default {
         })()
         // Los pendientes salen del state real, no de una lista vacía: sin esto
         // el hint de recovery nunca disparaba mid-run (checkpoint cada 3 tasks).
-        const current = readState(directory)
+        const current = readState(directory, event.sessionID as string | undefined)
         const payload = compactionPayload(current, directory, event.sessionID as string | undefined, contextSnippet)
         const tmp = `${fallbackPath}.tmp.${process.pid}`
         writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf-8")

@@ -29,7 +29,8 @@ import { dirname, basename, join, resolve, relative } from 'node:path';
 import { writeFile as writeFileAsync, rename as renameAsync, mkdir as mkdirAsync } from 'node:fs/promises';
 import { SENSITIVE_DEFAULT, BASH_SENSITIVE_RE, isSensitive, extractPathsFromBash } from './security.js';
 import { bindSession, checkBinding, recordRequestSummary, noteFileEdit } from './session-store.js';
-import { parsePoolConfig, isActiveSlot } from './session-slots.js';
+import { parsePoolConfig, isActiveSlot, parseSessionListTitle } from './session-slots.js';
+import { execFileSync } from 'node:child_process';
 import {
     STATES,
     TRANSITIONS,
@@ -3503,18 +3504,26 @@ function extractCallerSessionId(ctx) {
     return null;
 }
 
-/** Nombre visible de la sesión, si OpenCode lo manda en _meta (ver session-state-files; no verificado en vivo). */
-function extractSessionName(ctx) {
+/**
+ * Título visible de una sesión. OpenCode no lo manda en _meta (solo ai.opencode/sessionID),
+ * así que se consulta con `opencode session list --format json`. Éxitos se cachean por proceso;
+ * fallos se reintentan tras 60 s para no lanzar un subproceso en cada tool call.
+ */
+const sessionTitleCache = new Map(); // sid -> { title, at }
+const SESSION_TITLE_MISS_TTL_MS = 60_000;
+function sessionTitleFor(sid) {
+    if (!sid) return null;
+    const hit = sessionTitleCache.get(sid);
+    if (hit && (hit.title || Date.now() - hit.at < SESSION_TITLE_MISS_TTL_MS)) return hit.title;
+    let title = null;
     try {
-        const meta = ctx && ctx.mcpReq && ctx.mcpReq._meta;
-        if (meta && typeof meta === 'object') {
-            for (const key of ['ai.opencode/sessionTitle', 'ai.opencode/sessionName']) {
-                const v = meta[key];
-                if (typeof v === 'string' && v.trim()) return v.trim().slice(0, 120);
-            }
-        }
+        const out = execFileSync('opencode', ['session', 'list', '--format', 'json', '-n', '200'], {
+            encoding: 'utf8', timeout: 4000, stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        title = parseSessionListTitle(out, sid);
     } catch {}
-    return null;
+    sessionTitleCache.set(sid, { title, at: Date.now() });
+    return title;
 }
 
 /** Nombre a mostrar: título de la sesión, o changeId/requestId si no hay título. */
@@ -3537,7 +3546,7 @@ function bindCallerSlot(params, ctx) {
     const res = bindSession({
         opencodeDir,
         sessionId: sid,
-        sessionName: extractSessionName(ctx),
+        sessionName: sessionTitleFor(sid),
         now: Date.now(),
         cfg,
         legacyStatePath: statePath,

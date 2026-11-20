@@ -50,3 +50,18 @@ describe("plugin — resolución de slot por sesión", () => {
     expect(resolveStatePath(root, undefined)).toBe(join(root, ".opencode", "ostacky-state.json"));
   });
 });
+
+describe("toolSessionId (identidad de tools del plugin)", () => {
+  it("toma sessionID o sessionId del contexto de ejecución", async () => {
+    const { toolSessionId } = await import("../assets/plugins/ostacky-controller/index.ts");
+    expect(toolSessionId({ sessionID: "ses_1" })).toBe("ses_1");
+    expect(toolSessionId({ sessionId: "ses_2" })).toBe("ses_2");
+  });
+  it("sin identidad, vacía o 'default' devuelve null", async () => {
+    const { toolSessionId } = await import("../assets/plugins/ostacky-controller/index.ts");
+    expect(toolSessionId(undefined)).toBeNull();
+    expect(toolSessionId({})).toBeNull();
+    expect(toolSessionId({ sessionID: "" })).toBeNull();
+    expect(toolSessionId({ sessionID: "default" })).toBeNull();
+  });
+});
