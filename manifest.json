@@ -34,7 +34,7 @@
       "description": "Máquina de estados persistida con @modelcontextprotocol/server SDK. v0.10.3: 22 tools (incluye set_handoff, get_handoff, clear_handoff, get_available_transitions funcional). Bugfixes: consecutiveFailures real, lastHandoff state, defaultChoice persistido. Robustez: degraded mode automático tras 3 fallos, persistence condicional para Nivel 0, prune de skills obsoletas.",
       "version": "0.10.3",
       "sha256": "f2d20b33b02b7a452f389b603c4ae65d5e8c079fc12e38f2641689816b3024f1",
-      "sourceSha256": "f12314dcce27073f6aa2a83dcb7efe2a82a83404fe43926ec2da49d2c33a17ad"
+      "sourceSha256": "b0dd66c9f9efe66f460b532c76f1aaa0544c3485a8b218894df531f8c790ce2d"
     },
     {
       "name": "openspec",

@@ -210,3 +210,33 @@ export function getAuditRetention() {
   if (n > 2000) return 2000;
   return n;
 }
+
+/**
+ * Forma canónica de un comando shell para compararlo con un `test:` declarado.
+ * Devuelve "" si el comando no califica como evidencia (operadores que alteran
+ * el resultado). Es sólo para matching: shellEvidence sigue exponiendo el
+ * comando crudo, que es lo que usa la detección de mutaciones.
+ */
+export function normalizeTestCommand(cmd) {
+  let s = String(cmd == null ? "" : cmd).trim();
+  if (!s) return "";
+  // `cd <path> && ...` sólo cambia el cwd.
+  const cd = s.match(/^cd\s+(?:"[^"]*"|'[^']*'|\S+)\s*&&\s*/);
+  if (cd) s = s.slice(cd[0].length).trim();
+  // `2>&1` no altera el exit (puede no ser sufijo: `cmd 2>&1 | tail`).
+  s = s.replace(/\s*2>&1\b/g, "").trim();
+  // Pipe a pager: se recorta para comparar; la corrida queda enmascarada.
+  const pager = s.search(/\|\s*(?:tail|head|grep)\b/);
+  if (pager >= 0) s = s.slice(0, pager).trim();
+  // Cualquier otro operador altera el resultado: no es evidencia.
+  if (/[|;&<>]/.test(s)) return "";
+  return s;
+}
+
+/**
+ * true si el comando canaliza a tail/head/grep: el exit registrado es el del
+ * pager, no el del test. Se persiste como maskedExit y nunca se acepta verde.
+ */
+export function isMaskedExitCommand(cmd) {
+  return /\|\s*(?:tail|head|grep)\b/.test(String(cmd == null ? "" : cmd));
+}

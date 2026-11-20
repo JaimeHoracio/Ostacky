@@ -22,7 +22,7 @@ import { homedir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { SENSITIVE_DEFAULT, BASH_SENSITIVE_RE, isSensitive, extractPathsFromBash } from "./security.ts"
 import { isTrivial } from "./tiered.ts"
-import { STATES, TRANSITIONS, DEFAULT_STATE } from "./controller-core.ts"
+import { STATES, TRANSITIONS, DEFAULT_STATE, normalizeTestCommand, isMaskedExitCommand } from "./controller-core.ts"
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -581,6 +581,14 @@ export function shellEvidence(event: any): { cmd: string; exit: number; ts: numb
   return { cmd: cmd.trim(), exit, ts: Date.now() }
 }
 
+/** Log estructurado opt-in: no ensucia el server log salvo OSTACKY_DEBUG=1. */
+function debugLog(event: string, data?: any): void {
+  if (process.env.OSTACKY_DEBUG !== "1") return
+  try {
+    console.log(JSON.stringify({ level: "debug", event, ...(data || {}) }))
+  } catch {}
+}
+
 /** Tools que mutan archivos: avanzan `lastMutationTs`. */
 export function isMutatingTool(tool: string): boolean {
   return tool === "edit" || tool === "write" || tool === "patch"
@@ -692,7 +700,7 @@ export function isShellPathExempt(p: string, directory: string, freshState: any)
   return false
 }
 
-/** Comandos `test:` declarados en taskVerifications, ya normalizados (sin prefijo). */
+/** Comandos `test:` declarados en taskVerifications, tal cual (el matching los normaliza). */
 export function testVerifyCommands(state: any): Set<string> {
   const out = new Set<string>()
   try {
@@ -1239,14 +1247,34 @@ export default {
         const mutating =
           (isMutatingTool(tool) && event.status === "completed") ||
           (!!ev && ev.exit === 0 && isShellMutation(ev.cmd))
-        const isTestRun = !!ev && testVerifyCommands(readState(directory)).has(ev.cmd)
+        const declaredTests = testVerifyCommands(readState(directory))
+        const normalizedCmd = ev ? normalizeTestCommand(ev.cmd) : ""
+        const isTestRun =
+          !!ev &&
+          normalizedCmd !== "" &&
+          [...declaredTests].some((d) => normalizeTestCommand(d) === normalizedCmd)
+        if (ev && !isTestRun && declaredTests.size > 0) {
+          for (const d of declaredTests) {
+            if (ev.cmd.includes(d) || (normalizedCmd !== "" && normalizeTestCommand(d) === normalizedCmd)) {
+              debugLog("test_evidence_rejected", {
+                declared: d,
+                normalized: normalizedCmd,
+                reason: normalizedCmd === "" ? "operadores" : "no_matchea",
+              })
+              break
+            }
+          }
+        }
         if (isTestRun || mutating) {
           const s = readState(directory)
           if (s) {
             const owned: string[] = []
             if (ev && isTestRun) {
+              // El cmd se guarda crudo (las mutaciones lo necesitan); maskedExit sólo
+              // marca que el exit registrado es el del pager, no el del test.
+              const run = isMaskedExitCommand(ev.cmd) ? { ...ev, maskedExit: true } : ev
               const prev = Array.isArray((s as any).shellRuns) ? (s as any).shellRuns : []
-              ;(s as any).shellRuns = [...prev, ev].slice(-25)
+              ;(s as any).shellRuns = [...prev, run].slice(-25)
               owned.push("shellRuns")
             }
             if (mutating) {

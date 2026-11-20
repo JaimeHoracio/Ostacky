@@ -1,5 +1,5 @@
 
-# 
+#
 **/node_modules/
 dist/
 
@@ -11,16 +11,15 @@ opencode.*
 /openspec/
 
 # Ostacky
-.opencode/tools/
-.opencode/cache/
-.opencode/ostacky-state.json
-.opencode/ostacky-state.json.backup*
-.opencode/ostacky-state.json.lock.*
-.opencode/ostacky-audit.jsonl
+.opencode/
 .codegraph/
 
 .agents/
 material/
+
+# Claude
+.claude/
+.mcp.json
 
 # Test artifacts (probe state, backups numerados)
 tests/.test-*

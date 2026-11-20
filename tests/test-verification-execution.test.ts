@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OstackyController, findTestEvidence } from "../assets/mcp/ostacky-controller/index.js";
 import { isMutatingTool, isShellMutation, shellEvidence } from "../assets/plugins/ostacky-controller/index.ts";
+import { isMaskedExitCommand, normalizeTestCommand } from "../src/controller-core.ts";
 
 const TMP_PREFIX = join(tmpdir(), "ostacky-test-evidence-");
 let tmp: string;
@@ -24,6 +25,33 @@ const CMD = "bun test tests/domains/settle.test.ts";
 function run(cmd: string, exit: number, ts: number) {
     return { cmd, exit, ts };
 }
+
+describe("normalizeTestCommand: transformaciones neutras y operadores rechazados", () => {
+    it("recorta el prefijo cd y el 2>&1", () => {
+        expect(normalizeTestCommand(`cd /repo && ${CMD}`)).toBe(CMD);
+        expect(normalizeTestCommand(`${CMD} 2>&1`)).toBe(CMD);
+        expect(normalizeTestCommand(`cd /repo && ${CMD} 2>&1`)).toBe(CMD);
+    });
+
+    it("recorta el pipe a pager para comparar y lo marca como enmascarado", () => {
+        expect(normalizeTestCommand(`cd /repo && ${CMD} 2>&1 | tail -35`)).toBe(CMD);
+        expect(isMaskedExitCommand(`cd /repo && ${CMD} 2>&1 | tail -35`)).toBe(true);
+        expect(isMaskedExitCommand(`${CMD} | grep -i foo | head -3`)).toBe(true);
+        expect(isMaskedExitCommand(CMD)).toBe(false);
+    });
+
+    it("no acepta operadores que alteran el resultado", () => {
+        for (const cmd of [
+            `${CMD} || true`,
+            `${CMD}; echo ok`,
+            `${CMD} && echo done`,
+            "echo x > out.txt",
+            `${CMD} | cat`,
+        ]) {
+            expect(normalizeTestCommand(cmd)).toBe("");
+        }
+    });
+});
 
 describe("findTestEvidence: test: exige evidencia, no un sello de goma", () => {
     it("acepta una corrida verde posterior a la última edición", () => {
@@ -97,6 +125,58 @@ describe("findTestEvidence: test: exige evidencia, no un sello de goma", () => {
             lastMutationTs: 1_000,
         });
         expect(r.ok).toBe(true);
+    });
+
+    it("acepta la forma real cd … && … 2>&1", () => {
+        const r = findTestEvidence({
+            runs: [run(`cd /repo && ${CMD} 2>&1`, 0, 2_000)],
+            cmd: CMD,
+            lastMutationTs: 1_000,
+        });
+        expect(r.ok).toBe(true);
+    });
+
+    it("rechaza un exit enmascarado por pipe aunque sea 0", () => {
+        const r = findTestEvidence({
+            runs: [run(`cd /repo && ${CMD} 2>&1 | tail -35`, 0, 2_000)],
+            cmd: CMD,
+            lastMutationTs: 1_000,
+        });
+        expect(r.ok).toBe(false);
+        expect(r.reason).toContain("enmascarado");
+        expect(r.reason).toContain("pipefail");
+    });
+
+    it("si la última corrida está enmascarada, no vale una verde anterior", () => {
+        const r = findTestEvidence({
+            runs: [run(CMD, 0, 2_000), run(`${CMD} 2>&1 | tail -5`, 0, 4_000)],
+            cmd: CMD,
+            lastMutationTs: 1_000,
+        });
+        expect(r.ok).toBe(false);
+        expect(r.reason).toContain("enmascarado");
+    });
+
+    it("sin corridas nombra el comando declarado y no culpa al plugin de no correr", () => {
+        const r = findTestEvidence({ runs: [], cmd: CMD, lastMutationTs: 1_000 });
+        expect(r.reason).toContain(CMD);
+        expect(r.reason).not.toContain("¿está corriendo?");
+    });
+
+    it("sin match nombra la corrida más parecida", () => {
+        const r = findTestEvidence({
+            runs: [run(`cd /repo && ${CMD} 2>&1`, 0, 2_000), run("bun test tests/otro.test.ts", 0, 3_000)],
+            cmd: "bun test tests/otro2.test.ts",
+            lastMutationTs: 1_000,
+        });
+        expect(r.ok).toBe(false);
+        expect(r.reason).toContain("La corrida más parecida");
+    });
+
+    it("un test: declarado con operadores no es verificable", () => {
+        const r = findTestEvidence({ runs: [], cmd: `${CMD} || true`, lastMutationTs: 1_000 });
+        expect(r.ok).toBe(false);
+        expect(r.reason).toContain("no verificable");
     });
 });
 

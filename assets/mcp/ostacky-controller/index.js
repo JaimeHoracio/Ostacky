@@ -40,6 +40,8 @@ import {
     MAX_STATE_FILE_SIZE,
     DEGRADED_THRESHOLD,
     getMaxTasks,
+    normalizeTestCommand,
+    isMaskedExitCommand,
 } from './controller-core.js';
 
 // --- approved-but-blocked recovery (sin timers) ---
@@ -276,27 +278,46 @@ export function parseTaskVerifications(changeId, statePath) {
  *
  * NO usa `status`: el shell tool de OpenCode reporta "completed" incluso con
  * exit != 0 (medido: `sh -c 'exit 3'` -> status "completed", metadata.exit 3).
- * El plugin registra {cmd, exit, ts} por cada shell; acá sólo se acepta el
- * comando exacto, exit 0, y posterior a la última mutación.
+ * El plugin registra {cmd, exit, ts} por cada corrida que matchea un test:
+ * declarado; acá se compara la forma normalizada (cd/2>&1), se exige exit 0
+ * y posterior a la última mutación, y se rechaza cualquier exit enmascarado
+ * por un pipe a tail/head/grep.
  */
 export function findTestEvidence({ runs, cmd, lastMutationTs, now = Date.now() } = {}) {
-    const expected = String(cmd || '').trim();
-    if (!expected) return { ok: false, reason: 'test: sin comando' };
+    const declared = String(cmd || '').trim();
+    if (!declared) return { ok: false, reason: 'test: sin comando' };
+    const expected = normalizeTestCommand(declared);
+    if (!expected) return { ok: false, reason: `test: comando no verificable: "${declared}"` };
     if (!Array.isArray(runs) || runs.length === 0)
-        return { ok: false, reason: 'sin evidencia: el plugin no registró corridas de shell (¿está corriendo?)' };
-    const matches = runs.filter((r) => r && String(r.cmd || '').trim() === expected);
-    if (matches.length === 0) return { ok: false, reason: `nunca se ejecutó exactamente "${expected}"` };
+        return { ok: false, reason: `sin evidencia para "${declared}": el plugin no registró ninguna corrida de shell que matchee ese comando` };
+    const matches = runs.filter((r) => r && normalizeTestCommand(r.cmd) === expected);
+    if (matches.length === 0) {
+        const recent = runs
+            .filter((r) => r && typeof r.cmd === 'string' && r.cmd.trim())
+            .sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0));
+        const similar = recent.find((r) => r.cmd.includes(declared)) || recent[0] || null;
+        return {
+            ok: false,
+            reason: `nunca se ejecutó exactamente "${declared}"${similar ? `. La corrida más parecida fue "${similar.cmd}"` : ''}`,
+        };
+    }
     const last = matches.reduce((a, b) => ((Number(b.ts) || 0) >= (Number(a.ts) || 0) ? b : a));
+    if (last.maskedExit === true || isMaskedExitCommand(last.cmd))
+        return {
+            ok: false,
+            reason: `exit enmascarado: "${last.cmd}" usa un pipe a tail/head/grep; corré sin pipe o con "set -o pipefail"`,
+            run: last,
+        };
     if (typeof last.ts !== 'number' || typeof lastMutationTs !== 'number')
         return {
             ok: false,
-            reason: `sin timestamps: no se puede probar que "${expected}" sea posterior a la última edición`,
+            reason: `sin timestamps: no se puede probar que "${declared}" sea posterior a la última edición`,
             run: last,
         };
     if (last.ts <= lastMutationTs)
-        return { ok: false, reason: `la última corrida de "${expected}" es anterior a la última edición`, run: last };
+        return { ok: false, reason: `la última corrida de "${declared}" es anterior a la última edición`, run: last };
     if (last.exit !== 0)
-        return { ok: false, reason: `la última corrida de "${expected}" salió con exit ${last.exit}`, run: last };
+        return { ok: false, reason: `la última corrida de "${declared}" salió con exit ${last.exit}`, run: last };
     return { ok: true, reason: `exit 0 hace ${Math.max(0, Math.round((now - last.ts) / 1000))}s`, run: last };
 }
 
@@ -3256,7 +3277,14 @@ class OstackyController {
                     // Copia plana, NO la referencia de shellRuns: el serializador seguro
                     // marca referencias repetidas como "[Circular]" y corrompería la
                     // evidencia persistida (bug detectado por el test de integración).
-                    run: ev.run ? { cmd: ev.run.cmd, exit: ev.run.exit, ts: ev.run.ts } : null,
+                    run: ev.run
+                        ? {
+                              cmd: ev.run.cmd,
+                              exit: ev.run.exit,
+                              ts: ev.run.ts,
+                              ...(ev.run.maskedExit ? { maskedExit: true } : {}),
+                          }
+                        : null,
                     ts: Date.now(),
                 };
                 await this.#persist();
