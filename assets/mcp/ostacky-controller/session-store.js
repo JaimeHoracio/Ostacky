@@ -278,3 +278,12 @@ export function poolReport(opencodeDir, now, cfg) {
     occupied: infos.filter((i) => i.sessionId).sort((a, b) => a.lastUsedAt - b.lastUsedAt).map((i) => ({ ...i, sessionName: idx.slots[i.slot].sessionName }))
   };
 }
+export const HANDOFF_FALLBACK_BASE = ".ostacky-handoff-compaction";
+export function handoffFallbackPath(opencodeDir, sessionId) {
+  const sid = process.env.OSTACKY_SESSION_SLOTS === "off" ? null : sessionId;
+  const key = sid ? sid.replace(/[^A-Za-z0-9_-]/g, "_") : null;
+  return join(opencodeDir, key ? `${HANDOFF_FALLBACK_BASE}-${key}.json` : `${HANDOFF_FALLBACK_BASE}.json`);
+}
+export function isHandoffFallbackFile(name) {
+  return name === HANDOFF_FALLBACK_BASE + ".json" || name.startsWith(HANDOFF_FALLBACK_BASE + "-") && name.endsWith(".json");
+}

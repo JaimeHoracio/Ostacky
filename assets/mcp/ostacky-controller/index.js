@@ -28,7 +28,7 @@ import {
 import { dirname, basename, join, resolve, relative } from 'node:path';
 import { writeFile as writeFileAsync, rename as renameAsync, mkdir as mkdirAsync } from 'node:fs/promises';
 import { SENSITIVE_DEFAULT, BASH_SENSITIVE_RE, isSensitive, extractPathsFromBash } from './security.js';
-import { bindSession, checkBinding, recordRequestSummary, noteFileEdit } from './session-store.js';
+import { bindSession, checkBinding, recordRequestSummary, noteFileEdit, handoffFallbackPath, isHandoffFallbackFile } from './session-store.js';
 import { parsePoolConfig, isActiveSlot, parseSessionListTitle } from './session-slots.js';
 import { execFileSync } from 'node:child_process';
 import {
@@ -456,8 +456,9 @@ function cleanupTmpFiles(statePath) {
         for (const entry of readdirSync(dir)) {
             const isTmp = entry.startsWith(name + '.tmp.');
             const isLock = entry.startsWith(name + '.lock');
-            const isHandoff = entry === '.ostacky-handoff-compaction.json';
-            if (!isTmp && !isLock && !isHandoff) continue;
+            const isHandoff = isHandoffFallbackFile(entry);
+            const isHandoffTmp = entry.startsWith('.ostacky-handoff-compaction') && entry.includes('.json.tmp.');
+            if (!isTmp && !isLock && !isHandoff && !isHandoffTmp) continue;
             // C3: don't delete active lock of another process
             if (isLock) {
                 try {
@@ -548,6 +549,7 @@ class OstackyController {
     #lockOwner = false;
     #lockDepth = 0; // multi-sesión: reentrancy (el lock se toma una vez por tool call)
     #callerSessionId = null; // sessionId del caller (de _meta), solo en memoria
+    #opencodeDir = null; // .opencode del proyecto (ancla fija del handoff, no cambia con el slot)
     #loadedSnapshot = null; // huella del estado recién leído, para detectar "dirty"
     #persistQueue = Promise.resolve(); // cola in-process: las escrituras nunca se solapan
     #persistSeq = 0; // sufijo único por escritura (tmp.<pid>.<seq>)
@@ -556,6 +558,7 @@ class OstackyController {
 
     constructor(opts = {}) {
         this.#statePath = opts.statePath;
+        this.#opencodeDir = opts.statePath ? dirname(opts.statePath) : null;
         this.#lockPath = opts.statePath ? opts.statePath + '.lock' : null;
         this.#lockPidPath = opts.statePath ? opts.statePath + '.lock.pid' : null;
         this.#lockHeartbeatPath = opts.statePath ? opts.statePath + '.lock.timestamp' : null;
@@ -2819,7 +2822,7 @@ class OstackyController {
         // C3: fallback to compaction file — same anchor as writer (dirname(statePath))
         if (!this.#statePath) return null;
         try {
-            const fallbackPath = join(dirname(this.#statePath), '.ostacky-handoff-compaction.json');
+            const fallbackPath = handoffFallbackPath(this.#opencodeDir, this.#callerSessionId);
             const raw = readFileSync(fallbackPath, 'utf8');
             const data = JSON.parse(raw);
             if (data && typeof data.summary === 'string') return data;
@@ -2834,7 +2837,7 @@ class OstackyController {
         // C3: also delete fallback compaction file (same anchor)
         if (this.#statePath) {
             try {
-                unlinkSync(join(dirname(this.#statePath), '.ostacky-handoff-compaction.json'));
+                unlinkSync(handoffFallbackPath(this.#opencodeDir, this.#callerSessionId));
             } catch {}
         }
         await this.#audit('HANDOFF', 'clear_handoff', prev?.summary?.slice(0, 100) || 'none');

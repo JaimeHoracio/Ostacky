@@ -206,3 +206,22 @@ describe('session-state-files — integración MCP (dos sesiones, mismo proyecto
         expect(readIndex(opencodeDir).migrated).toBe(true);
     }, 30_000);
 });
+
+describe('handoff de compaction por sesión — integración MCP', () => {
+    it('get_handoff devuelve solo el fallback de la propia sesión', async () => {
+        const { opencodeDir, statePath } = await setup();
+        const { handoffFallbackPath } = await import('../src/session-store.ts');
+        writeFileSync(
+            handoffFallbackPath(opencodeDir, 'sesA'),
+            JSON.stringify({ summary: 'compaction A', pendingTasks: ['T3'], nextSteps: ['T3'], ts: Date.now() })
+        );
+        const a = await spawnSession(statePath);
+        const b = await spawnSession(statePath);
+
+        const ha = await a.call('get_handoff', {}, 'sesA');
+        const hb = await b.call('get_handoff', {}, 'sesB');
+
+        expect(JSON.stringify(ha)).toContain('compaction A');
+        expect(JSON.stringify(hb)).not.toContain('compaction A');
+    });
+});

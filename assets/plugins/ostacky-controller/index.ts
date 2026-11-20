@@ -22,7 +22,7 @@ import { homedir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { SENSITIVE_DEFAULT, BASH_SENSITIVE_RE, isSensitive, extractPathsFromBash } from "./security.ts"
 import { classifyIntent } from "./tiered.ts"
-import { checkBinding, readIndex, slotPath as slotFilePath } from "./session-store.ts"
+import { checkBinding, readIndex, slotPath as slotFilePath, handoffFallbackPath } from "./session-store.ts"
 import { STATES, TRANSITIONS, DEFAULT_STATE, normalizeTestCommand, isMaskedExitCommand } from "./controller-core.ts"
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -203,7 +203,7 @@ export function readState(directory: string, sessionId?: string | null): any | n
  * El checkpoint count-based del MCP solo escribe lastHandoff cada 3er
  * complete_task, así que sin la tercera fuente el hint quedaba mudo en T1/T2.
  */
-export function recoveryPending(state: any, directory?: string): { pending: string[]; nextSteps: string[] } {
+export function recoveryPending(state: any, directory?: string, sessionId?: string | null): { pending: string[]; nextSteps: string[] } {
   const isPending = (id: string) => !state?.tasks?.[id] || state.tasks[id].status !== "COMPLETED"
   const fromExpected = () => (Array.isArray(state?.expectedTasks) ? state.expectedTasks.filter(isPending) : [])
   let pending: string[] = Array.isArray(state?.lastHandoff?.pendingTasks)
@@ -212,7 +212,7 @@ export function recoveryPending(state: any, directory?: string): { pending: stri
   let nextSteps: string[] = Array.isArray(state?.lastHandoff?.nextSteps) ? state.lastHandoff.nextSteps : []
   if (pending.length === 0 && directory) {
     try {
-      const fallbackPath = join(dirname(getStatePath(directory)), ".ostacky-handoff-compaction.json")
+      const fallbackPath = handoffFallbackPath(dirname(getStatePath(directory)), sessionId)
       if (existsSync(fallbackPath)) {
         const data = JSON.parse(readFileSync(fallbackPath, "utf-8"))
         if (data && Array.isArray(data.pendingTasks) && typeof data.ts === "number" && Date.now() - data.ts < 24 * 60 * 60 * 1000) {
@@ -229,16 +229,16 @@ export function recoveryPending(state: any, directory?: string): { pending: stri
 }
 
 /** Texto del hint de recovery (null si no hay pendientes). Puro: testeable sin hooks. */
-export function recoveryHint(state: any, directory?: string): string | null {
+export function recoveryHint(state: any, directory?: string, sessionId?: string | null): string | null {
   if (!state || ["DONE", "INTERPRETATION_PENDING"].includes(state.state)) return null
-  const { pending } = recoveryPending(state, directory)
+  const { pending } = recoveryPending(state, directory, sessionId)
   if (pending.length === 0) return null
   return `\n\n[RECOVERY: te quedan ${pending.slice(0, 3).join(",")}${pending.length > 3 ? `, +${pending.length - 3} más` : ""} - usa get_handoff / mem_context para retomar]`
 }
 
 /** Payload del fallback de compaction, con los pendientes reales del state. */
 export function compactionPayload(state: any, directory: string, sessionID?: string, contextSnippet = "") {
-  const { pending, nextSteps } = recoveryPending(state, directory)
+  const { pending, nextSteps } = recoveryPending(state, directory, sessionID)
   return {
     summary: state?.requestId
       ? `Compaction fallback for request ${state.requestId} — ${pending.length} pendientes`
@@ -934,7 +934,7 @@ export default {
       // harden-compaction-resume: auto-inject recovery hint when pending (determinístico, no depende del modelo)
       if (!trivial && state && !["DONE", "INTERPRETATION_PENDING"].includes(state.state)) {
         try {
-          const hint = recoveryHint(state, directory)
+          const hint = recoveryHint(state, directory, sessionId)
           if (hint) event.prompt.text = (event.prompt.text ?? "") + hint
         } catch {}
       }
@@ -1446,7 +1446,7 @@ export default {
     // ── Observable tools (MCP thin replacement) ──
     // Cada tool lee el state de SU sesión (sessionID del contexto de ejecución). Sin identidad con
     // slots activos devuelve error explícito en vez de leer el state de otra sesión.
-    const withSessionState = (fn: (state: any) => unknown) =>
+    const withSessionState = (fn: (state: any, sid: string | null) => unknown) =>
       async (_args: unknown, toolCtx?: unknown) => {
         const sid = toolSessionId(toolCtx)
         if (!sid && process.env.OSTACKY_SESSION_SLOTS !== "off") {
@@ -1455,7 +1455,7 @@ export default {
             hint: "El tool no recibió sessionID; usa el MCP ostacky-controller (identidad por _meta).",
           })
         }
-        return fn(readState(directory, sid))
+        return fn(readState(directory, sid), sid)
       }
     await ctx.tool.transform((editor) => {
       editor.add({
@@ -1490,10 +1490,10 @@ export default {
         name: "ostacky_get_handoff",
         description: "Get last handoff (plugin)",
         input: emptySchema,
-        execute: withSessionState((state) => {
-          // Fallback de compaction: archivo compartido por proyecto (mismo ancla que el writer).
+        execute: withSessionState((state, sid) => {
+          // Fallback de compaction por sesión (mismo ancla que el writer).
           try {
-            const fallback = join(dirname(getStatePath(directory)), ".ostacky-handoff-compaction.json")
+            const fallback = handoffFallbackPath(dirname(getStatePath(directory)), sid)
             if (existsSync(fallback)) {
               const data = JSON.parse(readFileSync(fallback, "utf-8"))
               if (data && !state?.lastHandoff) return jsonContent(data)
@@ -1551,7 +1551,7 @@ export default {
         const statePath = getStatePath(directory)
         const dir = dirname(statePath)
         try { mkdirSync(dir, { recursive: true }) } catch {}
-        const fallbackPath = join(dir, ".ostacky-handoff-compaction.json")
+        const fallbackPath = handoffFallbackPath(dir, event.sessionID as string | undefined)
         const contextSnippet = (() => {
           try {
             return JSON.stringify(event.messages.slice(0, 2)).slice(0, 800)

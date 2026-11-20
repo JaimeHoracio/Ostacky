@@ -369,3 +369,21 @@ export function poolReport(opencodeDir: string, now: number, cfg: PoolConfig): {
   };
 }
 
+
+/** Prefijo del archivo de handoff de compaction (uno por sesión; sin sesión, el nombre legado). */
+export const HANDOFF_FALLBACK_BASE = ".ostacky-handoff-compaction";
+
+/**
+ * Ruta del fallback de compaction de una sesión. Ancla fija: el directorio .opencode del proyecto
+ * (no el de un slot). Con OSTACKY_SESSION_SLOTS=off o sin sesión usa el nombre legado.
+ */
+export function handoffFallbackPath(opencodeDir: string, sessionId?: string | null): string {
+  const sid = process.env.OSTACKY_SESSION_SLOTS === "off" ? null : sessionId;
+  const key = sid ? sid.replace(/[^A-Za-z0-9_-]/g, "_") : null;
+  return join(opencodeDir, key ? `${HANDOFF_FALLBACK_BASE}-${key}.json` : `${HANDOFF_FALLBACK_BASE}.json`);
+}
+
+/** true si el nombre es un archivo de fallback de compaction (legado o por sesión). */
+export function isHandoffFallbackFile(name: string): boolean {
+  return name === HANDOFF_FALLBACK_BASE + ".json" || (name.startsWith(HANDOFF_FALLBACK_BASE + "-") && name.endsWith(".json"));
+}
