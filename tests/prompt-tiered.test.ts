@@ -8,7 +8,7 @@ describe("prompt-tiered", () => {
     const src = readFileSync(pluginPath, "utf-8");
     // Tiered cache-friendly: system[0] permanece FULL, suffix hint no reemplaza
     expect(src).toContain("PLUGIN HINT: Saludo trivial");
-    expect(src).toContain("isTrivial");
+    expect(src).toContain("classifyIntent");
     // Check cost effective with hit 0.10x would be <12k in real test, here we just verify structure
     expect(src).not.toContain("output.system[0] =");
   });
@@ -17,7 +17,7 @@ describe("prompt-tiered", () => {
     const ctrlPath = join(import.meta.dir, "..", "assets","plugins","ostacky-controller","index.ts");
     const src = readFileSync(ctrlPath, "utf-8");
     expect(src).toContain("PLUGIN HINT");
-    expect(src).toContain("isTrivial");
+    expect(src).toContain("classifyIntent");
     expect(src).not.toMatch(/output\.system\.length = 0/);
   });
 

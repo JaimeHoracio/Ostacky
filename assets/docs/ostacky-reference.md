@@ -88,6 +88,7 @@ Cubre `read`/`grep`/`glob`/`read_mcp_resource` y **`shell`** cuando el comando r
 `isTrivial(msg,state) = state==DONE && msg.trim().length<30 && /^(hola|hey|gracias|buenas|hi|hello)\b/i.test(msg) && !/(necesito|quiero|agregá|fix|bug|feature|auth|spec|implementar)/i.test(msg)`
 
 - **Trivial + DONE**: `output.system[0]` permanece `FULL` diet cacheable (10% hit), plugin añade suffix hint `[PLUGIN HINT: Saludo trivial — responde breve sin tools]` y bloquea `mem_context`/`codegraph_*` con `SKIP`. Solo Engram pointer 1 línea, no `MEMORY_INSTRUCTIONS`.
+- **Pregunta de sesión** (`classifyIntent` → `session_question`): regex de recuerdo (`qué hicimos/cambiamos/falta…`, `resumí…`, `por qué elegiste…`) sin verbos de acción/propuesta (`propon*`, `arregl*`, `cambiá`…). Hint `[PLUGIN HINT: Pregunta sobre hechos ya ejecutados…]`, exime el Engram audit. Responde desde contexto + `ostacky_get_state` (`completedTasks`, `pendingTasks`, `editedFiles`). No bloquea tools ni relaja gates de estado/edición; ante duda gana `work`.
 - **TIER1** (0/0+1 con intent): hint `TIER1` en suffix, `FULL` sigue cacheado, `DIRECT` sin `Alternatives`.
 - **FULL** (1+): sin hint, `FULL` con `MEMORY_INSTRUCTIONS` lazy (solo si `!isTrivial` o nudge >15m).
 

@@ -8,7 +8,7 @@
       "file": "assets/agents/ostacky.md",
       "description": "Orquestador con recuperación automática (nunca se congela), ruteo por nivel de impacto, controller MCP con SDK oficial, edición segura con fallback inline, y delegación en OpenSpec + Superpowers. v0.10.3: prune de skills obsoletas, lastHandoff, getAvailableTransitions, consecutiveFailures real, mem_session_summary automático al cierre.",
       "version": "0.10.3",
-      "sha256": "fd9d358a18971288f4879ab09859bde689b3c95f39bddc06868475198b6acec0"
+      "sha256": "f4455e380436093b500e087bcf59a5035d740ad224e30a66a481d9fb30c84768"
     }
   ],
   "commands": [

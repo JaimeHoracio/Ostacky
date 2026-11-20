@@ -21,7 +21,7 @@ import { join, dirname, basename, resolve, relative, delimiter, sep } from "node
 import { homedir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { SENSITIVE_DEFAULT, BASH_SENSITIVE_RE, isSensitive, extractPathsFromBash } from "./security.ts"
-import { isTrivial } from "./tiered.ts"
+import { classifyIntent } from "./tiered.ts"
 import { checkBinding, readIndex, slotPath as slotFilePath } from "./session-store.ts"
 import { STATES, TRANSITIONS, DEFAULT_STATE, normalizeTestCommand, isMaskedExitCommand } from "./controller-core.ts"
 
@@ -472,6 +472,13 @@ export function projectStateForTool(state: any): Record<string, unknown> {
     routeDecisionId: state.routeDecisionId ?? null,
     executionDecisionId: state.executionDecisionId ?? null,
     executionMode: state.executionMode ?? null,
+    // Hechos ejecutados (fuente para preguntas de sesión; no requiere CodeGraph ni Engram)
+    expectedTasks: Array.isArray(state.expectedTasks) ? state.expectedTasks : null,
+    completedTasks: Object.keys(state.tasks ?? {}).filter((id) => state.tasks[id]?.status === "COMPLETED"),
+    pendingTasks: Array.isArray(state.expectedTasks)
+      ? state.expectedTasks.filter((id: string) => state.tasks?.[id]?.status !== "COMPLETED")
+      : null,
+    editedFiles: Object.keys(state.fileFingerprints ?? {}),
   }
 }
 
@@ -829,6 +836,8 @@ export default {
 
     // Track trivial flag per session to gate tools
     const trivialBySession = new Map<string, boolean>()
+    // Pregunta sobre hechos ya ejecutados: responde desde contexto + ostacky_get_state (no discovery ni Engram)
+    const sessionQuestionBySession = new Map<string, boolean>()
     // Track discovery hit per requestId to avoid blocking after hit
     const discoveryHitByRequest = new Map<string, boolean>()
     // Degradación de CodeGraph por sesión: timestamp del último fallo real de codegraph_explore.
@@ -905,8 +914,10 @@ export default {
         } catch {}
       }
       const currentState = state?.state ?? "DONE"
-      const trivial = isTrivial(text, currentState)
+      const intent = classifyIntent(text, currentState)
+      const trivial = intent === "greeting"
       trivialBySession.set(sessionId, trivial)
+      sessionQuestionBySession.set(sessionId, intent === "session_question")
       // Horizonte por request: prompts NO-triviales invalidan el discovery hit —
       // la siguiente lectura de código exige un explore fresco (contrato
       // remove-discovery-cache-phantom + instrucción §1 del agente).
@@ -914,6 +925,10 @@ export default {
       if (trivial) {
         // Preserve system FULL cacheable, add suffix hint to user prompt text
         const hint = "\n\n[PLUGIN HINT: Saludo trivial — responde breve sin tools. No hagas Discovery.]"
+        event.prompt.text = (event.prompt.text ?? "") + hint
+      } else if (intent === "session_question") {
+        // A+B+C: respuesta desde contexto y ostacky_get_state. Solo relaja discovery/Engram; los gates de estado y edición siguen intactos.
+        const hint = "\n\n[PLUGIN HINT: Pregunta sobre hechos ya ejecutados en esta sesión — responde desde el contexto y ostacky_get_state, sin codegraph ni mem_search. Si el dato no está ni en contexto ni en el state, decilo y no inventes.]"
         event.prompt.text = (event.prompt.text ?? "") + hint
       }
       // harden-compaction-resume: auto-inject recovery hint when pending (determinístico, no depende del modelo)
@@ -981,7 +996,7 @@ export default {
       const isEngramRelevantTool = tool.includes("record_discovery") || (tool.includes("openspec") && (tool.includes("propose") || (typeof args?.filePath === "string" && args.filePath.includes("openspec/changes")) || (typeof args?.path === "string" && args.path.includes("openspec/changes"))))
       if (isEngramRelevantTool) {
         const hasEngramHit = engramHitBySession.get(sessionId) ?? false
-        const isTrivialForEngram = trivialBySession.get(sessionId) ?? false
+        const isTrivialForEngram = (trivialBySession.get(sessionId) ?? false) || (sessionQuestionBySession.get(sessionId) ?? false)
         const stateForEngram = freshState
         const shouldAudit = !hasEngramHit && !isTrivialForEngram && stateForEngram && ["DISCOVERY", "ROUTE_DECISION_PENDING", "SPECIFICATION", "INTERPRETATION_PENDING"].includes(stateForEngram.state)
         if (shouldAudit) {
@@ -1523,6 +1538,7 @@ export default {
           const sid = event.data.sessionID as string
           if (sid) {
             trivialBySession.delete(sid)
+            sessionQuestionBySession.delete(sid)
             discoveryHitByRequest.delete(sid)
             engramHitBySession.delete(sid)
           }
