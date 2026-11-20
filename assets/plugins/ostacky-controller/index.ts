@@ -481,6 +481,50 @@ function isCodegraphAvailable(directory: string): boolean {
   } catch { return false }
 }
 
+/** Modo del gate de CodeGraph: auto (degrada ante fallo real), strict (nunca degrada), off (sin gate). */
+export type CodegraphMode = "auto" | "strict" | "off"
+
+export function codegraphMode(env: Record<string, string | undefined> = process.env): CodegraphMode {
+  const v = (env.OSTACKY_CODEGRAPH || "auto").trim().toLowerCase()
+  return v === "strict" || v === "off" ? v : "auto"
+}
+
+export const CODEGRAPH_DEGRADED_TTL_MIN_DEFAULT = 30
+
+/** TTL de la degradación en minutos (OSTACKY_CODEGRAPH_DEGRADED_TTL_MIN); inválido → default. */
+export function codegraphDegradedTtlMs(env: Record<string, string | undefined> = process.env): number {
+  const n = Number(env.OSTACKY_CODEGRAPH_DEGRADED_TTL_MIN)
+  const min = Number.isFinite(n) && n > 0 ? n : CODEGRAPH_DEGRADED_TTL_MIN_DEFAULT
+  return min * 60_000
+}
+
+/**
+ * ¿Este resultado de tool es un fallo real de CodeGraph (MCP caído, error o timeout de explore)?
+ * Solo cuenta `codegraph_explore`: es la tool que el gate exige para abrir la lectura de código.
+ * Un explore completado (aunque vacío) NO es fallo.
+ */
+export function marksCodegraphFailure(toolName: string, status: unknown): boolean {
+  return toolName.includes("codegraph_explore") && (status === "error" || status === "failed" || status === "timeout")
+}
+
+/**
+ * ¿El gate de lectura de código está activo para esta sesión?
+ * - off: nunca. Sin binario/PATH: nunca (no hay CodeGraph que exigir).
+ * - strict: siempre que haya CodeGraph, ignorando degradación.
+ * - auto: inactivo mientras la sesión esté degradada; vuelve a activo al vencer el TTL.
+ */
+export function isCodegraphGateActive(input: {
+  mode: CodegraphMode
+  available: boolean
+  degradedSince: number | null
+  now: number
+  ttlMs: number
+}): boolean {
+  if (input.mode === "off" || !input.available) return false
+  if (input.mode === "strict" || input.degradedSince === null) return true
+  return input.now - input.degradedSince >= input.ttlMs
+}
+
 /**
  * ¿Este read/grep/glob esta sujeto al gate de discovery?
  * Exenciones: docs/json/md, openspec/changes|specs, grep de literales, y archivos ya
@@ -759,6 +803,8 @@ export default {
     const trivialBySession = new Map<string, boolean>()
     // Track discovery hit per requestId to avoid blocking after hit
     const discoveryHitByRequest = new Map<string, boolean>()
+    // Degradación de CodeGraph por sesión: timestamp del último fallo real de codegraph_explore.
+    const codegraphDegradedBySession = new Map<string, number>()
     // Track Engram hit per session to audit bypass (soft, no BLOCK)
     const engramHitBySession = new Map<string, boolean>()
     // ─── Heartbeat ping — evita sensación de trancado en tareas largas ──
@@ -982,7 +1028,15 @@ export default {
         // Orden cheap -> caro: el path no hace I/O; codegraph y la cache en disco solo se evalúan
         // si el path esta realmente sujeto al gate (`read`/`grep`/`glob` corren en cada turno).
         const gated = isCodeReadGated({ isCodeFile, isLiteralGrep, isSpecTasksPath, isDocsPath, isTaskTracked })
-        const codegraphOk = gated ? isCodegraphAvailable(directory) : false
+        const codegraphOk = gated
+          ? isCodegraphGateActive({
+              mode: codegraphMode(),
+              available: isCodegraphAvailable(directory),
+              degradedSince: codegraphDegradedBySession.get(sessionId) ?? null,
+              now: Date.now(),
+              ttlMs: codegraphDegradedTtlMs(),
+            })
+          : false
         // Sin fallback a disco: la única evidencia válida es un codegraph_explore
         // COMPLETADO en este request (discoveryHitByRequest; el hook "prompt"
         // invalida el hit en cada prompt no-trivial). session.deleted también lo limpia.
@@ -1047,7 +1101,15 @@ export default {
           const shellTargets = shellReadTargets(cmdForRead)
           if (shellTargets.length > 0) {
             const gatedShell = shellTargets.filter((p) => !isShellPathExempt(p, directory, freshState))
-            const codegraphOkShell = gatedShell.length > 0 ? isCodegraphAvailable(directory) : false
+            const codegraphOkShell = gatedShell.length > 0
+              ? isCodegraphGateActive({
+                  mode: codegraphMode(),
+                  available: isCodegraphAvailable(directory),
+                  degradedSince: codegraphDegradedBySession.get(sessionId) ?? null,
+                  now: Date.now(),
+                  ttlMs: codegraphDegradedTtlMs(),
+                })
+              : false
             const hasDiscoveryShell = codegraphOkShell ? discoveryHitByRequest.get(sessionId) === true : false
             if (gatedShell.length > 0 && codegraphOkShell && !hasDiscoveryShell) {
               throw new Error(
@@ -1225,8 +1287,24 @@ export default {
       // Read TIENE que poder pasar si hubo `codegraph_explore`.
       if (marksDiscovery(tool)) {
         try {
-          if (event.status === "completed") discoveryHitByRequest.set(sessionId, true)
+          if (event.status === "completed") {
+            discoveryHitByRequest.set(sessionId, true)
+            // Recuperación: un explore OK vuelve a activar el gate estricto.
+            codegraphDegradedBySession.delete(sessionId)
+          }
         } catch {}
+      }
+      // Fallo real de CodeGraph → sesión degradada: el gate deja de exigir discovery hasta el TTL.
+      if (marksCodegraphFailure(tool, event.status) && !codegraphDegradedBySession.has(sessionId)) {
+        codegraphDegradedBySession.set(sessionId, Date.now())
+        try {
+          const st = readState(directory)
+          if (st) {
+            st.codegraphDegradedCount = (st.codegraphDegradedCount || 0) + 1
+            persistState(directory, st, ["codegraphDegradedCount"])
+          }
+        } catch {}
+        try { console.warn(`[ostacky] codegraph_degraded: ${tool} status=${String(event.status)}; lectura de código sin gate hasta TTL`) } catch {}
       }
       // Track Engram hit (mem_search / mem_context / dedup) para soft gate 1.6
       if (tool.includes("engram_mem_search") || tool.includes("engram_mem_context") || tool.includes("mem_search") || tool.includes("mem_context") || tool.includes("engram_mem_")) {
