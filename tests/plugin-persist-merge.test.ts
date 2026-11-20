@@ -4,6 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mergePluginOwnedState, persistState } from '../assets/plugins/ostacky-controller/index.ts';
 
+// Semántica de state único (legado). Con slots, persistState sin sessionId es no-op por diseño.
+process.env.OSTACKY_SESSION_SLOTS = 'off';
+
 /**
  * El MCP es la AUTORIDAD del estado; el plugin solo escribe un puñado de campos
  * "advisory". Antes hacía readState → mutar → write del snapshot COMPLETO, así

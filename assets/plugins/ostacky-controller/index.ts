@@ -22,6 +22,7 @@ import { homedir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { SENSITIVE_DEFAULT, BASH_SENSITIVE_RE, isSensitive, extractPathsFromBash } from "./security.ts"
 import { isTrivial } from "./tiered.ts"
+import { checkBinding, slotPath as slotFilePath } from "./session-store.ts"
 import { STATES, TRANSITIONS, DEFAULT_STATE, normalizeTestCommand, isMaskedExitCommand } from "./controller-core.ts"
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -160,8 +161,24 @@ export function getStatePath(directory: string): string {
   return join(directory, ".opencode", "ostacky-state.json")
 }
 
-function readState(directory: string): any | null {
-  const p = getStatePath(directory)
+/**
+ * Archivo de state de la sesión (session-state-files). Con slots activos, cada sesión tiene su
+ * slot en .opencode/sessions/; sin sessionId válido (o sin slot asignado) no hay state para ella.
+ * Con OSTACKY_SESSION_SLOTS=off se usa el state único legado (mismo comportamiento que antes).
+ * Debe coincidir con bindCallerSlot del MCP (assets/mcp/ostacky-controller/index.js).
+ */
+export function resolveStatePath(directory: string, sessionId?: string | null): string | null {
+  const legacy = getStatePath(directory)
+  if (process.env.OSTACKY_SESSION_SLOTS === "off") return legacy
+  if (!sessionId || sessionId === "default") return null
+  const opencodeDir = dirname(legacy)
+  const bound = checkBinding(opencodeDir, sessionId)
+  return bound.ok ? slotFilePath(opencodeDir, bound.slot) : null
+}
+
+export function readState(directory: string, sessionId?: string | null): any | null {
+  const p = resolveStatePath(directory, sessionId)
+  if (!p) return null
   try {
     const raw = readFileSync(p, "utf-8")
     return JSON.parse(raw)
@@ -371,8 +388,9 @@ export function nextPendingGateCache(
  * (4) write atómico (tmp único + rename). El `revision` se preserva del disco:
  * las escrituras del plugin no son transiciones de la máquina de estados.
  */
-export function persistState(directory: string, state: any, ownedKeys?: string[]): void {
-  const p = getStatePath(directory)
+export function persistState(directory: string, state: any, ownedKeys?: string[], sessionId?: string | null): void {
+  const p = resolveStatePath(directory, sessionId)
+  if (!p) return
   const dir = dirname(p)
   try { mkdirSync(dir, { recursive: true }) } catch {}
 
@@ -890,7 +908,7 @@ export default {
 
       // ── 0) Trivial greeting blocks for expensive tools (SKIP, not BLOCKED) ──
       const isTrivialSession = trivialBySession.get(sessionId) ?? false
-      const stateForTrivial = readState(directory)
+      const stateForTrivial = readState(directory, sessionId)
       if (isTrivialSession && stateForTrivial?.state === "DONE") {
         const blockedForTrivial = [
           "engram_mem_context", "mem_context",
@@ -904,7 +922,7 @@ export default {
 
       // ── 1) PENDING hard gate (0 tokens) ──
       checkCount++
-      const freshState = readState(directory)
+      const freshState = readState(directory, sessionId)
       const pendingStates = ["ROUTE_DECISION_PENDING", "EXECUTION_DECISION_PENDING", "CLARIFICATION_PENDING"]
       // multisession-ownership-guard: el PENDING de OTRA sesión no congela esta sesión.
       const foreignPendingOwner = !!freshState && isForeignPendingOwner(freshState, sessionId)
@@ -943,11 +961,11 @@ export default {
         const shouldAudit = !hasEngramHit && !isTrivialForEngram && stateForEngram && ["DISCOVERY", "ROUTE_DECISION_PENDING", "SPECIFICATION", "INTERPRETATION_PENDING"].includes(stateForEngram.state)
         if (shouldAudit) {
           try {
-            const st = readState(directory)
+            const st = readState(directory, sessionId)
             if (st) {
               st.engramBypassCount = (st.engramBypassCount || 0) + 1
               // no persist cada vez si es muy frecuente: single-writer ya persiste en after, pero acá persistimos directo para auditoría
-              persistState(directory, st, ["engramBypassCount"])
+              persistState(directory, st, ["engramBypassCount"], sessionId)
             }
           } catch {}
         }
@@ -956,7 +974,7 @@ export default {
       // ── 1.5) Router determinista: openspec-propose bloquea si 1+ no-downgradeable sin Alternatives ──
       const isOpenspecPropose = tool.includes("openspec") && (tool.includes("propose") || args?.filePath?.includes("openspec/changes") || args?.path?.includes("openspec/changes"))
       if (isOpenspecPropose) {
-        const s = readState(directory)
+        const s = readState(directory, sessionId)
         if (s?.level === "1+" && s?._routerNeedsAlternatives) {
           // check if design.md has Alternatives
           try {
@@ -1047,10 +1065,10 @@ export default {
           // Métrica de evasión real (misma convención que engramBypassCount:648):
           // cuántas lecturas de código saltaron el gate sin explore completado.
           try {
-            const st = readState(directory)
+            const st = readState(directory, sessionId)
             if (st) {
               st.codeReadBlockedCount = (st.codeReadBlockedCount || 0) + 1
-              persistState(directory, st, ["codeReadBlockedCount"])
+              persistState(directory, st, ["codeReadBlockedCount"], sessionId)
             }
           } catch {}
           try { console.warn(`[ostacky] code_read_blocked: sin codegraph_explore completado en sesión (${targetPath || "query"})`) } catch {}
@@ -1071,7 +1089,7 @@ export default {
           if (hasSensitivePattern || sensitivePaths.length > 0) {
             if (sensitivePaths.length > 0) {
               for (const p of sensitivePaths) {
-                const s = readState(directory)
+                const s = readState(directory, sessionId)
                 const candidates = [p, resolve(directory, p), join(directory, p)]
                 const allowed = candidates.some((c) => s?.allowedFiles?.[c] || s?.allowedFiles?.[p])
                 const baseAllowed = s?.allowedFiles?.[p] || s?.allowedFiles?.[basename(p)] || s?.allowedFiles?.[resolve(directory, p)]
@@ -1082,7 +1100,7 @@ export default {
                 }
               }
             } else if (hasSensitivePattern) {
-              const s = readState(directory)
+              const s = readState(directory, sessionId)
               const hasAllowed = Object.keys(s?.allowedFiles || {}).some((k) => isSensitive(k, patterns))
               if (!hasAllowed) throw new Error(`BLOCKED: shell contiene acceso sensible (.env). Llamá check_file_access con reason antes.`)
             }
@@ -1159,7 +1177,7 @@ export default {
         }
       }
       if (filePath && isSensitive(filePath, patterns)) {
-        const s = readState(directory)
+        const s = readState(directory, sessionId)
         const allowed = s?.allowedFiles?.[filePath] || s?.allowedFiles?.[resolve(directory, filePath)] || s?.allowedFiles?.[basename(filePath)]
         if (!allowed) {
           const denied = s?.deniedFiles?.[filePath] || s?.deniedFiles?.[basename(filePath)]
@@ -1171,7 +1189,7 @@ export default {
       if (tool === "patch" && typeof args?.patchText === "string" && args.patchText) {
         for (const patchPath of extractPathsFromPatch(args.patchText)) {
           if (!patchPath || !isSensitive(patchPath, patterns)) continue
-          const s = readState(directory)
+          const s = readState(directory, sessionId)
           const allowed = s?.allowedFiles?.[patchPath] || s?.allowedFiles?.[resolve(directory, patchPath)] || s?.allowedFiles?.[basename(patchPath)]
           if (!allowed) {
             const denied = s?.deniedFiles?.[patchPath] || s?.deniedFiles?.[basename(patchPath)]
@@ -1197,15 +1215,15 @@ export default {
           if (oldString.startsWith("hash:")) {
             const claimed = oldString.slice(5)
             const currentFp = fastFingerprint(resolve(directory, targetPath))
-            const s = readState(directory)
+            const s = readState(directory, sessionId)
             const last: any = s?.lastValidated
             const lastEntry = last?.byFile?.[targetPath] || (last?.filePath === targetPath ? last : null)
             if (claimed !== currentFp || (lastEntry && lastEntry.hash !== currentFp)) {
               // mark stale attempt
               try {
-                const st = readState(directory) || { ...DEFAULT_STATE }
+                const st = readState(directory, sessionId) || { ...DEFAULT_STATE }
                 st.staleContentAttempts = (st.staleContentAttempts || 0) + 1
-                persistState(directory, st, ["staleContentAttempts"])
+                persistState(directory, st, ["staleContentAttempts"], sessionId)
               } catch {}
               throw new Error(`CONFLICT: stale fingerprint for ${targetPath}`)
             }
@@ -1244,7 +1262,7 @@ export default {
           }
           // Record lastValidated per-file for future hash checks (fix-new-file-gate: mapa + fallback legacy)
           try {
-            const st = readState(directory)
+            const st = readState(directory, sessionId)
             if (st) {
               const fp = fastFingerprint(resolve(directory, targetPath))
               const prev: any = (st as any).lastValidated
@@ -1269,7 +1287,7 @@ export default {
               // (implementation_complete) se bloqueaba.
               // `["lastValidated"]` = se escribe SOLO esa clave sobre el estado
               // fresco que se re-lee bajo el lock compartido con el MCP.
-              persistState(directory, st, ["lastValidated"])
+              persistState(directory, st, ["lastValidated"], sessionId)
             }
           } catch {}
         }
@@ -1298,10 +1316,10 @@ export default {
       if (marksCodegraphFailure(tool, event.status) && !codegraphDegradedBySession.has(sessionId)) {
         codegraphDegradedBySession.set(sessionId, Date.now())
         try {
-          const st = readState(directory)
+          const st = readState(directory, sessionId)
           if (st) {
             st.codegraphDegradedCount = (st.codegraphDegradedCount || 0) + 1
-            persistState(directory, st, ["codegraphDegradedCount"])
+            persistState(directory, st, ["codegraphDegradedCount"], sessionId)
           }
         } catch {}
         try { console.warn(`[ostacky] codegraph_degraded: ${tool} status=${String(event.status)}; lectura de código sin gate hasta TTL`) } catch {}
@@ -1325,7 +1343,7 @@ export default {
         const mutating =
           (isMutatingTool(tool) && event.status === "completed") ||
           (!!ev && ev.exit === 0 && isShellMutation(ev.cmd))
-        const declaredTests = testVerifyCommands(readState(directory))
+        const declaredTests = testVerifyCommands(readState(directory, sessionId))
         const normalizedCmd = ev ? normalizeTestCommand(ev.cmd) : ""
         const isTestRun =
           !!ev &&
@@ -1344,7 +1362,7 @@ export default {
           }
         }
         if (isTestRun || mutating) {
-          const s = readState(directory)
+          const s = readState(directory, sessionId)
           if (s) {
             const owned: string[] = []
             if (ev && isTestRun) {
@@ -1359,20 +1377,20 @@ export default {
               ;(s as any).lastMutationTs = Date.now()
               owned.push("lastMutationTs")
             }
-            if (owned.length > 0) persistState(directory, s, owned)
+            if (owned.length > 0) persistState(directory, s, owned, sessionId)
           }
         }
       } catch {}
       // Heartbeat: single-writer — plugin memo, no persist cada tool (D10)
       try {
-        const s = readState(directory)
+        const s = readState(directory, sessionId)
         if (s) {
           const now = Date.now()
           // Single-writer: solo persiste si OSTACKY_PLUGIN_PERSIST=1 o idle>30s o state cambió
           const shouldPersist = process.env.OSTACKY_PLUGIN_PERSIST === "1" || (now - (s.lastHeartbeat || 0) > 30000)
           if (shouldPersist) {
             s.lastHeartbeat = now
-            try { persistState(directory, s, ["lastHeartbeat"]) } catch {}
+            try { persistState(directory, s, ["lastHeartbeat"], sessionId) } catch {}
           }
         }
       } catch {}

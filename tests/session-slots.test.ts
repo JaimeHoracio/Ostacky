@@ -80,8 +80,17 @@ describe("session-slots — decideSlot", () => {
     expect(d.kind).toBe("free");
   });
 
-  it("con 10 activas notifica y crea extensión 1/5 (sin reciclar activas)", () => {
+  it("con 10 activas sin confirmación pregunta (no crea extensión)", () => {
     const d = decideSlot("nueva", fullActive(), NOW, cfg);
+    expect(d.kind).toBe("ask");
+    if (d.kind === "ask") {
+      expect(d.notify[0]).toContain("Ya hay 10 sesiones activas");
+      expect(d.notify.join(" ")).toContain("Para extender el pool hay que confirmar");
+    }
+  });
+
+  it("con 10 activas y confirmación crea extensión 1/5 (sin reciclar activas)", () => {
+    const d = decideSlot("nueva", fullActive(), NOW, cfg, { allowOverflow: true });
     expect(d).toMatchObject({ kind: "create", slot: "pool-11", overflow: true });
     if (d.kind === "create") {
       expect(d.notify[0]).toContain("Ya hay 10 sesiones activas");

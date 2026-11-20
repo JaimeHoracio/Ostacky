@@ -30,7 +30,7 @@ class McpClient {
     ) {
         this.child = spawn(process.execPath, [MCP], {
             cwd,
-            env: { ...process.env, OSTACKY_STATE_PATH: statePath },
+            env: { ...process.env, OSTACKY_STATE_PATH: statePath, OSTACKY_SESSION_SLOTS: 'off' },
             stdio: ['pipe', 'pipe', 'pipe'],
         }) as ChildProcessWithoutNullStreams;
         this.child.stdout.on('data', (chunk) => {

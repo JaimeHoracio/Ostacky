@@ -1,3 +1,5 @@
+import { parsePoolConfig } from "./session-slots.ts";
+import { poolReport } from "./session-store.ts";
 import { existsSync, readFileSync, readdirSync } from "fs";
 import { join, delimiter, isAbsolute } from "path";
 import { findOpenCodeConfig, readOpenCodeConfig } from "./config.js";
@@ -68,6 +70,21 @@ export function globalPluginScopeAware(globalDir: string = getGlobalOpenCodeDir(
  */
 export function checkDoctorV2(projectRoot: string): string[] {
   const lines: string[] = [];
+  // session-state-files: pool de slots por sesión (solo reporta; no hay doctor --fix).
+  try {
+    const opencodeDir = join(projectRoot, ".opencode");
+    if (existsSync(join(opencodeDir, "sessions", "index.json"))) {
+      const cfg = parsePoolConfig(process.env);
+      const rep = poolReport(opencodeDir, Date.now(), cfg);
+      lines.push(`ℹ️ sesiones: base ${rep.base}/${cfg.poolMax}, extensión ${rep.overflow}/${cfg.overflowMax}, activas ${rep.active}`);
+      for (const q of rep.quarantined) lines.push(`⚠️ sesiones: slot en cuarentena — ${q}`);
+      for (const o of rep.occupied.filter((x) => !x.active && x.state && !["DONE", "ABANDONED"].includes(x.state))) {
+        lines.push(`ℹ️ sesiones: ${o.slot} "${o.sessionName || o.changeId || o.requestId || "sin nombre"}" con request no terminal (${o.state}) sin actividad reciente`);
+      }
+    }
+  } catch (err) {
+    lines.push(`⚠️ sesiones: no se pudo leer el pool (${String((err as Error)?.message ?? err)})`);
+  }
   // Convivencia global/local: solo avisa, nunca borra. Va antes de los checks
   // con early-return para que el aviso no dependa del estado del proyecto.
   const globalArtifacts = globalOstackyArtifacts();

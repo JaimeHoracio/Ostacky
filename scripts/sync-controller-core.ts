@@ -255,6 +255,39 @@ export function syncControllerCore(projectRoot: string, checkOnly = false): bool
     changed = true;
   }
 
+  // 4. session-state-files: src/session-slots.ts y src/session-store.ts
+  //    -> plugin (TS verbatim, imports ./controller-core.ts) y MCP (JS transpilado, imports .js).
+  if (syncSessionModules(projectRoot, checkOnly)) changed = true;
+
+  return changed;
+}
+
+const SESSION_MODULES = ["session-slots", "session-store"] as const;
+
+function syncSessionModules(projectRoot: string, checkOnly: boolean): boolean {
+  let changed = false;
+  const transpiler = new Bun.Transpiler({ loader: "ts" });
+  for (const name of SESSION_MODULES) {
+    const src = join(projectRoot, "src", name + ".ts");
+    if (!existsSync(src)) throw new Error(`Falta canónico: ${src}`);
+    const tsContent = readFileSync(src, "utf-8");
+    const header = `/**\n * ${name} — mirror de src/${name}.ts\n * Generado desde src/${name}.ts — NO EDITAR. Ejecutá \`bun run scripts/sync-controller-core.ts\`.\n */\n\n`;
+    const pluginTarget = join(projectRoot, "assets", "plugins", "ostacky-controller", name + ".ts");
+    const pluginContent = header + tsContent;
+    if (!existsSync(pluginTarget) || readFileSync(pluginTarget, "utf-8") !== pluginContent) {
+      if (checkOnly) throw new Error(`Desactualizado: ${pluginTarget}`);
+      writeFileSync(pluginTarget, pluginContent, "utf-8");
+      changed = true;
+    }
+    const jsBody = transpiler.transformSync(tsContent).replace(/from "\.\/([^"]+)\.ts"/g, 'from "./$1.js"');
+    const mcpTarget = join(projectRoot, "assets", "mcp", "ostacky-controller", name + ".js");
+    const mcpContent = header.replace("mirror de", "mirror (JS) de").replace("NO EDITAR", "NO EDITAR") + jsBody;
+    if (!existsSync(mcpTarget) || readFileSync(mcpTarget, "utf-8") !== mcpContent) {
+      if (checkOnly) throw new Error(`Desactualizado: ${mcpTarget}`);
+      writeFileSync(mcpTarget, mcpContent, "utf-8");
+      changed = true;
+    }
+  }
   return changed;
 }
 

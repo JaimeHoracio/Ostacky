@@ -733,6 +733,8 @@ export function uninstallAll(paths: OpenCodePaths): void {
         'controller-core.ts',
         'security.ts',
         'tiered.ts',
+        'session-slots.ts',
+        'session-store.ts',
     ];
     for (const file of ostackyPlugins) {
         const fp = join(paths.plugins, file);

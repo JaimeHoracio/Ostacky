@@ -79,7 +79,13 @@ const byOldestFirst = (a: SlotInfo, b: SlotInfo) => a.lastUsedAt - b.lastUsedAt 
  * 5) con `poolMax` o más activas: notificar y crear extensión si quedan cupos;
  * 6) si nada aplica: preguntar al usuario con candidatas, de la más antigua a la más reciente.
  */
-export function decideSlot(sessionId: string, slots: SlotInfo[], now: number, cfg: PoolConfig): SlotDecision {
+export function decideSlot(
+  sessionId: string,
+  slots: SlotInfo[],
+  now: number,
+  cfg: PoolConfig,
+  opts: { allowOverflow?: boolean } = {},
+): SlotDecision {
   const usable = slots.filter((s) => !s.quarantined);
 
   const own = usable.find((s) => s.sessionId === sessionId);
@@ -94,30 +100,29 @@ export function decideSlot(sessionId: string, slots: SlotInfo[], now: number, cf
   const overflowCount = slots.filter((s) => s.overflow).length;
   const activeCount = usable.filter((s) => isActiveSlot(s, now, cfg)).length;
   const notify: string[] = [];
-  if (activeCount >= cfg.poolMax) {
-    notify.push(`Ya hay ${activeCount} sesiones activas ejecutando al mismo tiempo.`);
-  }
-
   if (activeCount < cfg.poolMax && baseCount < cfg.poolMax) {
     return { kind: "create", slot: nextSlotId(slots, false), overflow: false, notify };
   }
 
+  // Reciclar elegibles no cuesta cupo: no son activas.
   const eligible = usable.filter((s) => isRecycleEligible(s, now, cfg));
   const eligibleBase = eligible.filter((s) => !s.overflow).sort(byOldestFirst);
   const eligibleAny = eligibleBase.length > 0 ? eligibleBase : eligible.sort(byOldestFirst);
-  if (eligibleAny.length > 0 && activeCount < cfg.poolMax) {
-    const pick = eligibleAny[0];
-    return { kind: "recycle", slot: pick.slot, previousSessionId: pick.sessionId, notify };
-  }
-
-  if (activeCount >= cfg.poolMax && overflowCount < cfg.overflowMax) {
-    notify.push(`Extensión ${overflowCount + 1}/${cfg.overflowMax} en uso.`);
-    return { kind: "create", slot: nextSlotId(slots, true), overflow: true, notify };
-  }
-
   if (eligibleAny.length > 0) {
     const pick = eligibleAny[0];
+    if (activeCount >= cfg.poolMax) notify.push(`Ya hay ${cfg.poolMax} sesiones activas ejecutando al mismo tiempo (${activeCount} activas).`);
     return { kind: "recycle", slot: pick.slot, previousSessionId: pick.sessionId, notify };
+  }
+
+  if (activeCount >= cfg.poolMax) {
+    notify.push(`Ya hay ${cfg.poolMax} sesiones activas ejecutando al mismo tiempo (${activeCount} activas).`);
+    if (opts.allowOverflow && overflowCount < cfg.overflowMax) {
+      notify.push(`Extensión ${overflowCount + 1}/${cfg.overflowMax} en uso (confirmada por el usuario).`);
+      return { kind: "create", slot: nextSlotId(slots, true), overflow: true, notify };
+    }
+    if (!opts.allowOverflow) {
+      notify.push(`Para extender el pool hay que confirmar (extensión 1/${cfg.overflowMax}); o esperar a que termine una de las sesiones activas.`);
+    }
   }
 
   const candidates = usable.filter((s) => s.sessionId).sort(byOldestFirst);

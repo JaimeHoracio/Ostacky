@@ -28,6 +28,8 @@ import {
 import { dirname, basename, join, resolve, relative } from 'node:path';
 import { writeFile as writeFileAsync, rename as renameAsync, mkdir as mkdirAsync } from 'node:fs/promises';
 import { SENSITIVE_DEFAULT, BASH_SENSITIVE_RE, isSensitive, extractPathsFromBash } from './security.js';
+import { bindSession, checkBinding, recordRequestSummary, noteFileEdit } from './session-store.js';
+import { parsePoolConfig, isActiveSlot } from './session-slots.js';
 import {
     STATES,
     TRANSITIONS,
@@ -548,6 +550,8 @@ class OstackyController {
     #loadedSnapshot = null; // huella del estado recién leído, para detectar "dirty"
     #persistQueue = Promise.resolve(); // cola in-process: las escrituras nunca se solapan
     #persistSeq = 0; // sufijo único por escritura (tmp.<pid>.<seq>)
+    #fileEditObserver = null;
+    #notices = [];
 
     constructor(opts = {}) {
         this.#statePath = opts.statePath;
@@ -630,6 +634,58 @@ class OstackyController {
         await this.#persist();
         this.#loadedSnapshot = this.#diffableState();
         return true;
+    }
+
+    /**
+     * Apunta el controller al state file de un slot (session-state-files). Descarta el estado
+     * en memoria: el próximo load lee el slot. Solo lo llama bindCallerSlot antes de cada tool call.
+     */
+    rebindStatePath(newPath) {
+        if (newPath === this.#statePath) return;
+        this.#statePath = newPath;
+        this.#lockPath = newPath + '.lock';
+        this.#lockPidPath = newPath + '.lock.pid';
+        this.#lockHeartbeatPath = newPath + '.lock.timestamp';
+        this.#state = null;
+        this.#loaded = false;
+        this.#loadedSnapshot = null;
+    }
+
+    get statePathValue() {
+        return this.#statePath;
+    }
+
+    /** Resumen de la request (para listar candidatas al usuario en el índice de sesiones). */
+    stateSummary() {
+        this.#load();
+        return {
+            requestId: this.#state?.requestId ?? null,
+            changeId: this.#state?.changeId ?? null,
+            state: this.#state?.state ?? null,
+        };
+    }
+
+    /** Observador de ediciones por archivo (aviso concurrent_edit); lo fija el entry point. */
+    setFileEditObserver(fn) {
+        this.#fileEditObserver = typeof fn === 'function' ? fn : null;
+    }
+
+    #observeFileEdit(filePath) {
+        if (!filePath || !this.#fileEditObserver) return;
+        try {
+            this.#fileEditObserver(filePath);
+        } catch {}
+    }
+
+    /** Avisos no bloqueantes acumulados durante la llamada actual. */
+    pushNotice(message) {
+        this.#notices.push(message);
+    }
+
+    takeNotices() {
+        const out = this.#notices;
+        this.#notices = [];
+        return out;
     }
 
     /** Registra el sessionId del caller actual (de `_meta["ai.opencode/sessionID"]`). */
@@ -2877,6 +2933,7 @@ class OstackyController {
     // --- O6: Validate edit with fast fingerprint + D6/D4 hard gate + 10.4 freshness ---
     async validateEdit({ oldString, newString, content, taskId, filePath } = {}) {
         this.#load();
+        this.#observeFileEdit(filePath);
         if (this.#state.state !== 'EXECUTING_INLINE' && this.#state.state !== 'EXECUTING_SUBAGENTS') {
             return { outcome: 'CONFLICT', reason: `Cannot validate edit from state ${this.#state.state}` };
         }
@@ -3042,6 +3099,7 @@ class OstackyController {
      */
     async completeTask({ taskId, filePath, fileHash } = {}) {
         this.#load();
+        this.#observeFileEdit(filePath);
         const denied = await this.#foreignOwnerError('complete_task');
         if (denied) return denied;
         if (this.#state.state !== 'EXECUTING_INLINE' && this.#state.state !== 'EXECUTING_SUBAGENTS') {
@@ -3399,6 +3457,19 @@ class OstackyController {
 
 const statePath = resolve(process.env.OSTACKY_STATE_PATH || join(process.cwd(), '.opencode', 'ostacky-state.json'));
 const controller = new OstackyController({ statePath });
+controller.setFileEditObserver((filePath) => {
+    if (process.env.OSTACKY_SESSION_SLOTS === 'off') return;
+    const sid = controller.callerSessionId;
+    if (!sid) return;
+    const minutes = Number(process.env.OSTACKY_CONCURRENT_EDIT_WINDOW_MIN);
+    const windowMs = (Number.isFinite(minutes) && minutes > 0 ? minutes : 30) * 60_000;
+    const warnings = noteFileEdit(dirname(statePath), sid, filePath, Date.now(), windowMs);
+    for (const w of warnings) {
+        controller.pushNotice(
+            `WARN concurrent_edit: ${w.file} lo editó hace ${w.minutesAgo} min "${w.otherName}" (request ${w.otherRequestId ?? 'sin request'}). No bloquea: coordiná antes de seguir.`
+        );
+    }
+});
 
 /**
  * Wraps an async tool handler to ALWAYS return a response (even on error).
@@ -3432,6 +3503,73 @@ function extractCallerSessionId(ctx) {
     return null;
 }
 
+/** Nombre visible de la sesión, si OpenCode lo manda en _meta (ver session-state-files; no verificado en vivo). */
+function extractSessionName(ctx) {
+    try {
+        const meta = ctx && ctx.mcpReq && ctx.mcpReq._meta;
+        if (meta && typeof meta === 'object') {
+            for (const key of ['ai.opencode/sessionTitle', 'ai.opencode/sessionName']) {
+                const v = meta[key];
+                if (typeof v === 'string' && v.trim()) return v.trim().slice(0, 120);
+            }
+        }
+    } catch {}
+    return null;
+}
+
+/** Nombre a mostrar: título de la sesión, o changeId/requestId si no hay título. */
+function displayNameOf(c) {
+    return c.sessionName || c.changeId || c.requestId || 'sesión sin nombre';
+}
+
+/**
+ * Asigna/valida el slot de la sesión del caller antes de cada tool call (session-state-files).
+ * Devuelve { block } si la tool no debe ejecutarse (pregunta al usuario o sesión sustituida),
+ * y { notice } con avisos de capacidad para adjuntar a la respuesta.
+ * Sin identidad de caller (clientes legacy) o con OSTACKY_SESSION_SLOTS=off: no aplica.
+ */
+function bindCallerSlot(params, ctx) {
+    if (process.env.OSTACKY_SESSION_SLOTS === 'off') return { block: null, notice: [] };
+    const sid = controller.callerSessionId;
+    if (!sid) return { block: null, notice: [] };
+    const cfg = parsePoolConfig(process.env);
+    const opencodeDir = dirname(statePath);
+    const res = bindSession({
+        opencodeDir,
+        sessionId: sid,
+        sessionName: extractSessionName(ctx),
+        now: Date.now(),
+        cfg,
+        legacyStatePath: statePath,
+        replaceSlot: (params && params.replaceSlot) || null,
+        allowOverflow: !!(params && params.allowExtension),
+    });
+    if (res.kind === 'blocked') return { block: { error: `BLOCKED: ${res.reason}` }, notice: [] };
+    if (res.kind === 'ask') {
+        const now = Date.now();
+        return {
+            block: {
+                conflict: true,
+                question: 'slot_capacity',
+                notify: res.notify,
+                message:
+                    'Pregunta al usuario antes de continuar: confirmar sustitución (replaceSlot), confirmar extensión del pool (allowExtension) o esperar a que termine una sesión activa. No cambies nada sin respuesta.',
+                candidates: res.candidates.map((c) => ({
+                    slot: c.slot,
+                    name: displayNameOf(c),
+                    changeId: c.changeId ?? null,
+                    state: c.state ?? null,
+                    active: isActiveSlot(c, now, cfg),
+                    lastActivityMinutesAgo: Math.round((now - (c.lastUsedAt || 0)) / 60000),
+                })),
+            },
+            notice: [],
+        };
+    }
+    controller.rebindStatePath(res.statePath);
+    return { block: null, notice: res.notify };
+}
+
 // ── Cola in-process (fix-consume-race-lock) ──────────────────────────────────
 // Code Mode emite varias tools en paralelo DENTRO del mismo proceso MCP y
 // `#state` es un único objeto compartido. Un `reloadFresh()` concurrente (p.ej.
@@ -3461,8 +3599,16 @@ function safeHandler(fn, options = {}) {
         // tomarlo dejaba una ventana donde otro proceso escribía y el persist
         // posterior revertía esa escritura (lost update).
         let heldLock = false;
+        let slotGate = { block: null, notice: [] };
+        controller.takeNotices();
         try {
             controller.setCallerSession(extractCallerSessionId(ctx));
+            slotGate = bindCallerSlot(params, ctx);
+        } catch (error) {
+            return { content: [{ type: 'text', text: safeJsonStringify({ error: `BLOCKED: no se pudo asignar slot de sesión: ${String(error?.message || error)}` }) }] };
+        }
+        if (slotGate.block) return { content: [{ type: 'text', text: safeJsonStringify(slotGate.block) }] };
+        try {
             heldLock = await controller.beginWrite();
             controller.reloadFresh();
         } catch {}
@@ -3493,8 +3639,18 @@ function safeHandler(fn, options = {}) {
                 } catch {}
                 // Update heartbeat on successful completion
                 controller.updateHeartbeat();
+                // Resumen de la request en el índice compartido (lista de candidatas y avisos).
+                const sidNow = controller.callerSessionId;
+                if (sidNow && process.env.OSTACKY_SESSION_SLOTS !== 'off') {
+                    try {
+                        recordRequestSummary(dirname(statePath), sidNow, controller.stateSummary(), Date.now());
+                    } catch {}
+                }
                 endOp();
-                return { content: [{ type: 'text', text: safeJsonStringify(result) }] };
+                const notices = controller.takeNotices();
+                let out = slotGate.notice.length && result && typeof result === 'object' ? { ...result, slotNotice: slotGate.notice } : result;
+                if (notices.length && out && typeof out === 'object') out = { ...out, concurrentEdit: notices };
+                return { content: [{ type: 'text', text: safeJsonStringify(out) }] };
             } catch (error) {
                 const isTimeout = error && error.message && error.message.includes('timeout');
                 const isNetworkError =
@@ -3559,6 +3715,8 @@ server.registerTool(
             requestId: z.string().optional().describe('Unique request ID'),
             changeId: z.string().optional().describe('Optional change ID for OpenSpec tracking'),
             force: z.boolean().optional().describe('Force reset even if work in progress (default: false)'),
+            replaceSlot: z.string().optional().describe('Confirmación del usuario: slot a sustituir (ej. pool-03)'),
+            allowExtension: z.boolean().optional().describe('Confirmación del usuario: crear slot de extensión con 10 sesiones activas'),
         }),
     },
     safeHandler(async ({ requestId, changeId, force }) => {
