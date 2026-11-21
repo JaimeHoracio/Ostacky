@@ -146,7 +146,7 @@ describe('plugin publicado', () => {
 
 describe('derivación real del id en runtime', () => {
     const srcDir = join(import.meta.dir, '..', 'assets', 'plugins', 'ostacky-controller');
-    const files = ['index.ts', 'security.ts', 'tiered.ts', 'controller-core.ts', 'session-slots.ts', 'session-store.ts'];
+    const files = ['index.ts', 'security.ts', 'tiered.ts', 'controller-core.ts', 'session-slots.ts', 'session-store.ts', 'compaction-threshold.ts'];
 
     function copyPlugin(to: string) {
         mkdirSync(to, { recursive: true });

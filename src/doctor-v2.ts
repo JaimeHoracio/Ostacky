@@ -1,4 +1,5 @@
 import { parsePoolConfig } from "./session-slots.ts";
+import { parseCompactConfig } from "./compaction-threshold.ts";
 import { poolReport } from "./session-store.ts";
 import { existsSync, readFileSync, readdirSync } from "fs";
 import { join, delimiter, isAbsolute } from "path";
@@ -70,6 +71,13 @@ export function globalPluginScopeAware(globalDir: string = getGlobalOpenCodeDir(
  */
 export function checkDoctorV2(projectRoot: string): string[] {
   const lines: string[] = [];
+  // compactación asistida por umbral fijo
+  try {
+    const cfg = parseCompactConfig(process.env);
+    lines.push(`ℹ️ compactación: enabled=${cfg.enabled}, mode=${cfg.mode}, threshold=${cfg.threshold}${cfg.model ? `, model=${cfg.model}` : ""}`);
+  } catch (err) {
+    lines.push(`⚠️ compactación: no se pudo leer config (${String((err as Error)?.message ?? err)})`);
+  }
   // session-state-files: pool de slots por sesión (solo reporta; no hay doctor --fix).
   try {
     const opencodeDir = join(projectRoot, ".opencode");

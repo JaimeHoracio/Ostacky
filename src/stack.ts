@@ -125,7 +125,7 @@ function copyOstackyControllerPlugin(projectRoot: string): void {
     throw new Error(`Plugin bundleado de OstackyController no encontrado: ${packageSource}`);
   }
   mkdirSync(packageDest, { recursive: true });
-  for (const f of ["index.ts", "controller-core.ts", "security.ts", "tiered.ts", "session-slots.ts", "session-store.ts"]) {
+  for (const f of ["index.ts", "controller-core.ts", "security.ts", "tiered.ts", "session-slots.ts", "session-store.ts", "compaction-threshold.ts"]) {
     const src = join(packageSource, f);
     if (existsSync(src)) copyFileSync(src, join(packageDest, f));
   }

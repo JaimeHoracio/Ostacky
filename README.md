@@ -170,6 +170,19 @@ Engram y CodeGraph viven en `.opencode/tools/<herramienta>/bin/` y se exponen co
 - Lectura/escritura de `*.env` y `.secret/**` bloqueadas con `deny` (la sesión sigue por `experimental.continue_loop_on_deny`).
 - Patrones sensibles configurables: `OSTACKY_SENSITIVE_PATTERNS="**/.env*,**/.secrets/**" bunx ostacky doctor` (allowlist: `.env.example/.template/.sample`). Fuente única en `src/security.ts`; verificá con `npx ostacky doctor`.
 
+## Compactación asistida (experimental)
+
+Variables de entorno para mantener el contexto bajo un umbral configurable:
+
+| Variable | Default | Descripción |
+|---|---|---|
+| `OSTACKY_COMPACT_ENABLED` | `true` | Interruptor maestro. Si es `false`, no cuenta tokens ni compacta. |
+| `OSTACKY_COMPACT_MODE` | `warn` | `off` \| `warn` (solo avisar). `auto` está reservado: hoy se comporta como `warn` hasta implementar el summarize automático (Nivel 2). |
+| `OSTACKY_COMPACT_THRESHOLD` | `120000` | Umbral fijo de tokens para todas las sesiones. |
+| `OSTACKY_COMPACT_MODEL` | (vacío) | `providerID/modelID` opcional para resumir; vacío = modelo de la sesión. |
+
+El umbral es fijo y el mismo para todos los modelos; no depende de la ventana de contexto. Subagentes se cuentan por separado.
+
 ## Licencia
 
 MIT

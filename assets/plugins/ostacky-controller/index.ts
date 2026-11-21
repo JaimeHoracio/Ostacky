@@ -22,6 +22,7 @@ import { homedir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { SENSITIVE_DEFAULT, BASH_SENSITIVE_RE, isSensitive, extractPathsFromBash } from "./security.ts"
 import { classifyIntent } from "./tiered.ts"
+import { contextTokens as normalizeContextTokens, parseCompactConfig, compactDecision, COMPACT_DEFAULTS } from "./compaction-threshold.ts"
 import { checkBinding, readIndex, slotPath as slotFilePath, handoffFallbackPath } from "./session-store.ts"
 import { STATES, TRANSITIONS, DEFAULT_STATE, normalizeTestCommand, isMaskedExitCommand } from "./controller-core.ts"
 
@@ -844,6 +845,8 @@ export default {
     const codegraphDegradedBySession = new Map<string, number>()
     // Track Engram hit per session to audit bypass (soft, no BLOCK)
     const engramHitBySession = new Map<string, boolean>()
+    // Compactación asistida: tokens acumulados por sesión (contextTokens normalizado por proveedor)
+    const contextTokensBySession = new Map<string, { tokens: number; provider?: string; model?: string; lastCompactTs?: number; lastStepTs?: number }>()
     // ─── Heartbeat ping — evita sensación de trancado en tareas largas ──
     let pingInterval: ReturnType<typeof setInterval> | null = null
 
@@ -938,6 +941,32 @@ export default {
           if (hint) event.prompt.text = (event.prompt.text ?? "") + hint
         } catch {}
       }
+      // Compactación asistida por umbral fijo: aviso/hint (Nivel 1). No corta la tarea.
+      try {
+        const cfg = parseCompactConfig(process.env)
+        if (cfg.enabled && cfg.mode !== "off") {
+          const rec = contextTokensBySession.get(sessionId)
+          if (rec) {
+            const complex = !["DONE", "INTERPRETATION_PENDING"].includes(state?.state ?? "DONE")
+            const decision = compactDecision({
+              tokens: rec.tokens,
+              cfg,
+              complexTaskInProgress: complex,
+              lastCompactTs: rec.lastCompactTs,
+              cooldownMs: COMPACT_DEFAULTS.cooldownMs,
+              now: Date.now(),
+            })
+            // Nivel 1: solo aviso. La compactación automática (summarize) aún no está implementada,
+            // así que el hint nunca afirma que se compactó ni que se compactará.
+            if (decision.zone === "warn") {
+              event.prompt.text = (event.prompt.text ?? "") + `\n\n[COMPACT HINT: contexto en ${rec.tokens} tokens (umbral ${cfg.threshold}); acercándose al umbral. Conviene cerrar la subunidad actual y dejar el estado guardado.]`
+            } else if (decision.zone === "opportunity") {
+              const why = decision.deferred ? "tarea compleja en curso" : decision.reason
+              event.prompt.text = (event.prompt.text ?? "") + `\n\n[COMPACT HINT: contexto en ${rec.tokens} tokens (umbral ${cfg.threshold}); ${why}. Compactación automática no activa: conviene guardar el estado en un punto seguro.]`
+            }
+          }
+        }
+      } catch {}
     })
 
     // ── Hard gates before any tool ──
@@ -1541,7 +1570,27 @@ export default {
             sessionQuestionBySession.delete(sid)
             discoveryHitByRequest.delete(sid)
             engramHitBySession.delete(sid)
+            contextTokensBySession.delete(sid)
           }
+        }
+        if (event.type === "session.next.step.ended") {
+          try {
+            const sid = (event.data?.sessionID ?? event.data?.session_id) as string | undefined
+            if (sid) {
+              const tokens = (event.data as any)?.tokens ?? {}
+              const provider = (event.data as any)?.providerID ?? (event.data as any)?.provider
+              const model = (event.data as any)?.modelID ?? (event.data as any)?.model
+              const normalized = normalizeContextTokens(tokens, provider)
+              const prev = contextTokensBySession.get(sid)
+              contextTokensBySession.set(sid, {
+                tokens: normalized,
+                provider,
+                model,
+                lastCompactTs: prev?.lastCompactTs,
+                lastStepTs: Date.now(),
+              })
+            }
+          } catch {}
         }
       }
     })()
@@ -1564,6 +1613,12 @@ export default {
         const tmp = `${fallbackPath}.tmp.${process.pid}`
         writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf-8")
         renameSync(tmp, fallbackPath)
+        const sid = event.sessionID as string | undefined
+        if (sid) {
+          const rec = contextTokensBySession.get(sid)
+          // Tras compactar, el conteo previo se descarta hasta el siguiente step.ended.
+          if (rec) contextTokensBySession.set(sid, { tokens: 0, provider: rec.provider, model: rec.model, lastCompactTs: Date.now(), lastStepTs: rec.lastStepTs })
+        }
       } catch {}
     })
 

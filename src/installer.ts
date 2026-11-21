@@ -735,6 +735,7 @@ export function uninstallAll(paths: OpenCodePaths): void {
         'tiered.ts',
         'session-slots.ts',
         'session-store.ts',
+        'compaction-threshold.ts',
     ];
     for (const file of ostackyPlugins) {
         const fp = join(paths.plugins, file);

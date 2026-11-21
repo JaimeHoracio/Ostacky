@@ -255,6 +255,21 @@ export function syncControllerCore(projectRoot: string, checkOnly = false): bool
     changed = true;
   }
 
+  // 3b. src/compaction-threshold.ts -> assets/plugins/compaction-threshold.ts (TS)
+  const srcCompact = join(projectRoot, "src", "compaction-threshold.ts");
+  const pluginCompact = join(projectRoot, "assets", "plugins", "ostacky-controller", "compaction-threshold.ts");
+  if (!existsSync(srcCompact)) throw new Error(`Falta canónico: ${srcCompact}`);
+  const compactContent = readFileSync(srcCompact, "utf-8");
+  let pluginCompactContent = compactContent;
+  if (!pluginCompactContent.includes("Generado desde src/compaction-threshold.ts")) {
+    pluginCompactContent = `/**\n * compaction-threshold.ts — mirror de src/compaction-threshold.ts para plugin (self-contained)\n * Generado desde src/compaction-threshold.ts — NO EDITAR. Ejecutá \`bun run scripts/sync-controller-core.ts\`.\n */\n\n` + pluginCompactContent;
+  }
+  if (!existsSync(pluginCompact) || readFileSync(pluginCompact, "utf-8") !== pluginCompactContent) {
+    if (checkOnly) throw new Error(`Desactualizado: ${pluginCompact}`);
+    writeFileSync(pluginCompact, pluginCompactContent, "utf-8");
+    changed = true;
+  }
+
   // 4. session-state-files: src/session-slots.ts y src/session-store.ts
   //    -> plugin (TS verbatim, imports ./controller-core.ts) y MCP (JS transpilado, imports .js).
   if (syncSessionModules(projectRoot, checkOnly)) changed = true;
