@@ -87,7 +87,7 @@ export function checkDoctorV2(projectRoot: string): string[] {
       lines.push(`ℹ️ sesiones: base ${rep.base}/${cfg.poolMax}, extensión ${rep.overflow}/${cfg.overflowMax}, activas ${rep.active}`);
       for (const q of rep.quarantined) lines.push(`⚠️ sesiones: slot en cuarentena — ${q}`);
       for (const o of rep.occupied.filter((x) => !x.active && x.state && !["DONE", "ABANDONED"].includes(x.state))) {
-        lines.push(`ℹ️ sesiones: ${o.slot} "${o.sessionName || o.changeId || o.requestId || "sin nombre"}" con request no terminal (${o.state}) sin actividad reciente`);
+        lines.push(`ℹ️ sesiones: ${o.slot} "${o.sessionName || o.requestId || "sin nombre"}" con request no terminal (${o.state}) sin actividad reciente`);
       }
     }
   } catch (err) {

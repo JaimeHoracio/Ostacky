@@ -11,7 +11,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_STATE } from "./controller-core.ts";
-import { decideSlot, nextRevision, type PoolConfig, type SlotInfo } from "./session-slots.ts";
+import { decideSlot, isActiveSlot, nextRevision, type PoolConfig, type SlotInfo } from "./session-slots.ts";
 
 export interface SlotRecord {
   sessionId: string | null;
@@ -279,7 +279,7 @@ export function bindSession(args: {
       idx.slots[slot] = emptyRecord({ overflow: idx.slots[slot].overflow });
     } else {
       slot = decision.slot;
-      notify = decision.notify;
+      if (decision.kind === "recycle") notify = decision.notify;
       const overflow = idx.slots[slot].overflow;
       resetSlotFile(opencodeDir, slot, readSlotRevision(opencodeDir, slot));
       idx.slots[slot] = emptyRecord({ overflow });
@@ -351,7 +351,7 @@ export function touchSession(opencodeDir: string, sessionId: string, now: number
 
 /** Resumen del pool para `doctor` y para la pregunta al usuario. Solo lectura. */
 export function poolReport(opencodeDir: string, now: number, cfg: PoolConfig): {
-  base: number; overflow: number; active: number; quarantined: string[]; occupied: Array<SlotInfo & { sessionName: string | null }>;
+  base: number; overflow: number; active: number; quarantined: string[]; occupied: Array<SlotInfo & { sessionName: string | null; active: boolean }>;
 } {
   const idx = readIndex(opencodeDir);
   const entries = Object.entries(idx.slots);
@@ -365,7 +365,7 @@ export function poolReport(opencodeDir: string, now: number, cfg: PoolConfig): {
     occupied: infos
       .filter((i) => i.sessionId)
       .sort((a, b) => a.lastUsedAt - b.lastUsedAt)
-      .map((i) => ({ ...i, sessionName: idx.slots[i.slot].sessionName })),
+      .map((i) => ({ ...i, sessionName: idx.slots[i.slot].sessionName, active: isActiveSlot(i, now, cfg) })),
   };
 }
 

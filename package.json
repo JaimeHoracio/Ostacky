@@ -1,6 +1,6 @@
 {
     "name": "ostacky",
-    "version": "0.10.3",
+    "version": "0.11.0",
     "description": "Instalador interactivo de agentes y comandos para OpenCode",
     "type": "module",
     "bin": {
@@ -9,9 +9,9 @@
     "scripts": {
         "prebuild": "bun run scripts/sync-version.ts && bun run scripts/sync-controller-core.ts",
         "dev": "bun run src/cli.ts",
-        "build": "bun run build:cli && bun run build:mcp",
         "build:cli": "bun build src/cli.ts --target=node --format=esm --outfile dist/cli.js && bun scripts/add-shebang.ts",
         "build:mcp": "bun run scripts/build-mcp-bundles.ts",
+        "build": "bun run build:cli && bun run build:mcp && tsc --noEmit",
         "start": "node dist/cli.js",
         "test": "bun test --isolate",
         "test:safe": "bun run scripts/run-tests-isolated.ts",
@@ -40,7 +40,8 @@
     "devDependencies": {
         "@types/bun": "latest",
         "openspec": "^0.0.0",
-        "typescript": "^5.0.0"
+        "typescript": "^5.9.3",
+        "vite-plugin-checker": "^1.0.0"
     },
     "publishConfig": {
         "access": "public"

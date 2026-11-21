@@ -6,7 +6,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_STATE } from "./controller-core.js";
-import { decideSlot, nextRevision } from "./session-slots.js";
+import { decideSlot, isActiveSlot, nextRevision } from "./session-slots.js";
 const FILE_ACTIVITY_RETENTION_MS = 24 * 60 * 60 * 1000;
 export function noteFileEdit(opencodeDir, sessionId, filePath, now, windowMs) {
   return withIndexLock(opencodeDir, () => {
@@ -202,7 +202,8 @@ export function bindSession(args) {
       idx.slots[slot] = emptyRecord({ overflow: idx.slots[slot].overflow });
     } else {
       slot = decision.slot;
-      notify = decision.notify;
+      if (decision.kind === "recycle")
+        notify = decision.notify;
       const overflow = idx.slots[slot].overflow;
       resetSlotFile(opencodeDir, slot, readSlotRevision(opencodeDir, slot));
       idx.slots[slot] = emptyRecord({ overflow });
@@ -275,7 +276,7 @@ export function poolReport(opencodeDir, now, cfg) {
     overflow: entries.filter(([, r]) => r.overflow).length,
     active,
     quarantined: entries.filter(([, r]) => r.quarantined).map(([s, r]) => `${s}: ${r.quarantineReason ?? "motivo desconocido"}`),
-    occupied: infos.filter((i) => i.sessionId).sort((a, b) => a.lastUsedAt - b.lastUsedAt).map((i) => ({ ...i, sessionName: idx.slots[i.slot].sessionName }))
+    occupied: infos.filter((i) => i.sessionId).sort((a, b) => a.lastUsedAt - b.lastUsedAt).map((i) => ({ ...i, sessionName: idx.slots[i.slot].sessionName, active: isActiveSlot(i, now, cfg) }))
   };
 }
 export const HANDOFF_FALLBACK_BASE = ".ostacky-handoff-compaction";
