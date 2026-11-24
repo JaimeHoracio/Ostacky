@@ -4,12 +4,18 @@
  */
 
 /**
- * Compactación asistida por umbral fijo — lógica pura (Ostacky).
+ * Compactación asistida por umbral fijo (Ostacky).
  *
- * Sin I/O ni hooks: el plugin (assets/plugins/ostacky-controller/index.ts) consume
- * estas funciones para contar tokens por proveedor, calcular el umbral efectivo y
- * decidir si compactar. Ver material/plans/analizar-el-agente-ostacky-atomic-boole.md.
+ * El cálculo (tokens por proveedor, umbral efectivo, decisión) es puro y no toca
+ * el proceso: el plugin (assets/plugins/ostacky-controller/index.ts) y `doctor`
+ * consumen estas funciones. La única I/O del módulo es la lectura del archivo de
+ * configuración del controller (`.opencode/ostacky-controller.json`), que no
+ * depende del bloque `environment` del MCP porque ese bloque no llega al plugin.
+ * Ver material/plans/analizar-el-agente-ostacky-atomic-boole.md.
  */
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 
 export type CompactMode = "off" | "warn" | "auto";
 
@@ -45,7 +51,12 @@ export interface CompactDecision {
  * Las variables de entorno `OSTACKY_COMPACT_*` sobreescriben estos valores.
  */
 export const COMPACT_DEFAULTS = {
-  enabled: true,
+  /**
+   * Desactivada por defecto: la compactación asistida es un mecanismo opt-in.
+   * Solo se activa con `compaction.enabled: true` en `ostacky-controller.json`
+   * o con `OSTACKY_COMPACT_ENABLED=true` en el entorno.
+   */
+  enabled: false,
   mode: "warn" as CompactMode,
   /** Umbral fijo de tokens acumulados (mínimo para compactar). Igual para todos los modelos. */
   threshold: 120_000,
@@ -117,15 +128,192 @@ export function contextTokens(a: TokenUsage | string, b?: TokenUsage | string): 
   return Math.max(0, base + cacheRead + cacheWrite);
 }
 
+/**
+ * Configuración desde `process.env` (`OSTACKY_COMPACT_*`). Solo `"true"` activa:
+ * cualquier otro valor (incluido `"false"`) deja la compactación desactivada.
+ * La precedencia con los archivos la resuelve `resolveCompactConfig`.
+ */
 export function parseCompactConfig(env: Record<string, string | undefined> = process.env): CompactConfig {
   const enabledRaw = env.OSTACKY_COMPACT_ENABLED;
-  const enabled = enabledRaw === undefined ? COMPACT_DEFAULTS.enabled : enabledRaw.trim().toLowerCase() !== "false";
+  const enabled = enabledRaw === undefined ? COMPACT_DEFAULTS.enabled : enabledRaw.trim().toLowerCase() === "true";
   const modeRaw = (env.OSTACKY_COMPACT_MODE ?? COMPACT_DEFAULTS.mode).trim().toLowerCase();
   const mode: CompactMode = modeRaw === "off" || modeRaw === "warn" || modeRaw === "auto" ? (modeRaw as CompactMode) : COMPACT_DEFAULTS.mode;
   const threshold = Math.floor(num(env.OSTACKY_COMPACT_THRESHOLD, DEFAULT_THRESHOLD));
   const model = env.OSTACKY_COMPACT_MODEL?.trim() || undefined;
   return { enabled, mode: enabled ? mode : "off", threshold, model };
 }
+
+// ─── Configuración del controller (`.opencode/ostacky-controller.json`) ───────
+
+/** Origen del valor aplicado: lo reporta `doctor` para que se pueda auditar. */
+export type CompactConfigOrigin = "env" | "project" | "global" | "default";
+
+export interface CompactConfigResolution {
+  cfg: CompactConfig;
+  /** Fuente de `enabled`: es la que decide si el mecanismo corre o no. */
+  origin: CompactConfigOrigin;
+  /** Avisos no fatales (archivo inválido, campo con tipo inesperado). */
+  warnings: string[];
+}
+
+export interface CompactConfigFiles {
+  project?: unknown;
+  global?: unknown;
+  paths: { project: string; global: string };
+  warnings: string[];
+}
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+/** Bloque `compaction` de un archivo, o `null` si no lo define o es inválido. */
+function compactionBlock(file: unknown, label: string, warnings: string[]): Record<string, unknown> | null {
+  const obj = asObject(file);
+  if (!obj) return null;
+  if (!("compaction" in obj)) return null;
+  const block = asObject(obj.compaction);
+  if (!block) {
+    warnings.push(`${label}: "compaction" no es un objeto — se ignora`);
+    return null;
+  }
+  return block;
+}
+
+function pickEnabled(sources: Array<{ label: string; block: Record<string, unknown> | null }>, warnings: string[]): { value: boolean | null; origin: CompactConfigOrigin } {
+  for (const { label, block } of sources) {
+    if (!block || !("enabled" in block)) continue;
+    if (typeof block.enabled === "boolean") return { value: block.enabled, origin: label as CompactConfigOrigin };
+    warnings.push(`${label}: "compaction.enabled" debe ser boolean — se ignora`);
+  }
+  return { value: null, origin: "default" };
+}
+
+function pickString(sources: Array<{ label: string; block: Record<string, unknown> | null }>, key: string, warnings: string[]): string | null {
+  for (const { label, block } of sources) {
+    if (!block || !(key in block)) continue;
+    const raw = block[key];
+    if (typeof raw === "string" && raw.trim()) return raw.trim();
+    warnings.push(`${label}: "compaction.${key}" debe ser string no vacío — se ignora`);
+  }
+  return null;
+}
+
+function pickNumber(sources: Array<{ label: string; block: Record<string, unknown> | null }>, key: string, warnings: string[]): number | null {
+  for (const { label, block } of sources) {
+    if (!block || !(key in block)) continue;
+    const raw = block[key];
+    if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) return Math.floor(raw);
+    warnings.push(`${label}: "compaction.${key}" debe ser número > 0 — se ignora`);
+  }
+  return null;
+}
+
+/**
+ * Resuelve la configuración por prioridad: `process.env` > archivo del proyecto >
+ * archivo global > defaults. Campo por campo, así un archivo puede fijar solo el
+ * umbral. Archivo ausente, ilegible o inválido NO activa nada: cae al default
+ * (desactivado) y deja un aviso.
+ */
+export function resolveCompactConfig(input: {
+  env?: Record<string, string | undefined>;
+  project?: unknown;
+  global?: unknown;
+} = {}): CompactConfigResolution {
+  const env = input.env ?? {};
+  const warnings: string[] = [];
+  const projectBlock = compactionBlock(input.project, "proyecto", warnings);
+  const globalBlock = compactionBlock(input.global, "global", warnings);
+  const fileSources = [
+    { label: "project", block: projectBlock },
+    { label: "global", block: globalBlock },
+  ];
+
+  const envEnabled = env.OSTACKY_COMPACT_ENABLED;
+  let enabled: boolean;
+  let origin: CompactConfigOrigin;
+  if (envEnabled !== undefined) {
+    enabled = envEnabled.trim().toLowerCase() === "true";
+    origin = "env";
+  } else {
+    const picked = pickEnabled(fileSources, warnings);
+    enabled = picked.value ?? COMPACT_DEFAULTS.enabled;
+    origin = picked.value === null ? "default" : picked.origin;
+  }
+
+  const envMode = env.OSTACKY_COMPACT_MODE?.trim().toLowerCase();
+  const fileMode = envMode === undefined ? pickString(fileSources, "mode", warnings) : null;
+  const modeRaw = envMode ?? fileMode ?? COMPACT_DEFAULTS.mode;
+  const mode: CompactMode = modeRaw === "off" || modeRaw === "warn" || modeRaw === "auto" ? (modeRaw as CompactMode) : COMPACT_DEFAULTS.mode;
+  if (envMode !== undefined && mode !== envMode) warnings.push(`env: OSTACKY_COMPACT_MODE="${envMode}" inválido — se usa ${COMPACT_DEFAULTS.mode}`);
+
+  const threshold = env.OSTACKY_COMPACT_THRESHOLD !== undefined
+    ? Math.floor(num(env.OSTACKY_COMPACT_THRESHOLD, DEFAULT_THRESHOLD))
+    : pickNumber(fileSources, "threshold", warnings) ?? DEFAULT_THRESHOLD;
+
+  const model = env.OSTACKY_COMPACT_MODEL?.trim() || pickString(fileSources, "model", warnings) || undefined;
+
+  return {
+    cfg: { enabled, mode: enabled ? mode : "off", threshold, model },
+    origin,
+    warnings,
+  };
+}
+
+/** Ruta del archivo de configuración del controller en el proyecto. */
+export function projectCompactConfigPath(directory: string): string {
+  return join(directory, ".opencode", "ostacky-controller.json");
+}
+
+/** Ruta del archivo global: mismo criterio que el resto de Ostacky para el config dir. */
+export function globalCompactConfigPath(env: Record<string, string | undefined> = process.env, home?: string): string {
+  const explicit = env.OPENCODE_CONFIG_DIR?.trim();
+  if (explicit) return join(explicit, "ostacky-controller.json");
+  const xdg = env.XDG_CONFIG_HOME?.trim();
+  const base = xdg || join(home ?? homedir(), ".config", "opencode");
+  return join(base, "ostacky-controller.json");
+}
+
+function readConfigFile(path: string, label: string, warnings: string[]): unknown {
+  if (!existsSync(path)) return undefined;
+  try {
+    const raw = readFileSync(path, "utf-8");
+    return JSON.parse(raw.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, ""));
+  } catch (err: any) {
+    warnings.push(`${label}: no se pudo parsear ${path} (${err?.message ?? "error"}) — se usan defaults`);
+    return undefined;
+  }
+}
+
+/**
+ * Lee los dos archivos de configuración del controller. Ausente o inválido no es
+ * error: devuelve `undefined` en ese slot y un aviso. No lanza.
+ */
+export function readCompactConfigFiles(directory: string, opts: {
+  env?: Record<string, string | undefined>;
+  home?: string;
+} = {}): CompactConfigFiles {
+  const env = opts.env ?? process.env;
+  const paths = {
+    project: projectCompactConfigPath(directory),
+    global: globalCompactConfigPath(env, opts.home),
+  };
+  const warnings: string[] = [];
+  const project = readConfigFile(paths.project, "proyecto", warnings);
+  const global = readConfigFile(paths.global, "global", warnings);
+  return { project, global, paths, warnings };
+}
+
+/** Lectura + resolución en un paso. Es lo que usan el plugin y `doctor`. */
+export function loadCompactConfig(directory: string, opts: {
+  env?: Record<string, string | undefined>;
+  home?: string;
+} = {}): CompactConfigResolution & { paths: { project: string; global: string } } {
+  const files = readCompactConfigFiles(directory, opts);
+  const resolved = resolveCompactConfig({ env: opts.env ?? process.env, project: files.project, global: files.global });
+  return { ...resolved, warnings: [...files.warnings, ...resolved.warnings], paths: files.paths };
+}
+
 
 /**
  * Umbral para compactar. Es fijo y el mismo para todos los modelos: no depende de la

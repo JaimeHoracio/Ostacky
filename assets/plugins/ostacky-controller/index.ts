@@ -22,8 +22,15 @@ import { homedir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { SENSITIVE_DEFAULT, BASH_SENSITIVE_RE, isSensitive, extractPathsFromBash } from "./security.ts"
 import { classifyIntent } from "./tiered.ts"
-import { contextTokens as normalizeContextTokens, parseCompactConfig, compactDecision, COMPACT_DEFAULTS } from "./compaction-threshold.ts"
-import { checkBinding, readIndex, slotPath as slotFilePath, handoffFallbackPath } from "./session-store.ts"
+import { contextTokens as normalizeContextTokens, loadCompactConfig, COMPACT_DEFAULTS } from "./compaction-threshold.ts"
+import {
+  assistBlocksTools, assistInit, compactionEnded, compactionFailed, compactionStarted,
+  continueSession, isSafePointState, markAsked, recordMeasurement, requestCompaction, shouldAsk, type AssistState,
+} from "./compaction-assist.ts"
+import {
+  checkBinding, readIndex, slotPath as slotFilePath, handoffFallbackPath,
+  clearCompactOptOut, hasCompactOptOut, recordCompactOptOut,
+} from "./session-store.ts"
 import { STATES, TRANSITIONS, DEFAULT_STATE, normalizeTestCommand, isMaskedExitCommand } from "./controller-core.ts"
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -31,6 +38,8 @@ import { STATES, TRANSITIONS, DEFAULT_STATE, normalizeTestCommand, isMaskedExitC
 const MAX_STATE_FILE_SIZE = 2 * 1024 * 1024
 const PING_INTERVAL_MS = 60_000
 const IDLE_THRESHOLD_MS = 45_000
+/** Centinela del prompt inyectado por la compactación asistida: evita re-procesarlo como prompt de usuario. */
+const COMPACT_ASK_SENTINEL = "[ostacky-compact-question]"
 
 // DEFAULT_STATE imported from controller-core.ts
 
@@ -543,6 +552,11 @@ export function marksCodegraphFailure(toolName: string, status: unknown): boolea
   return toolName.includes("codegraph_explore") && (status === "error" || status === "failed" || status === "timeout")
 }
 
+/** Fallo o timeout de una tool de Engram (discovery-order capa 3). */
+export function marksEngramFailure(status: unknown): boolean {
+  return status === "error" || status === "failed" || status === "timeout"
+}
+
 /**
  * ¿El gate de lectura de código está activo para esta sesión?
  * - off: nunca. Sin binario/PATH: nunca (no hay CodeGraph que exigir).
@@ -618,6 +632,107 @@ export function marksDiscovery(toolName: string): boolean {
   )
 }
 
+/** Bloqueos consecutivos de glob/grep tras los que se pide decisión al usuario (D7). */
+export const DISCOVERY_LOOP_THRESHOLD = 3
+export const ENGRAM_DEGRADED_TTL_MIN_DEFAULT = 10
+
+/** TTL de "Engram caído" en minutos (OSTACKY_ENGRAM_DEGRADED_TTL_MIN); inválido → default. */
+export function engramDegradedTtlMs(env: Record<string, string | undefined> = process.env): number {
+  const n = Number(env.OSTACKY_ENGRAM_DEGRADED_TTL_MIN)
+  const min = Number.isFinite(n) && n > 0 ? n : ENGRAM_DEGRADED_TTL_MIN_DEFAULT
+  return min * 60_000
+}
+
+/**
+ * Directorio estático de un path o patrón: "payments/**\/*.ts" → "payments", "src/a.ts" → "src",
+ * "*.ts" o "src" → "" (sin área acotada).
+ */
+export function staticDirOf(pattern: string): string {
+  const p = (pattern || "").trim().replace(/^\.\//, "")
+  const wild = p.search(/[*?[{]/)
+  const head = wild === -1 ? p : p.slice(0, wild)
+  const j = head.lastIndexOf("/")
+  return j === -1 ? "" : head.slice(0, j).replace(/\/+$/, "")
+}
+
+/**
+ * ¿El resultado de explore menciona el área del patrón? (D5). Sin área, cualquier explore
+ * completado sirve. El prefijo exige límite de segmento: "src/" no coincide con "mysrc/".
+ */
+export function discoveryCoversArea(resultText: string, area: string): boolean {
+  if (!area) return true
+  const esc = area.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  return new RegExp(`(^|[^\\w.-])${esc}/`).test(resultText)
+}
+
+/**
+ * ¿El explore completó sin resultados? Un explore vacío cuenta como discovery para cualquier
+ * área (D3): no hay nada que cubrir, y bloquear el glob siguiente sería el trancado que D3 evita.
+ */
+export function isEmptyExploreResult(result: unknown): boolean {
+  if (result === null || result === undefined) return true
+  if (typeof result === "string") {
+    const t = result.trim()
+    return t === "" || t === "[]" || t === "{}" || t === "null"
+  }
+  if (Array.isArray(result)) return result.length === 0
+  if (typeof result === "object") return Object.keys(result as object).length === 0
+  return false
+}
+
+/** explore que responde "no indexado" no es discovery: es fallo (D6). */
+export function isNotIndexedOutput(resultText: string): boolean {
+  return /no indexado/i.test(resultText)
+}
+
+/** Contador de bloqueos consecutivos de glob/grep (D7). Un allow o un explore válido lo reinicia. */
+export function discoveryLoopNext(streak: number, blocked: boolean): { streak: number; atThreshold: boolean; firstAtThreshold: boolean } {
+  if (!blocked) return { streak: 0, atThreshold: false, firstAtThreshold: false }
+  const next = streak + 1
+  return { streak: next, atThreshold: next >= DISCOVERY_LOOP_THRESHOLD, firstAtThreshold: next === DISCOVERY_LOOP_THRESHOLD }
+}
+
+/** ¿Engram está caído dentro de su TTL? Un fallo marca `downSince`; vencido el TTL se asume que responde. */
+export function engramDegraded(input: { downSince: number | null; now: number; ttlMs: number }): boolean {
+  return input.downSince !== null && input.now - input.downSince < input.ttlMs
+}
+
+/**
+ * Capa 3 de D4: bloquea solo ediciones de nivel 1+, solo si Engram responde y no hubo
+ * mem_search exitoso en el request. Engram caído nunca bloquea.
+ */
+export function shouldBlockEngramEdit(input: {
+  level: string | null
+  searchedInRequest: boolean
+  downSince: number | null
+  now: number
+  ttlMs: number
+}): boolean {
+  if (input.level !== "1+" || input.searchedInRequest) return false
+  return !engramDegraded(input)
+}
+
+/**
+ * Gate de Glob/Grep sobre código (discovery-order). Devuelve el motivo o null.
+ * - no_discovery: no hubo codegraph_explore completado en el request.
+ * - area_mismatch: hubo explore, pero no cubre el directorio del patrón (D5).
+ * `codegraphOk` lo calcula el caller con isCodegraphGateActive (modo, binario, TTL).
+ */
+export function shouldBlockDiscoveryTool(input: {
+  isCodeFile: boolean
+  isLiteralGrep: boolean
+  isSpecTasksPath: boolean
+  isDocsPath: boolean
+  isTaskTracked: boolean
+  codegraphOk: boolean
+  hasDiscoveryHit: boolean
+  areaCovered: boolean
+}): "no_discovery" | "area_mismatch" | null {
+  if (!isCodeReadGated(input) || !input.codegraphOk) return null
+  if (!input.hasDiscoveryHit) return "no_discovery"
+  if (!input.areaCovered) return "area_mismatch"
+  return null
+}
 /**
  * Predicado puro del horizonte del gate de discovery: ¿este prompt invalida el
  * hit estructural de la sesión?
@@ -696,6 +811,8 @@ const SHELL_READ_VERBS = new Set([
   "cat", "head", "tail", "sed", "awk", "grep", "rg", "ag", "ack", "less", "more",
   "nl", "bat", "tac", "strings", "xxd", "od", "base64", "diff", "cut", "paste",
   "sort", "uniq", "column", "expand", "fold",
+  // discovery-order D9: búsqueda de código por shell (find/fd) sujeta al mismo gate.
+  "find", "fd",
 ])
 
 const SHELL_WRAPPERS = new Set(["sudo", "env", "time", "command", "exec", "nohup"])
@@ -739,6 +856,15 @@ export function shellReadTargets(command: string): string[] {
     if (base === "sed" && tokens.some((t) => t === "-i" || t.startsWith("-i") || t === "--in-place" || t.startsWith("--in-place"))) continue
     // diff -q/--brief/--stat sólo compara metadatos: no revela contenido.
     if (base === "diff" && tokens.some((t) => t === "-q" || t === "--quiet" || t === "--brief" || t === "--stat" || /^-[a-zA-Z]*q[a-zA-Z]*$/.test(t))) continue
+    // find/fd (D9): la búsqueda cuenta como lectura de código si la raíz es código o el patrón de nombre lo es.
+    if (base === "find" || base === "fd") {
+      // La raíz puede ir en cualquier posición (fd [patrón] [ruta], find [ruta] [expr]).
+      for (const t of tokens.slice(i + 1)) {
+        if (/^(\.\/)?(src|assets)(\/|$)/.test(t) && !/\.(md|json)$/i.test(t)) targets.push(t)
+      }
+      for (const t of tokens.slice(i + 1)) if (/\.(ts|js|tsx|jsx|mts|cts)$/i.test(t)) targets.push(t)
+      continue
+    }
     for (const p of extractPathsFromBash(trimmed)) {
       if (isCodePath(p)) targets.push(p)
     }
@@ -845,8 +971,108 @@ export default {
     const codegraphDegradedBySession = new Map<string, number>()
     // Track Engram hit per session to audit bypass (soft, no BLOCK)
     const engramHitBySession = new Map<string, boolean>()
-    // Compactación asistida: tokens acumulados por sesión (contextTokens normalizado por proveedor)
-    const contextTokensBySession = new Map<string, { tokens: number; provider?: string; model?: string; lastCompactTs?: number; lastStepTs?: number }>()
+    // discovery-order: estado por REQUEST (se reinicia en cada prompt no trivial).
+    // Texto de los explore completados (acotado): sirve para comprobar el área del patrón (D5).
+    const discoveryTextByRequest = new Map<string, string>()
+    // Un explore completado sin resultados cubre cualquier área (D3).
+    const discoveryEmptyByRequest = new Map<string, boolean>()
+    // Bloqueos consecutivos de glob/grep (D7).
+    const discoveryBlockStreak = new Map<string, number>()
+    // Secuencia de discovery del request (auditoría de orden).
+    const discoverySeqByRequest = new Map<string, number>()
+    // Capa 2 de D4: engram_skipped se audita una vez por request.
+    const engramSkipAudited = new Map<string, boolean>()
+    const engramContextByRequest = new Map<string, boolean>()
+    const engramSearchByRequest = new Map<string, boolean>()
+    // Engram caído (D4 capa 3): timestamp del último fallo; vence con OSTACKY_ENGRAM_DEGRADED_TTL_MIN.
+    const engramDownBySession = new Map<string, number>()
+    const discoveryAudit = (sid: string, decision: string, reasoning: string): void => {
+      try {
+        const st = readState(directory, sid)
+        if (!st) return
+        const audit: any[] = Array.isArray(st.audit) ? st.audit : []
+        st.audit = [...audit, { id: `aud-${Date.now()}-${audit.length}`, ts: Date.now(), phase: "WARN", decision, reasoning: String(reasoning).slice(0, 300) }].slice(-200)
+        persistState(directory, st, ["audit"], sid)
+      } catch {}
+    }
+    // Compactación asistida (compaction-assisted-threshold): estado por sesión de la
+    // máquina pura de ./compaction-assist.ts. Reemplaza el conteo acumulado anterior:
+    // cada `session.step.ended` REEMPLAZA la medición (no suma) y `stale` la invalida
+    // tras compactar.
+    const compactAssistBySession = new Map<string, AssistState>()
+    // Config del controller: process.env > .opencode/ostacky-controller.json >
+    // ~/.config/opencode/ostacky-controller.json > defaults (desactivado).
+    // No se usa el bloque `environment` del MCP: no llega al proceso del plugin.
+    const compactConfig = (() => {
+      try {
+        return loadCompactConfig(directory)
+      } catch (err) {
+        return {
+          cfg: { enabled: false, mode: "off" as const, threshold: COMPACT_DEFAULTS.threshold },
+          origin: "default" as const,
+          warnings: [`config: no se pudo leer (${String((err as Error)?.message ?? err)})`],
+          paths: { project: "", global: "" },
+        }
+      }
+    })()
+    let compactWarningsFlushed = false
+
+    // Índice de sesiones (mismo ancla que resolveStatePath) para el opt-out persistente.
+    const compactIndexDir = dirname(getStatePath(directory))
+    const compactEnabled = () => compactConfig.cfg.enabled && compactConfig.cfg.mode !== "off"
+    const compactStateFor = (sid: string): AssistState => compactAssistBySession.get(sid) ?? assistInit()
+    const setCompactState = (sid: string, next: AssistState): void => { compactAssistBySession.set(sid, next) }
+    const compactOptedOut = (sid: string): boolean => {
+      try { return hasCompactOptOut(compactIndexDir, sid) } catch { return false }
+    }
+    /** Aviso en el audit del controller (mismo formato que el MCP: id/ts/phase/decision/reasoning). */
+    const compactAudit = (sid: string | null, decision: string, reasoning: string, phase: string = "WARN"): void => {
+      try {
+        const st = readState(directory, sid)
+        if (!st) return
+        const audit: any[] = Array.isArray(st.audit) ? st.audit : []
+        st.audit = [...audit, { id: `aud-${Date.now()}-${audit.length}`, ts: Date.now(), phase, decision, reasoning: String(reasoning).slice(0, 300) }].slice(-200)
+        persistState(directory, st, ["audit"], sid)
+      } catch {}
+    }
+    /** Los avisos de configuración se registran una vez, cuando ya hay state donde escribirlos. */
+    const flushCompactWarnings = (sid: string | null): void => {
+      if (compactWarningsFlushed || compactConfig.warnings.length === 0) return
+      try {
+        const st = readState(directory, sid)
+        if (!st) return
+        compactWarningsFlushed = true
+        for (const w of compactConfig.warnings.slice(0, 3)) {
+          try { console.warn(`[ostacky] compact-config: ${w}`) } catch {}
+          compactAudit(sid, "compact-config", w)
+        }
+      } catch {}
+    }
+    /**
+     * Pregunta única al usuario. En V2 no hay canal TUI desde el plugin, así que la
+     * pregunta viaja como prompt con centinela y el agente la relaya una sola vez.
+     * La respuesta se registra por el camino explícito `ostacky_compact_decision`.
+     */
+    const askCompaction = async (sid: string): Promise<void> => {
+      const st = compactStateFor(sid)
+      const cfg = compactConfig.cfg
+      setCompactState(sid, markAsked(st))
+      compactAudit(sid, "compact-question", `tokens=${st.tokens} threshold=${cfg.threshold} origin=${compactConfig.origin}`)
+      const text = `${COMPACT_ASK_SENTINEL} El contexto de esta sesión llegó a ${st.tokens} tokens (umbral estimado ${cfg.threshold}; es una estimación de contexto, no el límite del modelo).\n` +
+        `Preguntale al usuario UNA sola vez, en una sola pregunta, con estas dos opciones:\n` +
+        `1) Compactar — se resume el contexto ahora y seguimos en la misma sesión.\n` +
+        `2) Continuar — seguimos sin compactar; no se vuelve a preguntar hasta que el contexto cruce el umbral de nuevo.\n` +
+        `Si además pide no volver a ser preguntado, usá la opción opt-out.\n` +
+        `Cuando responda, llamá ostacky_compact_decision({ decision: "compact" | "continue" | "opt-out" }).\n` +
+        `Mientras la decisión esté pendiente, las escrituras y la ejecución quedan bloqueadas.`
+      try {
+        await ctx.session.prompt({ sessionID: sid, text })
+      } catch (err) {
+        // Sin pregunta no debe quedar un bloqueo huérfano: se libera y se audita.
+        setCompactState(sid, continueSession(st))
+        compactAudit(sid, "compact-question-failed", String((err as Error)?.message ?? err))
+      }
+    }
     // ─── Heartbeat ping — evita sensación de trancado en tareas largas ──
     let pingInterval: ReturnType<typeof setInterval> | null = null
 
@@ -903,6 +1129,9 @@ export default {
     await ctx.session.hook("prompt", (event) => {
       const sessionId: string = event.sessionID ?? "default"
       const text = (event.prompt.text ?? "").trim()
+      // La pregunta de compactación viaja como prompt propio: no es texto del usuario,
+      // no debe registrarse ni recibir hints (evita que el centinela se retroalimente).
+      if (text.startsWith(COMPACT_ASK_SENTINEL)) return
       const state = readState(directory)
       // task-verification-integrity D4: registrar el texto ORIGINAL del usuario (antes de los
       // hints de abajo) para que `implementation_complete({force:true})` se apoye en evidencia
@@ -924,7 +1153,16 @@ export default {
       // Horizonte por request: prompts NO-triviales invalidan el discovery hit —
       // la siguiente lectura de código exige un explore fresco (contrato
       // remove-discovery-cache-phantom + instrucción §1 del agente).
-      if (shouldInvalidateDiscoveryHit(trivial)) discoveryHitByRequest.delete(sessionId)
+      if (shouldInvalidateDiscoveryHit(trivial)) {
+        discoveryHitByRequest.delete(sessionId)
+        discoveryTextByRequest.delete(sessionId)
+        discoveryEmptyByRequest.delete(sessionId)
+        discoveryBlockStreak.delete(sessionId)
+        discoverySeqByRequest.delete(sessionId)
+        engramSkipAudited.delete(sessionId)
+        engramContextByRequest.delete(sessionId)
+        engramSearchByRequest.delete(sessionId)
+      }
       if (trivial) {
         // Preserve system FULL cacheable, add suffix hint to user prompt text
         const hint = "\n\n[PLUGIN HINT: Saludo trivial — responde breve sin tools. No hagas Discovery.]"
@@ -934,6 +1172,10 @@ export default {
         const hint = "\n\n[PLUGIN HINT: Pregunta sobre hechos ya ejecutados en esta sesión — responde desde el contexto y ostacky_get_state, sin codegraph ni mem_search. Si el dato no está ni en contexto ni en el state, decilo y no inventes.]"
         event.prompt.text = (event.prompt.text ?? "") + hint
       }
+      // Capa 1 de D4 (discovery-order): el request arranca sin mem_context. Aviso, no bloqueo.
+      if (!trivial && intent !== "session_question") {
+        event.prompt.text = (event.prompt.text ?? "") + "\n\n[ENGRAM: no consultado en este request; revisá decisiones previas antes de proponer cambios]"
+      }
       // harden-compaction-resume: auto-inject recovery hint when pending (determinístico, no depende del modelo)
       if (!trivial && state && !["DONE", "INTERPRETATION_PENDING"].includes(state.state)) {
         try {
@@ -941,32 +1183,9 @@ export default {
           if (hint) event.prompt.text = (event.prompt.text ?? "") + hint
         } catch {}
       }
-      // Compactación asistida por umbral fijo: aviso/hint (Nivel 1). No corta la tarea.
-      try {
-        const cfg = parseCompactConfig(process.env)
-        if (cfg.enabled && cfg.mode !== "off") {
-          const rec = contextTokensBySession.get(sessionId)
-          if (rec) {
-            const complex = !["DONE", "INTERPRETATION_PENDING"].includes(state?.state ?? "DONE")
-            const decision = compactDecision({
-              tokens: rec.tokens,
-              cfg,
-              complexTaskInProgress: complex,
-              lastCompactTs: rec.lastCompactTs,
-              cooldownMs: COMPACT_DEFAULTS.cooldownMs,
-              now: Date.now(),
-            })
-            // Nivel 1: solo aviso. La compactación automática (summarize) aún no está implementada,
-            // así que el hint nunca afirma que se compactó ni que se compactará.
-            if (decision.zone === "warn") {
-              event.prompt.text = (event.prompt.text ?? "") + `\n\n[COMPACT HINT: contexto en ${rec.tokens} tokens (umbral ${cfg.threshold}); acercándose al umbral. Conviene cerrar la subunidad actual y dejar el estado guardado.]`
-            } else if (decision.zone === "opportunity") {
-              const why = decision.deferred ? "tarea compleja en curso" : decision.reason
-              event.prompt.text = (event.prompt.text ?? "") + `\n\n[COMPACT HINT: contexto en ${rec.tokens} tokens (umbral ${cfg.threshold}); ${why}. Compactación automática no activa: conviene guardar el estado en un punto seguro.]`
-            }
-          }
-        }
-      } catch {}
+      // Compactación asistida: la pregunta ya no viaja como hint acá. Se plantea una
+      // sola vez en un punto seguro (`session.idle`) y bloquea hasta la respuesta.
+      flushCompactWarnings(sessionId)
     })
 
     // ── Hard gates before any tool ──
@@ -1020,8 +1239,25 @@ export default {
         lastCheck = nextPendingGateCache(freshState.revision, foreignPendingOwner)
       }
 
+      // ── 1.5) Compactación asistida: decisión pendiente bloquea escrituras y ejecución ──
+      // La respuesta se registra por el camino explícito del plugin: `ostacky_compact_decision`.
+      // No se parsea el texto del usuario ni se crea un gate nuevo: es el mismo hook.
+      if (compactEnabled() && sessionId && sessionId !== "default") {
+        const assist = compactAssistBySession.get(sessionId)
+        if (assist && assistBlocksTools(assist)) {
+          const isDecisionTool = tool.includes("ostacky_compact_decision")
+          const codeStr = typeof (args as any)?.code === "string" ? (args as any).code : ""
+          const executeWithDecision = tool === "execute" && codeStr && codeStr.includes("ostacky_compact_decision")
+          const isMutating = ["edit", "write", "patch", "multiedit", "apply_patch", "shell", "bash", "task", "delegate"].some((t) => tool === t || tool.startsWith(t + "_"))
+          // Las lecturas y las tools de observabilidad pasan libremente mientras se decide.
+          if (isMutating && !isDecisionTool && !executeWithDecision) {
+            throw new Error("BLOCKED: decisión de compactación pendiente — respondé Compactar o Continuar con ostacky_compact_decision antes de editar o ejecutar") // gate de compactación
+          }
+        }
+      }
+
       // ── 1.6) Engram soft gate (auditable, no BLOCK) — refuerza SHALL 1 de ostacky.md ──
-      // Si propone/cambia nivel sin haber consultado Engram, cuenta bypass (exime trivial+DONE)
+      // registra engram_skipped cuando no hubo mem_context en el request (capa 2 de D4)
       const isEngramRelevantTool = tool.includes("record_discovery") || (tool.includes("openspec") && (tool.includes("propose") || (typeof args?.filePath === "string" && args.filePath.includes("openspec/changes")) || (typeof args?.path === "string" && args.path.includes("openspec/changes"))))
       if (isEngramRelevantTool) {
         const hasEngramHit = engramHitBySession.get(sessionId) ?? false
@@ -1074,7 +1310,29 @@ export default {
         }
       }
 
+      // ── 1.7) discovery-order: Engram (capas 2 y 3 de D4). Nunca bloquea discovery ni lectura. ──
+      const isEditTool = ["edit", "write", "patch", "multiedit", "apply_patch"].some((t) => tool === t || tool.startsWith(t + "_"))
+      const isExploreTool = tool.includes("codegraph_explore")
+      const engramRelevantNow = !(trivialBySession.get(sessionId) ?? false) && !(sessionQuestionBySession.get(sessionId) ?? false)
+      // Capa 2: explore o edición sin mem_context/mem_search en el request → audit (una vez por request).
+      if ((isExploreTool || isEditTool) && engramRelevantNow && !engramContextByRequest.get(sessionId) && !engramSearchByRequest.get(sessionId) && !engramSkipAudited.get(sessionId)) {
+        engramSkipAudited.set(sessionId, true)
+        discoveryAudit(sessionId, "engram_skipped", `${tool} sin mem_context al iniciar discovery`)
+      }
+      // Capa 3: edición 1+ exige mem_search exitoso cuando Engram responde.
+      if (isEditTool && engramRelevantNow && shouldBlockEngramEdit({
+        level: (freshState as any)?.level ?? null,
+        searchedInRequest: engramSearchByRequest.get(sessionId) === true,
+        downSince: engramDownBySession.get(sessionId) ?? null,
+        now: Date.now(),
+        ttlMs: engramDegradedTtlMs(),
+      })) {
+        discoveryAudit(sessionId, "engram_block", "edición 1+ sin mem_search exitoso en el request")
+        throw new Error("BLOCKED: consultá memoria (mem_search) antes de cambiar decisiones de nivel 1+")
+      }
+
       // ── 2) CodeGraph preventivo: Read/Grep/Glob sobre código sin Discovery hit → BLOCKED ──
+      // discovery previo requerido: codegraph_explore
       const isCodeTool = tool === "read" || tool === "grep" || tool === "glob" || tool === "read_mcp_resource"
       if (isCodeTool) {
         let targetPath: string = args?.filePath || args?.path || args?.pattern || args?.include || args?.uri || ""
@@ -1127,10 +1385,22 @@ export default {
         // Sin fallback a disco: la única evidencia válida es un codegraph_explore
         // COMPLETADO en este request (discoveryHitByRequest; el hook "prompt"
         // invalida el hit en cada prompt no-trivial). session.deleted también lo limpia.
-        const hasDiscoveryHit = codegraphOk ? discoveryHitByRequest.get(sessionId) === true : false
-        if (shouldBlockCodeRead({
-          isCodeFile, isLiteralGrep, isSpecTasksPath, isDocsPath, isTaskTracked, codegraphOk, hasDiscoveryHit,
-        })) {
+        const discoveryHit = codegraphOk ? discoveryHitByRequest.get(sessionId) === true : false
+        // glob/grep (discovery-order D5): el explore tiene que cubrir el directorio del patrón.
+        const isDiscoverySearch = tool === "glob" || tool === "grep"
+        const searchArea = isDiscoverySearch
+          ? staticDirOf(typeof args?.path === "string" && args.path ? `${args.path}/` : String(args?.pattern || args?.include || ""))
+          : ""
+        const areaCovered = discoveryEmptyByRequest.get(sessionId) === true
+          || discoveryCoversArea(discoveryTextByRequest.get(sessionId) ?? "", searchArea)
+        const searchReason = isDiscoverySearch
+          ? shouldBlockDiscoveryTool({ isCodeFile, isLiteralGrep, isSpecTasksPath, isDocsPath, isTaskTracked, codegraphOk, hasDiscoveryHit: discoveryHit, areaCovered })
+          : null
+        if (isDiscoverySearch && searchReason === null) discoveryBlockStreak.set(sessionId, 0)
+        const readBlocked = !isDiscoverySearch && shouldBlockCodeRead({
+          isCodeFile, isLiteralGrep, isSpecTasksPath, isDocsPath, isTaskTracked, codegraphOk, hasDiscoveryHit: discoveryHit,
+        })
+        if (searchReason !== null || readBlocked) {
           // Métrica de evasión real (misma convención que engramBypassCount:648):
           // cuántas lecturas de código saltaron el gate sin explore completado.
           try {
@@ -1140,6 +1410,21 @@ export default {
               persistState(directory, st, ["codeReadBlockedCount"], sessionId)
             }
           } catch {}
+          if (isDiscoverySearch && searchReason !== null) {
+            const loop = discoveryLoopNext(discoveryBlockStreak.get(sessionId) ?? 0, true)
+            discoveryBlockStreak.set(sessionId, loop.streak)
+            discoveryAudit(sessionId, searchReason === "area_mismatch" ? "discovery_area_mismatch" : "discovery_blocked", `${tool} ${searchArea || "(proyecto)"} (${searchReason})`)
+            if (loop.firstAtThreshold) discoveryAudit(sessionId, "discovery_loop", `${loop.streak} bloqueos seguidos de ${tool}; pedir decisión al usuario`)
+            const cause = searchReason === "area_mismatch"
+              ? `el último explore no cubre el área "${searchArea}"`
+              : "no hay codegraph_explore completado en este request"
+            const askUser = loop.atThreshold
+              ? " Ya van 3 bloqueos seguidos: preguntá al usuario una sola vez cómo proceder; el bloqueo sigue hasta un explore del área."
+              : ""
+            throw new Error(
+              `BLOCKED: discovery previo requerido: codegraph_codegraph_explore("${searchArea || targetPath || "query"}") — ${cause}, antes de ${tool}.${askUser}`
+            )
+          }
           try { console.warn(`[ostacky] code_read_blocked: sin codegraph_explore completado en sesión (${targetPath || "query"})`) } catch {}
           throw new Error(
             `BLOCKED: sin discovery estructural en esta sesión — llamá codegraph_codegraph_explore("${targetPath || "query"}") antes de Read/Grep/Glob de código`
@@ -1372,18 +1657,27 @@ export default {
       // prompt no-trivial). Se marca aunque el resultado venga vacío, a propósito:
       // "CodeGraph no tiene este archivo en su índice" es justamente el caso donde el
       // Read TIENE que poder pasar si hubo `codegraph_explore`.
+      // discovery-order: texto del explore (acotado) para comprobar el área de glob/grep (D5).
+      const exploreText = marksDiscovery(tool) ? (() => { try { return JSON.stringify(event.result ?? "") ?? "" } catch { return "" } })() : ""
+      // "no indexado" es fallo, no discovery (D6).
+      const exploreNotIndexed = marksDiscovery(tool) && event.status === "completed" && isNotIndexedOutput(exploreText)
       if (marksDiscovery(tool)) {
         try {
-          if (event.status === "completed") {
+          if (event.status === "completed" && !exploreNotIndexed) {
             discoveryHitByRequest.set(sessionId, true)
+            if (isEmptyExploreResult(event.result)) discoveryEmptyByRequest.set(sessionId, true)
+            discoveryTextByRequest.set(sessionId, ((discoveryTextByRequest.get(sessionId) ?? "") + "\n" + exploreText).slice(-200_000))
+            discoveryBlockStreak.set(sessionId, 0)
             // Recuperación: un explore OK vuelve a activar el gate estricto.
             codegraphDegradedBySession.delete(sessionId)
           }
         } catch {}
       }
       // Fallo real de CodeGraph → sesión degradada: el gate deja de exigir discovery hasta el TTL.
-      if (marksCodegraphFailure(tool, event.status) && !codegraphDegradedBySession.has(sessionId)) {
+      if ((marksCodegraphFailure(tool, event.status) || exploreNotIndexed) && !codegraphDegradedBySession.has(sessionId)) {
         codegraphDegradedBySession.set(sessionId, Date.now())
+        const reason = exploreNotIndexed ? "proyecto no indexado" : `${tool} status=${String(event.status)}`
+        discoveryAudit(sessionId, "codegraph_degraded", reason)
         try {
           const st = readState(directory, sessionId)
           if (st) {
@@ -1391,11 +1685,30 @@ export default {
             persistState(directory, st, ["codegraphDegradedCount"], sessionId)
           }
         } catch {}
-        try { console.warn(`[ostacky] codegraph_degraded: ${tool} status=${String(event.status)}; lectura de código sin gate hasta TTL`) } catch {}
+        try { console.warn(`[ostacky] codegraph_degraded: ${reason}; lectura de código sin gate hasta TTL`) } catch {}
       }
       // Track Engram hit (mem_search / mem_context / dedup) para soft gate 1.6
       if (tool.includes("engram_mem_search") || tool.includes("engram_mem_context") || tool.includes("mem_search") || tool.includes("mem_context") || tool.includes("engram_mem_")) {
         engramHitBySession.set(sessionId, true)
+      }
+      // discovery-order capa 3: estado de Engram. Éxito lo levanta; fallo o timeout lo marca caído.
+      if (tool.includes("mem_")) {
+        if (event.status === "completed") {
+          engramDownBySession.delete(sessionId)
+          if (tool.includes("mem_search")) engramSearchByRequest.set(sessionId, true)
+          if (tool.includes("mem_context")) engramContextByRequest.set(sessionId, true)
+        } else if (marksEngramFailure(event.status) && !engramDownBySession.has(sessionId)) {
+          engramDownBySession.set(sessionId, Date.now())
+          discoveryAudit(sessionId, "engram_degraded", `sin memoria: ${tool} status=${String(event.status)}`)
+        }
+      }
+      // Secuencia de discovery por request (auditoría de orden: engram → codegraph → glob/grep → read).
+      const seqKind = tool.includes("mem_") ? "engram"
+        : (tool.includes("codegraph") ? "codegraph" : tool === "glob" ? "glob" : tool === "grep" ? "grep" : (tool === "read" || tool === "read_mcp_resource") ? "read" : null)
+      if (seqKind) {
+        const n = (discoverySeqByRequest.get(sessionId) ?? 0) + 1
+        discoverySeqByRequest.set(sessionId, n)
+        discoveryAudit(sessionId, "discovery_seq", `${n}:${seqKind}`)
       }
       // test-verification-execution: evidencia para tasks `test:`.
       // `status` miente con exit != 0 (ver shellEvidence): sólo se registra con exit numérico.
@@ -1558,6 +1871,48 @@ export default {
           return jsonContent({ deprecated: true, hint: "plugin enforces" })
         },
       })
+      // Camino explícito de respuesta a la pregunta de compactación (no se parsea
+      // el texto del usuario): Compactar llama a la API nativa y espera el evento
+      // `session.compaction.ended`; Continuar/opt-out liberan el gate.
+      editor.add({
+        name: "ostacky_compact_decision",
+        description: "Responder la pregunta de compactación asistida (compact | continue | opt-out)",
+        input: {
+          type: "object",
+          properties: { decision: { type: "string", enum: ["compact", "continue", "opt-out"] } },
+          required: ["decision"],
+          additionalProperties: false,
+        },
+        execute: async (input: any, toolCtx?: unknown) => {
+          const sid = toolSessionId(toolCtx)
+          if (!sid) {
+            return jsonContent({ error: "identity_unavailable", hint: "Sin sessionID no hay decisión que registrar." })
+          }
+          const decision = String(input?.decision ?? "").trim()
+          const assist = compactStateFor(sid)
+          if (decision === "continue" || decision === "opt-out") {
+            if (decision === "opt-out") {
+              try { recordCompactOptOut(compactIndexDir, sid, Date.now()) } catch {}
+            }
+            setCompactState(sid, continueSession(assist))
+            compactAudit(sid, `compact-${decision}`, `user confirmed: ${decision} tokens=${assist.tokens}`, "CONFIRMATION")
+            return jsonContent({ decision, gate: "released", askAgain: decision === "continue" ? "al próximo cruce del umbral" : "nunca en esta sesión" })
+          }
+          if (decision === "compact") {
+            setCompactState(sid, requestCompaction(assist, Date.now()))
+            try {
+              await ctx.session.compact({ sessionID: sid })
+              compactAudit(sid, "compact-requested", `tokens=${assist.tokens}`)
+              return jsonContent({ decision, state: "compacting", note: "Se considera terminada al recibir session.compaction.ended." })
+            } catch (err: any) {
+              setCompactState(sid, compactionFailed(assist, err, Date.now()))
+              compactAudit(sid, "compact-failed", String(err?.message ?? err))
+              return jsonContent({ decision, state: "idle", error: String(err?.message ?? err) })
+            }
+          }
+          return jsonContent({ error: "invalid_decision", allowed: ["compact", "continue", "opt-out"] })
+        },
+      })
     })
 
     const eventController = new AbortController()
@@ -1570,27 +1925,73 @@ export default {
             sessionQuestionBySession.delete(sid)
             discoveryHitByRequest.delete(sid)
             engramHitBySession.delete(sid)
-            contextTokensBySession.delete(sid)
+            discoveryTextByRequest.delete(sid)
+            discoveryEmptyByRequest.delete(sid)
+            discoveryBlockStreak.delete(sid)
+            discoverySeqByRequest.delete(sid)
+            engramSkipAudited.delete(sid)
+            engramContextByRequest.delete(sid)
+            engramSearchByRequest.delete(sid)
+            engramDownBySession.delete(sid)
+            compactAssistBySession.delete(sid)
+            // El opt-out es por sesión: si la sesión desaparece, no se conserva.
+            try { clearCompactOptOut(compactIndexDir, sid) } catch {}
           }
         }
-        if (event.type === "session.next.step.ended") {
+        // Medición V2 (contrato `session.step.ended`, no `session.next.step.ended`):
+        // el payload trae `tokens: { input, output, reasoning, cache }` del paso. Se
+        // REEMPLAZA la medición (nunca se suma) y se marca `stale: false`.
+        if (event.type === "session.step.ended") {
           try {
-            const sid = (event.data?.sessionID ?? event.data?.session_id) as string | undefined
+            const data: any = event.data ?? {}
+            const sid = (data.sessionID ?? data.session_id) as string | undefined
             if (sid) {
-              const tokens = (event.data as any)?.tokens ?? {}
-              const provider = (event.data as any)?.providerID ?? (event.data as any)?.provider
-              const model = (event.data as any)?.modelID ?? (event.data as any)?.model
-              const normalized = normalizeContextTokens(tokens, provider)
-              const prev = contextTokensBySession.get(sid)
-              contextTokensBySession.set(sid, {
-                tokens: normalized,
-                provider,
-                model,
-                lastCompactTs: prev?.lastCompactTs,
-                lastStepTs: Date.now(),
-              })
+              // provider puede faltar en el payload: normalizeContextTokens cae al camino conservador (proveedor desconocido)
+              const provider = data.providerID ?? data.provider ?? data.model?.providerID
+              const normalized = normalizeContextTokens(data.tokens ?? {}, provider)
+              setCompactState(sid, recordMeasurement(compactStateFor(sid), { tokens: normalized, now: Date.now() })) // measurement replaced, never summed
             }
           } catch {}
+        }
+        // Punto seguro: el turno terminó. Ahí se plantea la pregunta (una sola vez).
+        if (event.type === "session.idle") {
+          try {
+            const sid = (event.data as any)?.sessionID as string | undefined
+            if (sid && compactEnabled()) {
+              const assist = compactStateFor(sid)
+              if (shouldAsk(assist, {
+                threshold: compactConfig.cfg.threshold,
+                enabled: compactEnabled(),
+                optOut: compactOptedOut(sid),
+                cooldownMs: COMPACT_DEFAULTS.cooldownMs,
+                now: Date.now(),
+                // Tarea en curso (EXECUTING_*) = no es punto seguro: se difiere al próximo idle.
+                safePoint: isSafePointState(readState(directory, sid)?.state ?? null),
+              })) {
+                void askCompaction(sid).catch(() => {})
+              }
+            }
+          } catch {}
+        }
+        if (event.type === "session.compaction.started") {
+          const sid = (event.data as any)?.sessionID as string | undefined
+          if (sid) setCompactState(sid, compactionStarted(compactStateFor(sid), Date.now()))
+        }
+        if (event.type === "session.compaction.ended") {
+          const sid = (event.data as any)?.sessionID as string | undefined
+          if (sid) {
+            // La medición previa ya no describe el contexto: `stale`, nunca `tokens: 0`.
+            setCompactState(sid, compactionEnded(compactStateFor(sid))) // session.compaction.ended
+            compactAudit(sid, "compact-ended", "medición stale hasta el próximo step") // liberado en compaction.ended
+          }
+        }
+        if (event.type === "session.compaction.failed") {
+          const sid = (event.data as any)?.sessionID as string | undefined
+          if (sid) {
+            const err = (event.data as any)?.error
+            setCompactState(sid, compactionFailed(compactStateFor(sid), err, Date.now()))
+            compactAudit(sid, "compact-failed", String((err as any)?.message ?? err ?? "compactación fallida"))
+          }
         }
       }
     })()
@@ -1613,12 +2014,8 @@ export default {
         const tmp = `${fallbackPath}.tmp.${process.pid}`
         writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf-8")
         renameSync(tmp, fallbackPath)
-        const sid = event.sessionID as string | undefined
-        if (sid) {
-          const rec = contextTokensBySession.get(sid)
-          // Tras compactar, el conteo previo se descarta hasta el siguiente step.ended.
-          if (rec) contextTokensBySession.set(sid, { tokens: 0, provider: rec.provider, model: rec.model, lastCompactTs: Date.now(), lastStepTs: rec.lastStepTs })
-        }
+        // Este hook NO libera la compactación: el fin lo marca solo `session.compaction.ended`
+        // (spec compaction-assist: "terminada solo al recibir session.compaction.ended").
       } catch {}
     })
 

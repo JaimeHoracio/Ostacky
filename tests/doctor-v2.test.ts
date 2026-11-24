@@ -89,6 +89,37 @@ describe('checkDoctorV2', () => {
         expect(() => checkDoctorV2(TEST_ROOT)).not.toThrow();
     });
 
+    it('reporta compactación desactivada por defecto y su origen', () => {
+        mkdirSync(TEST_ROOT, { recursive: true });
+        const lines = checkDoctorV2(TEST_ROOT);
+        const line = lines.find((l) => l.includes('compactación: enabled='));
+        expect(line).toBeDefined();
+        expect(line).toContain('origen:');
+    });
+
+    it('lee compaction.enabled del archivo del proyecto e informa ese origen', () => {
+        writeProject({
+            'opencode.json': '{}',
+            '.opencode/ostacky-controller.json': JSON.stringify({ compaction: { enabled: true, threshold: 90000 } }),
+        });
+        const lines = checkDoctorV2(TEST_ROOT);
+        const line = lines.find((l) => l.includes('compactación: enabled='));
+        expect(line).toContain('enabled=true');
+        expect(line).toContain('threshold=90000');
+        expect(line).toContain(join(TEST_ROOT, '.opencode', 'ostacky-controller.json'));
+    });
+
+    it('avisa cuando el archivo de compactación es inválido sin romper doctor', () => {
+        writeProject({
+            'opencode.json': '{}',
+            '.opencode/ostacky-controller.json': '{ no es json',
+        });
+        const lines = checkDoctorV2(TEST_ROOT);
+        expect(lines.some((l) => l.includes('compactación:') && l.includes('no se pudo parsear'))).toBe(true);
+        // El valor aplicado sigue disponible (defaults), no se omite la sección.
+        expect(lines.some((l) => l.includes('compactación: enabled='))).toBe(true);
+    });
+
     it('accepts the ostacky-controller package dir', () => {
         writeProject({
             'opencode.json': '{}',

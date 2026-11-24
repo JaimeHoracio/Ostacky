@@ -2,13 +2,15 @@
 /**
  * sync-controller-core — Single source of truth: src/ -> mirrors en assets/
  *
- * Canónico: src/controller-core.ts, src/security.ts, src/tiered.ts
+ * Canónico: src/controller-core.ts, src/security.ts, src/tiered.ts, src/compaction-threshold.ts, src/compaction-assist.ts
  * Mirrors:
  *   src/controller-core.ts -> assets/plugins/ostacky-controller/controller-core.ts (TS verbatim)
  *   src/controller-core.ts -> assets/mcp/ostacky-controller/controller-core.js (JS stripped)
  *   src/security.ts        -> assets/plugins/ostacky-controller/security.ts (TS verbatim)
  *   src/security.ts        -> assets/mcp/ostacky-controller/security.js (JS stripped)
  *   src/tiered.ts          -> assets/plugins/ostacky-controller/tiered.ts (TS verbatim)
+ *   src/compaction-threshold.ts -> assets/plugins/ostacky-controller/compaction-threshold.ts (TS verbatim)
+ *   src/compaction-assist.ts    -> assets/plugins/ostacky-controller/compaction-assist.ts (TS verbatim)
  *
  * Mantiene sincronizado via `bun run scripts/sync-controller-core.ts` y verifica con `--check`.
  * Llamado desde `prebuild` (sync-version + sync-controller-core).
@@ -270,6 +272,21 @@ export function syncControllerCore(projectRoot: string, checkOnly = false): bool
     changed = true;
   }
 
+  // 3c. src/compaction-assist.ts -> assets/plugins/compaction-assist.ts (TS)
+  const srcAssist = join(projectRoot, "src", "compaction-assist.ts");
+  const pluginAssist = join(projectRoot, "assets", "plugins", "ostacky-controller", "compaction-assist.ts");
+  if (!existsSync(srcAssist)) throw new Error(`Falta canónico: ${srcAssist}`);
+  const assistContent = readFileSync(srcAssist, "utf-8");
+  let pluginAssistContent = assistContent;
+  if (!pluginAssistContent.includes("Generado desde src/compaction-assist.ts")) {
+    pluginAssistContent = `/**\n * compaction-assist.ts — mirror de src/compaction-assist.ts para plugin (self-contained)\n * Generado desde src/compaction-assist.ts — NO EDITAR. Ejecutá \`bun run scripts/sync-controller-core.ts\`.\n */\n\n` + pluginAssistContent;
+  }
+  if (!existsSync(pluginAssist) || readFileSync(pluginAssist, "utf-8") !== pluginAssistContent) {
+    if (checkOnly) throw new Error(`Desactualizado: ${pluginAssist}`);
+    writeFileSync(pluginAssist, pluginAssistContent, "utf-8");
+    changed = true;
+  }
+
   // 4. session-state-files: src/session-slots.ts y src/session-store.ts
   //    -> plugin (TS verbatim, imports ./controller-core.ts) y MCP (JS transpilado, imports .js).
   if (syncSessionModules(projectRoot, checkOnly)) changed = true;
@@ -311,7 +328,7 @@ if (isDirectRun) {
   const checkOnly = process.argv.includes("--check");
   try {
     const changed = syncControllerCore(projectRoot, checkOnly);
-    console.log(checkOnly ? "Sync verificado (controller-core + security + tiered)" : changed ? "Sincronizado: mirrors actualizados desde src/" : "Mirrors ya sincronizados");
+    console.log(checkOnly ? "Sync verificado (controller-core + security + tiered + compaction)" : changed ? "Sincronizado: mirrors actualizados desde src/" : "Mirrors ya sincronizados");
   } catch (err) {
     console.error((err as Error).message);
     process.exit(1);

@@ -3,7 +3,8 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  bindSession, checkBinding, noteFileEdit, poolReport, readIndex, recordRequestSummary, slotPath, touchSession,
+  bindSession, checkBinding, clearCompactOptOut, hasCompactOptOut, noteFileEdit, poolReport, readIndex,
+  recordCompactOptOut, recordRequestSummary, slotPath, touchSession,
 } from "../src/session-store.ts";
 import { parsePoolConfig } from "../src/session-slots.ts";
 
@@ -171,5 +172,47 @@ describe("session-store — concurrent_edit (aviso, no bloqueo)", () => {
 
   it("sesión sustituida o sin slot no registra ni avisa", () => {
     expect(noteFileEdit(opencodeDir, "nadie", "src/z.ts", NOW, 30 * 60_000)).toEqual([]);
+  });
+});
+
+describe("session-store — opt-out de compactación", () => {
+  it("sobrevive al reinicio del plugin y no afecta a otra sesión", () => {
+    bindSession({ opencodeDir, sessionId: "sesA", now: NOW, cfg });
+    bindSession({ opencodeDir, sessionId: "sesB", now: NOW, cfg });
+    recordCompactOptOut(opencodeDir, "sesA", NOW);
+    // "reinicio": el estado se relee de disco, no de memoria
+    expect(readIndex(opencodeDir).compactOptOut?.sesA?.at).toBe(NOW);
+    expect(hasCompactOptOut(opencodeDir, "sesA")).toBe(true);
+    expect(hasCompactOptOut(opencodeDir, "sesB")).toBe(false);
+  });
+
+  it("se purga cuando la sesión es sustituida", () => {
+    const a = bindSession({ opencodeDir, sessionId: "sesA", sessionName: "Pagos", now: NOW, cfg });
+    if (a.kind !== "bound") throw new Error("setup");
+    recordCompactOptOut(opencodeDir, "sesA", NOW);
+    bindSession({ opencodeDir, sessionId: "sesB", now: NOW, cfg, replaceSlot: a.slot });
+    expect(hasCompactOptOut(opencodeDir, "sesA")).toBe(false);
+    expect(hasCompactOptOut(opencodeDir, "sesB")).toBe(false);
+  });
+
+  it("se purga al reciclar el slot y clearCompactOptOut es idempotente", () => {
+    const a = bindSession({ opencodeDir, sessionId: "sesA", now: NOW, cfg });
+    if (a.kind !== "bound") throw new Error("setup");
+    recordCompactOptOut(opencodeDir, "sesA", NOW);
+    const idx = readIndex(opencodeDir);
+    idx.slots[a.slot].lastUsedAt = NOW - 9 * DAY;
+    writeFileSync(join(opencodeDir, "sessions", "index.json"), JSON.stringify(idx));
+    for (let i = 2; i <= cfg.poolMax; i++) {
+      const s = readIndex(opencodeDir);
+      const slot = `pool-${String(i).padStart(2, "0")}`;
+      s.slots[slot] = { ...s.slots[a.slot], sessionId: `x${i}`, requestId: "live", state: "EXECUTING_INLINE", ownerHeartbeat: NOW, lastUsedAt: NOW, overflow: false, quarantined: false, quarantineReason: null, sessionName: null, assignedAt: NOW, changeId: null };
+      writeFileSync(join(opencodeDir, "sessions", "index.json"), JSON.stringify(s));
+      wf(slotPath(opencodeDir, slot), JSON.stringify({ state: "EXECUTING_INLINE", revision: 1, requestId: "live" }));
+    }
+    const r = bindSession({ opencodeDir, sessionId: "nueva", now: NOW, cfg });
+    expect(r).toMatchObject({ kind: "bound", slot: a.slot });
+    expect(hasCompactOptOut(opencodeDir, "sesA")).toBe(false);
+    clearCompactOptOut(opencodeDir, "sesA");
+    expect(hasCompactOptOut(opencodeDir, "sesA")).toBe(false);
   });
 });

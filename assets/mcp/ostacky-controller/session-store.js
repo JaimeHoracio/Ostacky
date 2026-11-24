@@ -161,6 +161,8 @@ export function bindSession(args) {
       if (target.sessionId) {
         idx.replaced = idx.replaced ?? {};
         idx.replaced[target.sessionId] = { slot: args.replaceSlot, at: now };
+        if (idx.compactOptOut)
+          delete idx.compactOptOut[target.sessionId];
       }
       Object.assign(target, emptyRecord({ sessionId, sessionName: name, assignedAt: now, lastUsedAt: now, ownerHeartbeat: now, overflow: target.overflow }));
       idx.revision += 1;
@@ -205,6 +207,9 @@ export function bindSession(args) {
       if (decision.kind === "recycle")
         notify = decision.notify;
       const overflow = idx.slots[slot].overflow;
+      const previous = idx.slots[slot].sessionId;
+      if (previous && idx.compactOptOut)
+        delete idx.compactOptOut[previous];
       resetSlotFile(opencodeDir, slot, readSlotRevision(opencodeDir, slot));
       idx.slots[slot] = emptyRecord({ overflow });
     }
@@ -243,6 +248,28 @@ export function checkBinding(opencodeDir, sessionId) {
   if (!own)
     return { ok: false, reason: "la sesión no tiene slot asignado" };
   return { ok: true, slot: own[0] };
+}
+export function recordCompactOptOut(opencodeDir, sessionId, now) {
+  withIndexLock(opencodeDir, () => {
+    const idx = readIndex(opencodeDir);
+    idx.compactOptOut = idx.compactOptOut ?? {};
+    idx.compactOptOut[sessionId] = { at: now };
+    idx.revision += 1;
+    writeAtomic(indexPath(opencodeDir), JSON.stringify(idx, null, 2));
+  });
+}
+export function hasCompactOptOut(opencodeDir, sessionId) {
+  return !!readIndex(opencodeDir).compactOptOut?.[sessionId];
+}
+export function clearCompactOptOut(opencodeDir, sessionId) {
+  withIndexLock(opencodeDir, () => {
+    const idx = readIndex(opencodeDir);
+    if (!idx.compactOptOut?.[sessionId])
+      return;
+    delete idx.compactOptOut[sessionId];
+    idx.revision += 1;
+    writeAtomic(indexPath(opencodeDir), JSON.stringify(idx, null, 2));
+  });
 }
 export function recordRequestSummary(opencodeDir, sessionId, summary, now) {
   withIndexLock(opencodeDir, () => {

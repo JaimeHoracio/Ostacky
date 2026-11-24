@@ -1,0 +1,2 @@
+CodeGraph: proyecto no indexado (no .codegraph/). Ejecutá codegraph init para indexar.
+no indexado

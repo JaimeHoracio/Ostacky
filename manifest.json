@@ -8,7 +8,7 @@
       "file": "assets/agents/ostacky.md",
       "description": "Orquestador con recuperación automática (nunca se congela), ruteo por nivel de impacto, controller MCP con SDK oficial, edición segura con fallback inline, y delegación en OpenSpec + Superpowers. v0.11.0: prune de skills obsoletas, lastHandoff, getAvailableTransitions, consecutiveFailures real, mem_session_summary automático al cierre.",
       "version": "0.11.0",
-      "sha256": "6b1b19ce2b2ce174394281cb40e39f74db9db17e78ad8dd3c6eb5dc24dbb7812"
+      "sha256": "dae4534ad2cfd95e7a5d8dfc893180540764543c6d974b7029e6bcca237423b3"
     }
   ],
   "commands": [
@@ -34,7 +34,7 @@
       "description": "Máquina de estados persistida con @modelcontextprotocol/server SDK. v0.11.0: 22 tools (incluye set_handoff, get_handoff, clear_handoff, get_available_transitions funcional). Bugfixes: consecutiveFailures real, lastHandoff state, defaultChoice persistido. Robustez: degraded mode automático tras 3 fallos, persistence condicional para Nivel 0, prune de skills obsoletas.",
       "version": "0.11.0",
       "sha256": "8a013be07c8751f044c25860bf8846bbda12bd470d1ebf0d68b354c73117d53f",
-      "sourceSha256": "330c85c8c9ed3a6c8733e1fe7287bf61b9256138675b0b95949635e89697c975"
+      "sourceSha256": "27ba9a7facb1727f53fe53d70497c33eedb6a53b36db38c2d15f3bd4ea7cdb76"
     },
     {
       "name": "openspec",

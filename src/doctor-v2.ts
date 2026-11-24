@@ -1,5 +1,5 @@
 import { parsePoolConfig } from "./session-slots.ts";
-import { parseCompactConfig } from "./compaction-threshold.ts";
+import { loadCompactConfig } from "./compaction-threshold.ts";
 import { poolReport } from "./session-store.ts";
 import { existsSync, readFileSync, readdirSync } from "fs";
 import { join, delimiter, isAbsolute } from "path";
@@ -71,10 +71,21 @@ export function globalPluginScopeAware(globalDir: string = getGlobalOpenCodeDir(
  */
 export function checkDoctorV2(projectRoot: string): string[] {
   const lines: string[] = [];
-  // compactación asistida por umbral fijo
+  // compactación asistida por umbral fijo — desactivada por defecto (opt-in).
+  // Se informa el origen del valor para que se pueda auditar de dónde sale.
   try {
-    const cfg = parseCompactConfig(process.env);
-    lines.push(`ℹ️ compactación: enabled=${cfg.enabled}, mode=${cfg.mode}, threshold=${cfg.threshold}${cfg.model ? `, model=${cfg.model}` : ""}`);
+    const r = loadCompactConfig(projectRoot);
+    const { cfg } = r;
+    const origin =
+      r.origin === "env"
+        ? "process.env (OSTACKY_COMPACT_ENABLED)"
+        : r.origin === "project"
+          ? r.paths.project
+          : r.origin === "global"
+            ? r.paths.global
+            : "default (desactivada)";
+    lines.push(`ℹ️ compactación: enabled=${cfg.enabled}, mode=${cfg.mode}, threshold=${cfg.threshold}${cfg.model ? `, model=${cfg.model}` : ""} — origen: ${origin}`);
+    for (const w of r.warnings) lines.push(`⚠️ compactación: ${w}`);
   } catch (err) {
     lines.push(`⚠️ compactación: no se pudo leer config (${String((err as Error)?.message ?? err)})`);
   }

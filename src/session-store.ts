@@ -34,6 +34,11 @@ export interface SessionIndex {
   slots: Record<string, SlotRecord>;
   /** Sesiones sustituidas por confirmación: bloqueadas hasta iniciar una sesión nueva. */
   replaced?: Record<string, { slot: string; at: number }>;
+  /**
+   * Opt-out de la pregunta de compactación, por sesión. No se hereda: una sesión
+   * nueva vuelve a recibir la pregunta. Se purga al eliminar o reciclar la sesión.
+   */
+  compactOptOut?: Record<string, { at: number }>;
   /** Última edición validada por archivo (aviso concurrent_edit). */
   fileActivity?: Record<string, { sessionId: string; sessionName: string | null; requestId: string | null; ts: number }>;
 }
@@ -234,6 +239,8 @@ export function bindSession(args: {
       if (target.sessionId) {
         idx.replaced = idx.replaced ?? {};
         idx.replaced[target.sessionId] = { slot: args.replaceSlot, at: now };
+        // La sesión sustituida ya no existe: su opt-out no se hereda.
+        if (idx.compactOptOut) delete idx.compactOptOut[target.sessionId];
       }
       Object.assign(target, emptyRecord({ sessionId, sessionName: name, assignedAt: now, lastUsedAt: now, ownerHeartbeat: now, overflow: target.overflow }));
       idx.revision += 1;
@@ -281,6 +288,9 @@ export function bindSession(args: {
       slot = decision.slot;
       if (decision.kind === "recycle") notify = decision.notify;
       const overflow = idx.slots[slot].overflow;
+      // La sesión anterior deja de existir: su opt-out no se hereda.
+      const previous = idx.slots[slot].sessionId;
+      if (previous && idx.compactOptOut) delete idx.compactOptOut[previous];
       resetSlotFile(opencodeDir, slot, readSlotRevision(opencodeDir, slot));
       idx.slots[slot] = emptyRecord({ overflow });
     }
@@ -323,6 +333,37 @@ export function checkBinding(opencodeDir: string, sessionId: string): { ok: true
   const own = Object.entries(idx.slots).find(([, r]) => r.sessionId === sessionId);
   if (!own) return { ok: false, reason: "la sesión no tiene slot asignado" };
   return { ok: true, slot: own[0] };
+}
+
+/**
+ * Registra el opt-out de la pregunta de compactación para una sesión. Camino
+ * explícito (tool del plugin), nunca por parsing del texto: el índice es la
+ * fuente de verdad y sobrevive al reinicio del plugin.
+ */
+export function recordCompactOptOut(opencodeDir: string, sessionId: string, now: number): void {
+  withIndexLock(opencodeDir, () => {
+    const idx = readIndex(opencodeDir);
+    idx.compactOptOut = idx.compactOptOut ?? {};
+    idx.compactOptOut[sessionId] = { at: now };
+    idx.revision += 1;
+    writeAtomic(indexPath(opencodeDir), JSON.stringify(idx, null, 2));
+  });
+}
+
+/** ¿La sesión pidió no volver a ser preguntada? Solo lectura. */
+export function hasCompactOptOut(opencodeDir: string, sessionId: string): boolean {
+  return !!readIndex(opencodeDir).compactOptOut?.[sessionId];
+}
+
+/** Purga el opt-out de una sesión (eliminada o reemplazada). No falla si no existe. */
+export function clearCompactOptOut(opencodeDir: string, sessionId: string): void {
+  withIndexLock(opencodeDir, () => {
+    const idx = readIndex(opencodeDir);
+    if (!idx.compactOptOut?.[sessionId]) return;
+    delete idx.compactOptOut[sessionId];
+    idx.revision += 1;
+    writeAtomic(indexPath(opencodeDir), JSON.stringify(idx, null, 2));
+  });
 }
 
 /** Actualiza el resumen de la request del slot (para listar candidatas y para el aviso de concurrencia). */

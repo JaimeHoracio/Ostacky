@@ -26,7 +26,7 @@ describe('version-check', () => {
   });
 
   it('decideOffer: update disponible (no v1) → update-available', () => {
-    expect(decideOffer('0.11.0', '0.11.0').kind).toBe('update-available');
+    expect(decideOffer('0.11.0', '0.12.0').kind).toBe('update-available');
   });
 
   it('canPrompt: no-interactivo o --yes → false (default seguro No)', () => {
