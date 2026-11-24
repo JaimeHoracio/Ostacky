@@ -131,9 +131,9 @@ Local (`<proyecto>/.opencode`) o global (mismo árbol bajo el dir global, sin st
 
 ```json
 {
-    "version": "0.11.0",
-    "tag": "v0.11.0",
-    "agents": { "ostacky": { "version": "0.11.0", "sha256": "…" } },
+    "version": "0.11.1",
+    "tag": "v0.11.1",
+    "agents": { "ostacky": { "version": "0.11.1", "sha256": "…" } },
     "commands": { "install-stack": { … }, "opsx-sync": { … } },
     "skills": { "brainstorming": { … }, "…" : {} },
     "mcpServers": { "ostacky-controller": { … }, "openspec": { … } }

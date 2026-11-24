@@ -70,7 +70,7 @@ export function getBundledMcpPath(name: string): string {
  *
  * Nunca uses el manifest remoto de GitHub para verificar integridad: el tag y
  * el tarball npm pueden divergir (prepublishOnly regenera archivos sin
- * commitear). Ver tests/manifest-integrity.test.ts (incidente v0.11.0).
+ * commitear). Ver tests/manifest-integrity.test.ts (incidente v0.11.1).
  * Retorna null cuando el nombre no existe en el bundle.
  */
 export type ManifestHashField = 'sha256' | 'sourceSha256';
